@@ -3,6 +3,7 @@ B站API调用封装模块
 - 自适应请求延迟（正常时快速，被限速时退避）
 - 迭代式重试（非递归）
 - 统一日志接口
+- 支持视频、动态、专栏文章
 """
 import time
 import logging
@@ -11,6 +12,8 @@ from typing import Dict, Optional, Any
 from config.config import (
     COMMENT_API_URL,
     REPLY_API_URL,
+    DYNAMIC_DETAIL_API_URL,
+    ARTICLE_INFO_API_URL,
     DEFAULT_HEADERS,
     REQUEST_TIMEOUT,
     REQUEST_DELAY_MIN,
@@ -100,6 +103,9 @@ class BilibiliAPI:
 
         return None
 
+    # ============================================================
+    #  视频相关
+    # ============================================================
     def get_video_info(self, bvid: str) -> Optional[Dict]:
         """
         获取视频基本信息（用于获取真实的AV号）
@@ -114,6 +120,46 @@ class BilibiliAPI:
         params = {"bvid": bvid}
         return self._request(url, params)
 
+    # ============================================================
+    #  动态相关
+    # ============================================================
+    def get_dynamic_detail(self, dynamic_id: int) -> Optional[Dict]:
+        """
+        获取动态详情（新版API）
+
+        通过动态详情可以获取评论区的 oid 和 type
+
+        Args:
+            dynamic_id: 动态ID
+
+        Returns:
+            动态详情字典
+        """
+        params = {
+            "id": dynamic_id,
+            "timezone_offset": -480,
+        }
+        return self._request(DYNAMIC_DETAIL_API_URL, params)
+
+    # ============================================================
+    #  专栏文章相关
+    # ============================================================
+    def get_article_info(self, cvid: int) -> Optional[Dict]:
+        """
+        获取专栏文章信息
+
+        Args:
+            cvid: 文章CV号
+
+        Returns:
+            文章信息字典
+        """
+        params = {"id": cvid}
+        return self._request(ARTICLE_INFO_API_URL, params)
+
+    # ============================================================
+    #  评论相关（通用）
+    # ============================================================
     def get_comments(
         self,
         oid: int,
@@ -123,13 +169,13 @@ class BilibiliAPI:
         next_page: int = 0,
     ) -> Optional[Dict]:
         """
-        获取视频评论列表
+        获取评论列表（通用，支持视频/动态/文章）
 
         Args:
-            oid: 视频AV号（oid）
+            oid: 对象ID（视频aid / 动态ID / 文章cvid）
             page: 页码（兼容旧版API）
             mode: 排序模式，3=按时间排序，2=按热度排序
-            type_id: 类型ID，1=视频
+            type_id: 类型ID，1=视频, 11=图文动态, 12=专栏, 17=文字动态
             next_page: 下一页标识（cursor.next值），用于新版API分页
 
         Returns:
@@ -152,10 +198,10 @@ class BilibiliAPI:
         获取评论的回复（子评论）
 
         Args:
-            oid: 视频AV号
+            oid: 对象ID
             root: 根评论ID
             page: 页码
-            type_id: 类型ID，1=视频
+            type_id: 类型ID
 
         Returns:
             回复数据字典

@@ -5,6 +5,12 @@ B站评论爬虫配置文件
 COMMENT_API_URL = "https://api.bilibili.com/x/v2/reply/main"
 REPLY_API_URL = "https://api.bilibili.com/x/v2/reply/reply"
 
+# 动态详情API（新版）
+DYNAMIC_DETAIL_API_URL = "https://api.bilibili.com/x/polymer/web-dynamic/v1/detail"
+
+# 专栏文章信息API
+ARTICLE_INFO_API_URL = "https://api.bilibili.com/x/article/viewinfo"
+
 # 请求头配置
 DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",

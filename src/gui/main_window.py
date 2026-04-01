@@ -29,7 +29,7 @@ class MainWindow:
         init_theme()
         self.appearance = "light"
 
-        self.root.title("B站视频评论爬虫工具")
+        self.root.title("B站评论爬虫工具 - 支持视频/动态/文章")
         self.root.geometry("960x820")
         self.root.minsize(880, 720)
         self.root.configure(fg_color=Theme.BACKGROUND)
@@ -68,17 +68,17 @@ class MainWindow:
         card.grid_columnconfigure(1, weight=1)
         self._all_cards.append(card)
 
-        title = ctk.CTkLabel(card, text="视频信息", font=Theme.FONT_SECTION, text_color=Theme.TEXT_PRIMARY)
+        title = ctk.CTkLabel(card, text="内容信息", font=Theme.FONT_SECTION, text_color=Theme.TEXT_PRIMARY)
         title.grid(row=0, column=0, columnspan=2, sticky="w", padx=14, pady=(12, 4))
         self._video_title_label = title
 
-        label = ctk.CTkLabel(card, text="视频链接 / BV号", text_color=Theme.TEXT_SECONDARY, font=Theme.FONT_NORMAL)
+        label = ctk.CTkLabel(card, text="链接 / ID", text_color=Theme.TEXT_SECONDARY, font=Theme.FONT_NORMAL)
         label.grid(row=1, column=0, sticky="w", padx=14, pady=(6, 12))
         self._video_label = label
 
         self.video_entry = ctk.CTkEntry(
             card,
-            placeholder_text="例如 https://www.bilibili.com/video/BVxxxx 或 BVxxxx",
+            placeholder_text="视频BV号/链接、动态链接(t.bilibili.com/xxx)、文章cv号/链接",
             corner_radius=Theme.RADIUS_INPUT,
             border_width=1,
             fg_color=Theme.SURFACE,
@@ -400,7 +400,7 @@ class MainWindow:
     def _start_crawling(self):
         video_input = self.video_entry.get().strip()
         if not video_input:
-            messagebox.showwarning("警告", "请输入视频链接或BV号")
+            messagebox.showwarning("警告", "请输入视频链接/BV号、动态链接或文章链接")
             return
 
         self.is_crawling = True
