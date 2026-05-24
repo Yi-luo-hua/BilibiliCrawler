@@ -1,7 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
 import sys
-import tkinter
 
 # 获取Tcl/Tk库路径
 tcl_lib_path = os.path.join(sys.base_prefix, 'tcl', 'tcl8.6')
@@ -24,7 +23,7 @@ if os.path.exists(tk_dll):
 
 a = Analysis(
     ['main.py'],
-    pathex=[python_dir],
+    pathex=[python_dir, '.'],
     binaries=binaries,
     datas=[
         (tcl_lib_path, 'tcl8.6'),
@@ -35,6 +34,15 @@ a = Analysis(
         'tkinter.filedialog',
         'tkinter.messagebox',
         'tkinter.simpledialog',
+        'customtkinter',
+        'concurrent.futures',
+        'logging',
+        'qrcode',
+        'qrcode.image.pil',
+        'PIL',
+        'PIL.Image',
+        'PIL.ImageDraw',
+        'src.crawler.dynamic_crawler',
     ],
     hookspath=[],
     hooksconfig={},
@@ -48,29 +56,20 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.datas,
     [],
-    exclude_binaries=True,
-    name='main',
+    name='BilibiliCommentsCrawler',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-)
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='main',
 )

@@ -5,7 +5,6 @@ __pycache__/
 *.egg
 dist/
 build/
-*.spec
 
 # ===== Virtual environments =====
 venv/
