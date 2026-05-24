@@ -87,17 +87,6 @@ python main.py
 
 **动态**：动态ID、用户名、类型、内容、发布时间、点赞数、评论数、转发数
 
-## 常见问题
-
-### Q: 提示 "No module named 'xxx'"？
-A: 运行 `pip install -r requirements.txt` 安装依赖。
-
-### Q: 启动GUI时提示 "Can't find a usable init.tcl"？
-A: 设置环境变量：
-```bash
-set TCL_LIBRARY=<Python路径>\tcl\tcl8.6
-set TK_LIBRARY=<Python路径>\tcl\tk8.6
-```
 
 ### Q: 如何切换主题？
 A: 点击窗口右上角的 ☀️/🌙 按钮切换亮色/深色主题。
@@ -108,8 +97,6 @@ A: 点击窗口右上角的 ☀️/🌙 按钮切换亮色/深色主题。
 - 新增动态爬取模式（用户空间 + 关注页动态流）
 - 新增扫码登录功能
 - 评论/动态双模式 GUI，关键词筛选 + 时间范围过滤
-- 修复 PyInstaller tkinter 检测失败问题
-- 修复系统代理干扰扫码登录网络请求
 
 ### v1.20 (2026.04.01)
 - 支持动态评论和专栏文章评论爬取
