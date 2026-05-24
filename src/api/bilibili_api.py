@@ -36,6 +36,7 @@ class BilibiliAPI:
     def __init__(self, headers: Optional[Dict[str, str]] = None):
         self.headers = headers or DEFAULT_HEADERS.copy()
         self.session = requests.Session()
+        self.session.trust_env = False  # 忽略系统代理，避免连接干扰
         self.session.headers.update(self.headers)
         # 自适应延迟：初始值较小，被限速后动态增大
         self._current_delay = REQUEST_DELAY_DEFAULT
