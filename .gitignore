@@ -5,6 +5,12 @@ __pycache__/
 *.egg
 dist/
 build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
 
 # ===== Virtual environments =====
 venv/
@@ -16,6 +22,9 @@ env/
 .env
 .env.*
 user_config.json
+user_data/
+.bilibili_comments_crawler/
+CODE_REVIEW.md
 
 # ===== Logs =====
 *.log
@@ -35,6 +44,7 @@ $RECYCLE.BIN/
 *~
 
 # ===== AI tools =====
+.claude/
 .claude-code-history/
 .codex-history/
 .cursor/
@@ -44,3 +54,13 @@ $RECYCLE.BIN/
 # ===== Export artifacts =====
 *.csv
 *.xlsx
+
+# ===== Tauri / frontend =====
+desktop/node_modules/
+desktop/dist/
+desktop/.vite/
+desktop/src-tauri/target/
+desktop/src-tauri/resources/backend/
+desktop/src-tauri/gen/
+*.tsbuildinfo
+.install-test/

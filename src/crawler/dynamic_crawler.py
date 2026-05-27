@@ -228,7 +228,13 @@ class DynamicCrawler:
                 if d['dynamic_id'] in enriched:
                     text = enriched[d['dynamic_id']]
                     old = d['content']
-                    img_urls = [w for w in old.split() if w.startswith('http')]
+                    img_urls = []
+                    if old.startswith('[图片动态'):
+                        img_urls = re.findall(
+                            r'https?://\S+?\.(?:jpg|jpeg|png|webp|gif)(?:\?\S*)?',
+                            old,
+                            flags=re.IGNORECASE,
+                        )
                     if img_urls:
                         text = text + '\n' + ' '.join(img_urls)
                     d['content'] = text
@@ -257,13 +263,9 @@ class DynamicCrawler:
                 )
                 if r.status_code != 200:
                     return dy_id, ""
-                match = re.search(
-                    r'window\.__INITIAL_STATE__\s*=\s*(\{.*?\});\s*(?:</script>|\(function)',
-                    r.text, re.DOTALL,
-                )
-                if not match:
+                state = self._extract_initial_state(r.text)
+                if not state:
                     return dy_id, ""
-                state = json.loads(match.group(1))
                 words = []
                 for mod in state.get('detail', {}).get('modules', []):
                     for p in mod.get('module_content', {}).get('paragraphs', []):
@@ -294,6 +296,23 @@ class DynamicCrawler:
         self._log(f"成功补齐 {len(result)} 条动态文字")
         return result
 
+    @staticmethod
+    def _extract_initial_state(html: str) -> Optional[Dict]:
+        match = re.search(r'window\.__INITIAL_STATE__\s*=\s*', html)
+        if not match:
+            return None
+
+        payload = html[match.end():].lstrip()
+        if not payload.startswith('{'):
+            return None
+
+        try:
+            state, _ = json.JSONDecoder().raw_decode(payload)
+            return state if isinstance(state, dict) else None
+        except json.JSONDecodeError:
+            logger.debug("解析 __INITIAL_STATE__ 失败", exc_info=True)
+            return None
+
     def _process_dynamic(self, item: Dict) -> Optional[Dict]:
         try:
             id_str = item.get('id_str', '')
@@ -311,14 +330,14 @@ class DynamicCrawler:
                 major = mod_dyn.get('major', {})
                 if major:
                     archive = major.get('archive', {})
-                    if archive:
+                    if archive and not content:
                         content = archive.get('title', '')
                     opus = major.get('opus', {})
-                    if opus:
+                    if opus and not content:
                         summary = opus.get('summary', {})
                         content = summary.get('text', content)
                     article = major.get('article', {})
-                    if article:
+                    if article and not content:
                         content = article.get('title', content)
                     # 直播推荐：解析 live_rcmd.content JSON
                     live_rcmd = major.get('live_rcmd', {})
@@ -330,13 +349,23 @@ class DynamicCrawler:
                             content = live_info.get('title', '') or live_info.get('live_title', '') or live_info.get('area_name', '')
                         except Exception:
                             pass
-                    # 图文动态：无文字时显示图片数量+首张链接
+                    # 图文动态：无文字时显示图片数量和全部图片链接
                     draw = major.get('draw', {})
                     if draw and not content:
                         items_list = draw.get('items', [])
                         if items_list:
-                            urls = [img.get('src', '') for img in items_list if img.get('src')]
-                            content = f'[图片动态×{len(urls)}]' + (f' {urls[0]}' if urls else '')
+                            urls = []
+                            for img in items_list:
+                                url = (
+                                    img.get('src')
+                                    or img.get('url')
+                                    or img.get('img_src')
+                                    or img.get('picture')
+                                    or ''
+                                )
+                                if url:
+                                    urls.append(url)
+                            content = f'[图片动态×{len(urls)}]' + (f' {" ".join(urls)}' if urls else '')
 
             if not content:
                 content = '[无文字内容]'

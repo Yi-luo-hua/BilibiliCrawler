@@ -180,7 +180,7 @@ class CommentCrawler:
         self,
         url_or_id: str,
         include_replies: bool = True,
-        max_pages: int = 1000,
+        max_pages: int = 100,
         mode: int = 3,
     ) -> List[Dict]:
         """
@@ -296,7 +296,8 @@ class CommentCrawler:
         """
         all_replies = []
 
-        with ThreadPoolExecutor(max_workers=MAX_REPLY_WORKERS) as executor:
+        executor = ThreadPoolExecutor(max_workers=MAX_REPLY_WORKERS)
+        try:
             futures = {
                 executor.submit(self._crawl_single_reply, oid, root_rpid, type_id): root_rpid
                 for root_rpid, rcount in tasks
@@ -304,7 +305,8 @@ class CommentCrawler:
 
             for future in as_completed(futures):
                 if self._stop_flag:
-                    executor.shutdown(wait=False, cancel_futures=True)
+                    for pending in futures:
+                        pending.cancel()
                     break
                 root_rpid = futures[future]
                 try:
@@ -312,6 +314,8 @@ class CommentCrawler:
                     all_replies.extend(replies)
                 except Exception as e:
                     logger.error(f"爬取评论 {root_rpid} 的回复时出错: {e}")
+        finally:
+            executor.shutdown(wait=not self._stop_flag, cancel_futures=self._stop_flag)
 
         return all_replies
 
@@ -379,7 +383,7 @@ class CommentCrawler:
 
         return {
             'comment_id': reply.get('rpid'),
-            'root_id': root_id or reply.get('rpid'),
+            'root_id': root_id if root_id is not None else reply.get('rpid'),
             'parent_id': reply.get('parent'),
             'is_reply': is_reply,
             'video_oid': oid,

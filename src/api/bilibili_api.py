@@ -64,9 +64,11 @@ class BilibiliAPI:
         Returns:
             JSON响应数据，如果请求失败则返回None
         """
+        rate_limited = False
         for attempt in range(MAX_RETRIES + 1):
             try:
-                self._adaptive_sleep(was_rate_limited=(attempt > 0))
+                self._adaptive_sleep(was_rate_limited=rate_limited)
+                rate_limited = False
                 response = self.session.get(url, params=params, timeout=REQUEST_TIMEOUT)
                 response.raise_for_status()
                 data = response.json()
@@ -78,7 +80,7 @@ class BilibiliAPI:
                 # -412 = 被风控限速
                 if code == -412:
                     logger.warning(f"触发风控(code=-412)，第 {attempt+1} 次重试...")
-                    self._adaptive_sleep(was_rate_limited=True)
+                    rate_limited = True
                     continue
 
                 logger.warning(f"API返回错误: code={code}, message={data.get('message')}")
@@ -303,12 +305,9 @@ class BilibiliAPI:
             inner = data.get('data', {})
             status_code = inner.get('code', data.get('code', -1))
             if status_code == 0:
-                # 登录成功，从响应头提取cookies
-                cookies = {}
-                for cookie_name in ['SESSDATA', 'bili_jct', 'DedeUserID', 'sid']:
-                    if cookie_name in r.cookies:
-                        cookies[cookie_name] = r.cookies[cookie_name]
-                cookie_str = '; '.join(f'{k}={v}' for k, v in r.cookies.items())
+                # 登录成功，优先从 Set-Cookie 提取，兼容部分接口在 body 中返回 cookie_info。
+                cookies = self._extract_login_cookies(r.cookies, inner)
+                cookie_str = '; '.join(f'{k}={v}' for k, v in cookies.items())
                 if cookie_str:
                     self.set_cookie(cookie_str)
                 return 0, cookies
@@ -325,3 +324,24 @@ class BilibiliAPI:
             cookie: Cookie字符串
         """
         self.session.headers.update({"Cookie": cookie})
+
+    @staticmethod
+    def _extract_login_cookies(response_cookies, payload: Dict[str, Any]) -> Dict[str, str]:
+        cookies = {}
+        for cookie_name in ['SESSDATA', 'bili_jct', 'DedeUserID', 'sid']:
+            if cookie_name in response_cookies:
+                cookies[cookie_name] = response_cookies[cookie_name]
+
+        cookie_info = payload.get('cookie_info') or {}
+        for item in cookie_info.get('cookies') or []:
+            name = item.get('name')
+            value = item.get('value')
+            if name and value:
+                cookies[name] = value
+
+        token_info = payload.get('token_info') or {}
+        for name in ['SESSDATA', 'bili_jct', 'DedeUserID', 'sid']:
+            value = token_info.get(name) or token_info.get(name.lower())
+            if value:
+                cookies[name] = value
+        return cookies
