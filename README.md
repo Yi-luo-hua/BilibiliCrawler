@@ -1,17 +1,21 @@
-# Bilibili Crawler
+# Bilibili Comments Crawler
 
-Bilibili Crawler 是一个 Windows 优先的 B 站评论 / 动态爬取桌面工具。v2.00 起项目迁移为 **Tauri + React + TypeScript** 桌面壳，Python 爬虫逻辑作为本地 sidecar 后端运行，通过本地进程通信完成爬取、扫码登录和 CSV 导出。
+Bilibili Comments Crawler 是一个 B 站评论 / 动态爬取工具。v2.00 起项目迁移为 **Tauri + React + TypeScript** 桌面壳，Python 爬虫逻辑作为本地 sidecar 后端运行，通过本地进程通信完成爬取、扫码登录和 CSV 导出。
 
 > 旧版 Python GUI / 单 exe 代码已保留在 `legacy-python-gui` 分支，主分支后续以安装包桌面应用为主。
+
+本项目先后使用Cursor,Trae,Warp,antigravity,Claude Code,Codex完成。
+
+如果有帮助的话，麻烦点个star⭐️谢谢喵！
+
+如果使用过程中遇到Bug或有新增功能需要请提Issue谢谢喵！
 
 ## 功能
 
 - 评论爬取：支持视频 BV/AV、动态、专栏链接。
-- 子评论爬取：支持主评论和回复，并发抓取回复列表。
 - 动态爬取：支持用户空间动态和关注页动态流。
 - 扫码登录：关注页动态流可通过 B 站 App 扫码登录。
 - 筛选与导出：支持关键词、时间范围、最大页数，导出 CSV。
-- 现代桌面 UI：PCL / MAA 风格侧边导航、玻璃面板、运行日志、进度条。
 - 自定义背景：支持选择本地背景图、透明度、模糊和恢复默认。
 - 本地运行：前端不直接请求网络，爬虫任务由 Python sidecar 后台线程执行。
 
@@ -23,12 +27,14 @@ Bilibili Crawler 是一个 Windows 优先的 B 站评论 / 动态爬取桌面工
 
 安装后从开始菜单或桌面快捷方式启动即可。首版安装包面向 Windows x64，默认当前用户安装，不需要额外安装 Python 环境。
 
+如果想使用更加轻量化、无需安装的旧版，请下载v1.30。
+
 ## 使用方式
 
 ### 评论爬取
 
 1. 进入“评论爬取”页面。
-2. 输入视频 BV/AV、动态链接、专栏 CV 号或链接。
+2. 输入视频 BV/AV、专栏 CV 号或直接复制完整链接即可。
 3. 设置最大页数、排序方式和是否包含子评论。
 4. 点击“开始任务”，等待日志和进度完成。
 5. 点击“导出 CSV”保存结果。
@@ -37,7 +43,7 @@ Bilibili Crawler 是一个 Windows 优先的 B 站评论 / 动态爬取桌面工
 
 1. 进入“动态爬取”页面。
 2. 输入用户 UID 或 `space.bilibili.com/xxx` 链接。
-3. 留空目标时会尝试爬关注页动态流，关注页动态流需要扫码登录。
+3. 留空目标时会尝试爬取关注页动态流，需要扫码登录。
 4. 可选设置关键词、时间范围和最大页数。
 5. 点击“开始任务”，完成后导出 CSV。
 
@@ -112,27 +118,81 @@ desktop\src-tauri\target\release\bundle\nsis\
 ## 项目结构
 
 ```text
-assets/                         应用 logo 与图标资源
-backend/sidecar.py              Python sidecar 入口
-desktop/                        Tauri + React 桌面前端
-desktop/src/                    React UI 源码
-desktop/src-tauri/              Tauri Rust 壳与打包配置
-scripts/build_backend.ps1       构建 Python sidecar
-scripts/build_installer.ps1     构建 NSIS 安装包
-src/api/                        B 站 API 封装
-src/crawler/                    评论 / 动态爬虫
-src/exporter/                   CSV 导出
-src/processor/                  数据处理
+BilibiliCommentsCrawler/
+├── assets/                         应用 logo 与图标资源
+│   ├── app_logo.ico
+│   └── app_logo.png
+├── backend/
+│   └── sidecar.py                  Python sidecar 入口，与 Tauri 进程通信
+├── config/
+│   └── config.py                   全局配置（请求头、API 地址、默认参数等）
+├── desktop/                        Tauri + React 桌面前端
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── BackgroundLayer.tsx  自定义背景图层
+│   │   │   ├── BottomActionBar.tsx  底部操作栏（任务控制、导出）
+│   │   │   ├── RightPanel.tsx       右侧面板（日志、进度）
+│   │   │   ├── SideNav.tsx          侧边导航栏
+│   │   │   ├── TaskWorkspace.tsx    任务工作区（输入表单）
+│   │   │   └── TitleBar.tsx         自定义标题栏
+│   │   ├── lib/
+│   │   │   └── tauri.ts             前端与 Rust 后端的 Tauri invoke 封装
+│   │   ├── App.tsx                  根组件
+│   │   ├── main.tsx                 入口
+│   │   ├── styles.css               全局样式（玻璃面板、主题变量）
+│   │   └── types.ts                 公共 TypeScript 类型定义
+│   ├── src-tauri/
+│   │   ├── src/
+│   │   │   └── main.rs              Tauri Rust 壳入口，注册 sidecar 命令
+│   │   ├── capabilities/            安全能力配置
+│   │   ├── icons/                   应用图标
+│   │   ├── resources/               打包附加资源
+│   │   └── tauri.conf.json          Tauri 配置（窗口、权限、sidecar 声明）
+│   ├── package.json
+│   └── vite.config.ts
+├── scripts/
+│   ├── build_backend.ps1            PyInstaller 构建 Python sidecar 单文件
+│   └── build_installer.ps1          NSIS 安装包构建
+├── src/
+│   ├── api/
+│   │   └── bilibili_api.py          B 站 API 封装（评论、动态、扫码登录）
+│   ├── crawler/
+│   │   ├── comment_crawler.py       评论爬虫（视频 / 专栏 / 动态）
+│   │   └── dynamic_crawler.py       动态爬虫（用户空间 / 关注流）
+│   ├── exporter/
+│   │   └── csv_exporter.py          CSV 导出
+│   └── processor/
+│       └── data_processor.py        数据清洗与格式化
+├── utils/
+│   └── helpers.py                   工具函数（文件名清洗、链接解析等）
+└── requirements.txt                 Python 依赖
 ```
 
-## v2.00 更新
+## 更新日志
 
+### v2.00 (2026.05.27)
 - 主架构迁移到 Tauri 2 + React 19 + TypeScript + Vite + Tailwind。
 - Python 爬虫逻辑改为 sidecar 后台进程，前端通过 JSON 请求 / 事件通信。
 - 发布形式从单 exe 改为 NSIS 安装包。
-- 新增 PCL / MAA 风格桌面 UI、玻璃面板、自定义背景、运行日志和进度条。
+- 新增风格化桌面 UI、玻璃面板、自定义背景、运行日志和进度条。
 - 动态图文内容支持多图链接导出。
 - 修复扫码登录 cookie 提取、限流重试、CSV 空数据导出等问题。
+
+### v1.30 (2026.05.25)
+- 新增动态爬取模式（用户空间 + 关注页动态流）
+- 新增扫码登录功能
+- 评论/动态双模式 GUI，关键词筛选 + 时间范围过滤
+
+### v1.20 (2026.04.01)
+- 支持动态评论和专栏文章评论爬取
+- 自动识别输入类型，新增统一解析器
+
+### v1.10 (2026.02.15)
+- 子评论并发爬取（4线程），自适应请求延迟
+- Light / Dark 双主题切换
+
+### v1.0.0 (2025.12.9)
+- 初始版本，支持视频评论爬取 + GUI + CSV导出
 
 ## 免责声明
 
