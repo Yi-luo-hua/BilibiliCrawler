@@ -196,8 +196,8 @@ BilibiliCommentsCrawler/
 
 ## 许可证
 
-本项目基于 [MIT License](LICENSE) 开源。
+[MIT License](LICENSE)
 
 ## 免责声明
 
-本项目仅供学习和研究使用。请遵守 B 站相关协议和法律法规，不要高频请求或滥用接口。
+本项目仅供学习和研究使用，请遵守 B 站相关协议和法律法规。
