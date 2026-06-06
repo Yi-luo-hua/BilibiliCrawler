@@ -296,7 +296,7 @@ class Sidecar:
     def _display_analysis_result(cls, result: dict[str, Any]) -> dict[str, Any]:
         """Return a UI-sized analysis payload; keep full report only in sidecar memory."""
         image_path = cls._image_data_url_file(result, "word_cloud_image")
-        image_data_url = "" if image_path else cls._image_data_url(result.get("word_cloud_image"))
+        image_data_url = cls._image_data_url(result.get("word_cloud_image"))
         payload: dict[str, Any] = {
             "summary": cls._truncate_text(result.get("summary"), 2000),
             "summary_points": cls._text_items(result.get("summary_points"), 7, 260),

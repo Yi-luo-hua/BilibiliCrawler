@@ -70,3 +70,4 @@ desktop/src-tauri/resources/backend/
 desktop/src-tauri/gen/
 *.tsbuildinfo
 .install-test/
+analysis-assets/

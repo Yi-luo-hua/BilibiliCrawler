@@ -384,14 +384,57 @@ class LLMAnalysisProcessor:
         )
 
     @staticmethod
-    def _parse_json_object(content: str) -> dict[str, Any]:
+    def _extract_json_text(content: str) -> str:
+        """Extract the outermost JSON object from LLM output using brace counting."""
+        # 1. Strip markdown code fences
+        text = re.sub(r"```(?:json)?\s*\n?", "", content)
+        text = re.sub(r"\n?\s*```", "", text)
+        # 2. Find the first '{' and track matching '}'
+        start = text.find("{")
+        if start == -1:
+            raise AnalysisError("LLM 未返回可解析的 JSON 对象")
+        depth = 0
+        in_string = False
+        escape = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
+        raise AnalysisError("LLM 返回中无法匹配 JSON 对象的闭合大括号")
+
+    @classmethod
+    def _parse_json_object(cls, content: str) -> dict[str, Any]:
         try:
             parsed = json.loads(content)
         except json.JSONDecodeError:
-            match = re.search(r"\{.*\}", content, re.S)
-            if not match:
-                raise AnalysisError("LLM 未返回可解析的 JSON 对象")
-            parsed = json.loads(match.group(0))
+            json_text = cls._extract_json_text(content)
+            try:
+                parsed = json.loads(json_text)
+            except json.JSONDecodeError:
+                # Last resort: try to repair trailing commas (common LLM mistake)
+                repaired = re.sub(r",\s*([}\]])", r"\1", json_text)
+                try:
+                    parsed = json.loads(repaired)
+                except json.JSONDecodeError as exc:
+                    preview = json_text[:500] if len(json_text) > 500 else json_text
+                    raise AnalysisError(
+                        f"LLM JSON 解析失败: {exc}\n原始内容预览: {preview}"
+                    ) from exc
         if not isinstance(parsed, dict):
             raise AnalysisError("LLM 返回 JSON 顶层不是对象")
         return parsed
