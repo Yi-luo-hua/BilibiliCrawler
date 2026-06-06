@@ -1,6 +1,6 @@
 [package]
 name = "bilibilicrawler_desktop"
-version = "3.0.0"
+version = "3.0.1"
 description = "BilibiliCrawler desktop app"
 authors = ["BilibiliCrawler"]
 edition = "2021"
