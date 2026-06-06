@@ -1,0 +1,38 @@
+[
+  {
+    "comment_id": 101,
+    "is_reply": false,
+    "username": "alice",
+    "user_level": 5,
+    "content": "这个视频讲得很清楚，例子也很有帮助。",
+    "like_count": 42,
+    "reply_count": 3,
+    "ctime": 1717200000,
+    "ctime_text": "2024-06-01 08:00:00",
+    "ip_location": "上海"
+  },
+  {
+    "comment_id": 102,
+    "is_reply": false,
+    "username": "bob",
+    "user_level": 3,
+    "content": "还是有点担心后续更新频率，希望作者说明计划。",
+    "like_count": 16,
+    "reply_count": 6,
+    "ctime": 1717286400,
+    "ctime_text": "2024-06-02 08:00:00",
+    "ip_location": "广东"
+  },
+  {
+    "comment_id": 103,
+    "is_reply": true,
+    "username": "carol",
+    "user_level": 2,
+    "content": "同意，标题容易让人误解。",
+    "like_count": 7,
+    "reply_count": 0,
+    "ctime": 1717372800,
+    "ctime_text": "2024-06-03 08:00:00",
+    "ip_location": "上海"
+  }
+]

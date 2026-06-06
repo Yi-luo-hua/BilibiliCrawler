@@ -29,6 +29,7 @@ CODE_REVIEW.md
 # ===== Logs =====
 *.log
 logs/
+.runlogs/
 
 # ===== OS =====
 .DS_Store
@@ -44,16 +45,21 @@ $RECYCLE.BIN/
 *~
 
 # ===== AI tools =====
+.agents/
 .claude/
 .claude-code-history/
 .codex-history/
 .cursor/
 .copilot/
 .roo/
+AGENT_HANDOFF.md
+CODE_REVIEW_FINDINGS.md
 
 # ===== Export artifacts =====
 *.csv
 *.xlsx
+desktop/*-smoke.png
+desktop/analysis-ui-*.png
 
 # ===== Tauri / frontend =====
 desktop/node_modules/

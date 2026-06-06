@@ -52,7 +52,9 @@ Ensure-Download -Url $NsisUtilsUrl -Output $NsisUtilsDll -Repo "tauri-apps/nsis-
 
 New-Item -ItemType Directory -Force -Path (Join-Path $MirrorRoot "tauri-apps\binary-releases\releases\download\nsis-3.11") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $MirrorRoot "tauri-apps\nsis-tauri-utils\releases\download\nsis_tauri_utils-v0.5.3") | Out-Null
-Copy-Item -LiteralPath $NsisZip -Destination (Join-Path $MirrorRoot "tauri-apps\binary-releases\releases\download\nsis-3.11\nsis-3.11.zip") -Force
+if (Test-Path $NsisZip) {
+    Copy-Item -LiteralPath $NsisZip -Destination (Join-Path $MirrorRoot "tauri-apps\binary-releases\releases\download\nsis-3.11\nsis-3.11.zip") -Force
+}
 Copy-Item -LiteralPath $NsisUtilsDll -Destination (Join-Path $MirrorRoot "tauri-apps\nsis-tauri-utils\releases\download\nsis_tauri_utils-v0.5.3\nsis_tauri_utils.dll") -Force
 $MirrorProcess = Start-Process -FilePath $Python -ArgumentList @("-m", "http.server", $MirrorPort, "--bind", "127.0.0.1", "--directory", $MirrorRoot) -WindowStyle Hidden -PassThru
 Start-Sleep -Seconds 1
@@ -62,13 +64,24 @@ Push-Location $Root
 try {
     & .\scripts\build_backend.ps1 -Python $Python
     if (Get-Command pnpm -ErrorAction SilentlyContinue) {
-        $Pnpm = "pnpm"
+        $PnpmCommand = "pnpm"
+        $PnpmArgsPrefix = @()
     } else {
         corepack prepare pnpm@10.28.0 --activate
-        $Pnpm = "corepack pnpm"
+        if ($LASTEXITCODE -ne 0) {
+            throw "corepack prepare failed with exit code $LASTEXITCODE"
+        }
+        $PnpmCommand = "corepack"
+        $PnpmArgsPrefix = @("pnpm")
     }
-    Invoke-Expression "$Pnpm --dir desktop install"
-    Invoke-Expression "$Pnpm --dir desktop tauri build --bundles nsis"
+    & $PnpmCommand @PnpmArgsPrefix --dir desktop install
+    if ($LASTEXITCODE -ne 0) {
+        throw "pnpm install failed with exit code $LASTEXITCODE"
+    }
+    & $PnpmCommand @PnpmArgsPrefix --dir desktop tauri build --bundles nsis
+    if ($LASTEXITCODE -ne 0) {
+        throw "tauri build failed with exit code $LASTEXITCODE"
+    }
     $BundleDir = Join-Path $Root "desktop\src-tauri\target\release\bundle\nsis"
     if (-not (Test-Path $BundleDir)) {
         throw "NSIS bundle directory was not created: $BundleDir"

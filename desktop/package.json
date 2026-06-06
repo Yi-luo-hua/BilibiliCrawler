@@ -1,7 +1,7 @@
 {
   "name": "bilibilicrawler-desktop",
   "private": true,
-  "version": "2.0.0",
+  "version": "3.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,17 +12,20 @@
     "format": "prettier --write \"src/**/*.{ts,tsx,css,json}\" \"*.{json,md}\""
   },
   "dependencies": {
+    "@svg-maps/china": "2.0.0",
+    "@svg-maps/taiwan.main": "2.0.0",
+    "@tailwindcss/vite": "^4.1.18",
     "@tauri-apps/api": "^2.9.0",
     "@tauri-apps/plugin-dialog": "^2.4.0",
     "@tauri-apps/plugin-fs": "^2.4.3",
     "@tauri-apps/plugin-log": "^2.7.0",
     "@tauri-apps/plugin-opener": "^2.5.0",
     "@tauri-apps/plugin-process": "^2.3.0",
-    "@tailwindcss/vite": "^4.1.18",
     "clsx": "^2.1.1",
     "lucide-react": "^0.562.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "recharts": "^3.8.1",
     "sonner": "^2.0.7",
     "tailwindcss": "^4.1.18",
     "zustand": "^5.0.10"

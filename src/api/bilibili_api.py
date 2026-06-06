@@ -5,13 +5,18 @@ B站API调用封装模块
 - 统一日志接口
 - 支持视频、动态、专栏文章
 """
-import time
+import hashlib
 import logging
+import re
+import time
+import urllib.parse
 import requests
 from typing import Dict, Optional, Any
 from config.config import (
     COMMENT_API_URL,
+    COMMENT_WBI_API_URL,
     REPLY_API_URL,
+    NAV_API_URL,
     DYNAMIC_DETAIL_API_URL,
     ARTICLE_INFO_API_URL,
     SPACE_DYNAMICS_API_URL,
@@ -33,11 +38,24 @@ logger = logging.getLogger(__name__)
 class BilibiliAPI:
     """B站API调用封装类"""
 
+    _MIXIN_KEY_ENC_TAB = [
+        46, 47, 18, 2, 53, 8, 23, 32,
+        15, 50, 10, 31, 58, 3, 45, 35,
+        27, 43, 5, 49, 33, 9, 42, 19,
+        29, 28, 14, 39, 12, 38, 41, 13,
+        37, 48, 7, 16, 24, 55, 40, 61,
+        26, 17, 0, 1, 60, 51, 30, 4,
+        22, 25, 54, 21, 56, 59, 6, 63,
+        57, 62, 11, 36, 20, 34, 44, 52,
+    ]
+
     def __init__(self, headers: Optional[Dict[str, str]] = None):
         self.headers = headers or DEFAULT_HEADERS.copy()
         self.session = requests.Session()
         self.session.trust_env = False  # 忽略系统代理，避免连接干扰
         self.session.headers.update(self.headers)
+        self._wbi_mixin_key = ""
+        self._wbi_key_time = 0.0
         # 自适应延迟：初始值较小，被限速后动态增大
         self._current_delay = REQUEST_DELAY_DEFAULT
 
@@ -70,6 +88,10 @@ class BilibiliAPI:
                 self._adaptive_sleep(was_rate_limited=rate_limited)
                 rate_limited = False
                 response = self.session.get(url, params=params, timeout=REQUEST_TIMEOUT)
+                if response.status_code == 412:
+                    logger.warning("触发风控(HTTP 412)，第 %s 次重试...", attempt + 1)
+                    rate_limited = True
+                    continue
                 response.raise_for_status()
                 data = response.json()
 
@@ -109,6 +131,47 @@ class BilibiliAPI:
                 return None
 
         return None
+
+    def _request_wbi(self, url: str, params: Dict[str, Any]) -> Optional[Dict]:
+        mixin_key = self._get_wbi_mixin_key()
+        if not mixin_key:
+            return None
+        signed = self._sign_wbi_params(params, mixin_key)
+        return self._request(url, signed)
+
+    def _get_wbi_mixin_key(self) -> str:
+        now = time.time()
+        if self._wbi_mixin_key and now - self._wbi_key_time < 3600:
+            return self._wbi_mixin_key
+        try:
+            response = self.session.get(NAV_API_URL, timeout=REQUEST_TIMEOUT)
+            response.raise_for_status()
+            data = response.json()
+            wbi_img = (data.get("data") or {}).get("wbi_img") or {}
+            if data.get("code") != 0 and not wbi_img:
+                logger.warning("获取 WBI key 失败: code=%s, message=%s", data.get("code"), data.get("message"))
+                return ""
+            img_url = str(wbi_img.get("img_url") or "")
+            sub_url = str(wbi_img.get("sub_url") or "")
+            keys = re.findall(r"/([^/]+)\.(?:png|jpg|jpeg|webp)", img_url + sub_url)
+            raw_key = "".join(keys)
+            if len(raw_key) < 64:
+                logger.warning("WBI key 长度异常，无法签名评论接口")
+                return ""
+            self._wbi_mixin_key = "".join(raw_key[index] for index in self._MIXIN_KEY_ENC_TAB)[:32]
+            self._wbi_key_time = now
+            return self._wbi_mixin_key
+        except Exception as exc:
+            logger.warning("获取 WBI key 异常: %s", exc)
+            return ""
+
+    @staticmethod
+    def _sign_wbi_params(params: Dict[str, Any], mixin_key: str) -> Dict[str, Any]:
+        signed = {key: value for key, value in params.items() if value is not None}
+        signed["wts"] = int(time.time())
+        encoded = urllib.parse.urlencode(dict(sorted(signed.items())))
+        signed["w_rid"] = hashlib.md5((encoded + mixin_key).encode("utf-8")).hexdigest()
+        return signed
 
     # ============================================================
     #  视频相关
@@ -195,8 +258,10 @@ class BilibiliAPI:
             "pn": page,
             "ps": DEFAULT_PAGE_SIZE,
             "next": next_page,
+            "plat": 1,
+            "web_location": "1315875",
         }
-        return self._request(COMMENT_API_URL, params)
+        return self._request_wbi(COMMENT_WBI_API_URL, params) or self._request(COMMENT_API_URL, params)
 
     def get_replies(
         self, oid: int, root: int, page: int = 1, type_id: int = 1
@@ -219,8 +284,9 @@ class BilibiliAPI:
             "root": root,
             "pn": page,
             "ps": DEFAULT_PAGE_SIZE,
+            "web_location": "1315875",
         }
-        return self._request(REPLY_API_URL, params)
+        return self._request_wbi(REPLY_API_URL, params) or self._request(REPLY_API_URL, params)
 
     # ============================================================
     #  用户空间动态

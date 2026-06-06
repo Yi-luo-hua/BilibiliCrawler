@@ -32,6 +32,20 @@ struct UiConfig {
     background_blur: bool,
     background_mode: String,
     background_version: Option<u64>,
+    #[serde(default)]
+    llm_base_url: String,
+    #[serde(default)]
+    llm_model: String,
+    #[serde(default)]
+    analysis_source: String,
+    #[serde(default)]
+    analysis_strategy: String,
+    #[serde(default)]
+    analysis_sample_size: u64,
+    #[serde(default)]
+    analysis_batch_size: u64,
+    #[serde(default)]
+    analysis_chart_keys: Vec<String>,
 }
 
 impl SidecarState {
@@ -51,6 +65,13 @@ fn default_ui_config() -> UiConfig {
         background_blur: true,
         background_mode: "cover".to_string(),
         background_version: None,
+        llm_base_url: "https://api.openai.com/v1".to_string(),
+        llm_model: String::new(),
+        analysis_source: "all".to_string(),
+        analysis_strategy: "sample".to_string(),
+        analysis_sample_size: 300,
+        analysis_batch_size: 80,
+        analysis_chart_keys: default_analysis_chart_keys(),
     }
 }
 
@@ -211,15 +232,26 @@ fn ensure_sidecar(app: &AppHandle, state: &State<SidecarState>) -> Result<(), St
 
 fn resolve_sidecar_path(app: &AppHandle) -> Result<PathBuf, String> {
     let mut candidates = Vec::new();
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let source_sidecar = manifest_dir
+        .parent()
+        .and_then(|desktop| desktop.parent())
+        .map(|repo_root| repo_root.join("backend").join("sidecar.py"));
+
+    #[cfg(debug_assertions)]
+    if let Some(path) = source_sidecar.as_ref() {
+        candidates.push(path.clone());
+    }
+
     if let Ok(resource_dir) = app.path().resource_dir() {
         candidates.push(resource_dir.join("resources").join("backend").join("sidecar").join("sidecar.exe"));
         candidates.push(resource_dir.join("backend").join("sidecar").join("sidecar.exe"));
         candidates.push(resource_dir.join("backend").join("sidecar.exe"));
     }
 
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    if let Some(repo_root) = manifest_dir.parent().and_then(|desktop| desktop.parent()) {
-        candidates.push(repo_root.join("backend").join("sidecar.py"));
+    #[cfg(not(debug_assertions))]
+    if let Some(path) = source_sidecar.as_ref() {
+        candidates.push(path.clone());
     }
 
     candidates
@@ -260,8 +292,104 @@ fn normalize_ui_config(mut config: UiConfig) -> UiConfig {
         config.background_path.clear();
         config.background_version = None;
     }
+    config.llm_base_url = config.llm_base_url.trim().trim_end_matches('/').to_string();
+    if config.llm_base_url.is_empty() {
+        config.llm_base_url = "https://api.openai.com/v1".to_string();
+    }
+    config.llm_model = config.llm_model.trim().to_string();
+    if !matches!(config.analysis_source.as_str(), "comments" | "dynamics" | "all") {
+        config.analysis_source = "all".to_string();
+    }
+    if !matches!(config.analysis_strategy.as_str(), "sample" | "full") {
+        config.analysis_strategy = "sample".to_string();
+    }
+    if config.analysis_sample_size == 0 {
+        config.analysis_sample_size = 300;
+    }
+    if config.analysis_batch_size == 0 {
+        config.analysis_batch_size = 80;
+    }
+    config.analysis_sample_size = config.analysis_sample_size.clamp(20, 2000);
+    config.analysis_batch_size = config.analysis_batch_size.clamp(20, 200);
+    config.analysis_chart_keys = normalize_analysis_chart_keys(config.analysis_chart_keys);
     config
 }
+
+fn default_analysis_chart_keys() -> Vec<String> {
+    [
+        "sentiment_distribution",
+        "topic_ranking",
+        "time_trend",
+        "level_distribution",
+        "region_map",
+        "word_cloud",
+        "deep_analysis",
+    ]
+    .iter()
+    .map(|value| value.to_string())
+    .collect()
+}
+
+fn normalize_analysis_chart_keys(keys: Vec<String>) -> Vec<String> {
+    let defaults = default_analysis_chart_keys();
+    let mut normalized = Vec::new();
+    for key in keys {
+        if defaults.iter().any(|item| item == &key) && !normalized.iter().any(|item| item == &key) {
+            normalized.push(key);
+        }
+    }
+    if normalized.is_empty() {
+        defaults
+    } else {
+        normalized
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Credentials {
+    api_key: String,
+}
+
+fn credentials_path() -> Result<PathBuf, String> {
+    Ok(user_data_dir()?.join("config").join("credentials.json"))
+}
+
+#[tauri::command]
+fn read_llm_api_key() -> Result<String, String> {
+    let path = credentials_path()?;
+    if !path.exists() {
+        return Ok(String::new());
+    }
+    let raw = fs::read_to_string(&path).map_err(|err| err.to_string())?;
+    let creds: Credentials = serde_json::from_str(&raw).map_err(|err| err.to_string())?;
+    Ok(creds.api_key)
+}
+
+#[tauri::command]
+fn write_llm_api_key(api_key: String) -> Result<(), String> {
+    let path = credentials_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    let creds = Credentials {
+        api_key: api_key.trim().to_string(),
+    };
+    let raw = serde_json::to_string(&creds).map_err(|err| err.to_string())?;
+    fs::write(&path, raw).map_err(|err| err.to_string())?;
+    hide_file(&path);
+    Ok(())
+}
+
+#[cfg(windows)]
+fn hide_file(path: &Path) {
+    let _ = std::process::Command::new("attrib")
+        .arg("+h")
+        .arg(path)
+        .output();
+}
+
+#[cfg(not(windows))]
+fn hide_file(_path: &Path) {}
 
 fn background_version(path: &Path) -> Result<u64, String> {
     let metadata = fs::metadata(path).map_err(|err| err.to_string())?;
@@ -321,7 +449,9 @@ fn main() {
             write_ui_config,
             set_background_from_path,
             clear_background,
-            read_background_data_url
+            read_background_data_url,
+            read_llm_api_key,
+            write_llm_api_key
         ])
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {

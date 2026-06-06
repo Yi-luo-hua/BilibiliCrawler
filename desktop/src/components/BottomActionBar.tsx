@@ -13,17 +13,18 @@ interface Props {
 
 export function BottomActionBar({ mode, running, stopping, canExport, onStart, onStop, onExport }: Props) {
   const disabled = mode === "settings";
+  const isAnalysis = mode === "analysis";
   return (
     <footer className="action-bar">
       <div>
-        <strong>{mode === "comments" ? "评论任务" : mode === "dynamics" ? "动态任务" : "界面设置"}</strong>
-        <span>{disabled ? "设置页不运行爬取任务" : "CSV 会通过 Python sidecar 写入本地文件"}</span>
+        <strong>{mode === "comments" ? "评论任务" : mode === "dynamics" ? "动态任务" : isAnalysis ? "分析任务" : "界面设置"}</strong>
+        <span>{disabled ? "设置页不运行爬取任务" : isAnalysis ? "分析报告会通过 Python sidecar 写入本地文件" : "CSV 会通过 Python sidecar 写入本地文件"}</span>
       </div>
       {!disabled && (
         <div className="action-buttons">
           <button className="ghost-button" disabled={!canExport || running} onClick={onExport}>
             <Download size={18} />
-            导出 CSV
+            {isAnalysis ? "导出报告" : "导出 CSV"}
           </button>
           <button className="ghost-button" disabled={!running || stopping} onClick={onStop}>
             <Square size={18} />
@@ -31,7 +32,7 @@ export function BottomActionBar({ mode, running, stopping, canExport, onStart, o
           </button>
           <button className="primary-button" disabled={running} onClick={onStart}>
             <Play size={20} />
-            开始任务
+            {isAnalysis ? "开始分析" : "开始任务"}
           </button>
         </div>
       )}

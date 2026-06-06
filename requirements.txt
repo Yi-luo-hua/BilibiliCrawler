@@ -2,3 +2,5 @@ requests>=2.31.0
 
 qrcode>=7.4
 Pillow>=10.0
+jieba>=0.42.1
+wordcloud>=1.9.3

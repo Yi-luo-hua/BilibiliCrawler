@@ -3,7 +3,9 @@ B站评论爬虫配置文件
 """
 # B站评论API端点
 COMMENT_API_URL = "https://api.bilibili.com/x/v2/reply/main"
+COMMENT_WBI_API_URL = "https://api.bilibili.com/x/v2/reply/wbi/main"
 REPLY_API_URL = "https://api.bilibili.com/x/v2/reply/reply"
+NAV_API_URL = "https://api.bilibili.com/x/web-interface/nav"
 
 # 动态详情API（新版）
 DYNAMIC_DETAIL_API_URL = "https://api.bilibili.com/x/polymer/web-dynamic/v1/detail"

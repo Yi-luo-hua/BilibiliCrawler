@@ -1,5 +1,5 @@
 import { CSSProperties, Dispatch, SetStateAction } from "react";
-import { ImagePlus, KeyRound, RotateCcw } from "lucide-react";
+import { ImagePlus, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { chooseBackground, clearBackground, readBackgroundDataUrl, setBackgroundFromPath } from "../lib/tauri";
 import type { Mode, UIConfig } from "../types";
@@ -12,8 +12,6 @@ interface Props {
   config: UIConfig;
   setConfig: Dispatch<SetStateAction<UIConfig>>;
   setBackgroundDataUrl: Dispatch<SetStateAction<string>>;
-  loggedIn: boolean;
-  onQrLogin: () => void;
   onLog: (message: string) => void;
 }
 
@@ -26,8 +24,6 @@ export function TaskWorkspace({
   config,
   setConfig,
   setBackgroundDataUrl,
-  loggedIn,
-  onQrLogin,
   onLog
 }: Props) {
   const patch = (data: Partial<FormsState>) => setForms((prev) => ({ ...prev, ...data }));
@@ -100,14 +96,14 @@ export function TaskWorkspace({
             <input type="checkbox" checked={config.background_blur} onChange={(event) => setConfig((c) => ({ ...c, background_blur: event.target.checked }))} />
             <span>背景模糊</span>
           </label>
-          <div className="button-row">
-            <button className="accent-button" onClick={handleChooseBackground}>
+          <div className="settings-actions">
+            <button className="accent-button settings-action-button" onClick={handleChooseBackground}>
               <ImagePlus size={18} />
-              选择背景
+              <span>选择背景</span>
             </button>
-            <button className="ghost-button" onClick={handleClearBackground}>
+            <button className="ghost-button settings-action-button" onClick={handleClearBackground}>
               <RotateCcw size={18} />
-              恢复默认
+              <span>恢复默认</span>
             </button>
           </div>
         </div>
@@ -128,10 +124,6 @@ export function TaskWorkspace({
               placeholder="用户 UID / space.bilibili.com/xxx；留空则爬关注页动态流"
             />
           </label>
-          <button className="login-button" onClick={onQrLogin} disabled={loggedIn}>
-            <KeyRound size={18} />
-            {loggedIn ? "已登录" : "扫码登录"}
-          </button>
           <label className="field wide">
             <span>关键词</span>
             <input value={forms.keyword} onChange={(event) => patch({ keyword: event.target.value })} placeholder="按关键词筛选动态内容，留空不过滤" />

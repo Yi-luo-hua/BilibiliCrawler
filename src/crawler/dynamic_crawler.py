@@ -15,9 +15,26 @@ logger = logging.getLogger(__name__)
 
 
 def _ts_str(ts: int) -> str:
+    ts = _to_int_timestamp(ts)
     if ts:
         return datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M')
     return '不限'
+
+
+def _to_int_timestamp(value) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return 0
+        try:
+            return int(float(value))
+        except ValueError:
+            return 0
+    return 0
 
 
 class DynamicCrawler:
@@ -48,6 +65,8 @@ class DynamicCrawler:
         end_time: int = 0,
     ) -> List[Dict]:
         self._stop_flag = False
+        start_time = _to_int_timestamp(start_time)
+        end_time = _to_int_timestamp(end_time)
         all_dynamics = []
         page = 1
         offset = ""
@@ -84,7 +103,7 @@ class DynamicCrawler:
             page_ts = []
             for it in new_items:
                 author = it.get('modules', {}).get('module_author', {})
-                ts = author.get('pub_ts', 0)
+                ts = _to_int_timestamp(author.get('pub_ts', 0))
                 if ts:
                     page_ts.append(ts)
             if page_ts:
@@ -128,6 +147,8 @@ class DynamicCrawler:
     ) -> List[Dict]:
         """爬取关注页动态流（需要Cookie）"""
         self._stop_flag = False
+        start_time = _to_int_timestamp(start_time)
+        end_time = _to_int_timestamp(end_time)
         all_dynamics = []
         page = 1
         offset = ""
@@ -164,7 +185,7 @@ class DynamicCrawler:
             page_ts = []
             for it in new_items:
                 author = it.get('modules', {}).get('module_author', {})
-                ts = author.get('pub_ts', 0)
+                ts = _to_int_timestamp(author.get('pub_ts', 0))
                 if ts:
                     page_ts.append(ts)
             if page_ts:
@@ -202,11 +223,13 @@ class DynamicCrawler:
     def _enrich_and_filter(self, dynamics: List[Dict], keyword: str = "",
                            start_time: int = 0, end_time: int = 0) -> List[Dict]:
         """充实空内容的动态（OPUS页面回退），然后按时间范围和关键词过滤"""
+        start_time = _to_int_timestamp(start_time)
+        end_time = _to_int_timestamp(end_time)
         # 时间过滤
         if start_time or end_time:
             filtered = []
             for d in dynamics:
-                ts = d.get('timestamp', 0)
+                ts = _to_int_timestamp(d.get('timestamp', 0))
                 if start_time and ts < start_time:
                     continue
                 if end_time and ts > end_time:
@@ -293,7 +316,10 @@ class DynamicCrawler:
                 if completed[0] % 50 == 0:
                     self._log(f"  文字补齐进度: {completed[0]}/{len(dy_ids)}")
 
-        self._log(f"成功补齐 {len(result)} 条动态文字")
+        if result:
+            self._log(f"成功补齐 {len(result)} 条动态文字")
+        else:
+            self._log("未补齐到新的动态文字，可能为纯图片、转发内容或页面限制")
         return result
 
     @staticmethod
@@ -372,7 +398,7 @@ class DynamicCrawler:
 
             # 作者信息
             author = modules.get('module_author', {})
-            pub_ts = author.get('pub_ts', 0)
+            pub_ts = _to_int_timestamp(author.get('pub_ts', 0))
             username = author.get('name', '')
 
             # 统计信息

@@ -126,6 +126,9 @@ class DataProcessor:
                 'total_likes': 0,
                 'avg_likes': 0,
                 'total_replies': 0,
+                'ip_locations': 0,
+                'missing_ip_locations': 0,
+                'ip_location_coverage': 0,
             }
 
         main_comments = [c for c in comments if not c.get('is_reply', False)]
@@ -133,6 +136,8 @@ class DataProcessor:
 
         total_likes = sum(c.get('like_count', 0) for c in comments)
         total_replies = sum(c.get('reply_count', 0) for c in main_comments)
+        ip_locations = sum(1 for c in comments if str(c.get('ip_location') or '').strip())
+        missing_ip_locations = len(comments) - ip_locations
 
         return {
             'total': len(comments),
@@ -141,4 +146,7 @@ class DataProcessor:
             'total_likes': total_likes,
             'avg_likes': round(total_likes / len(comments), 2) if comments else 0,
             'total_replies': total_replies,
+            'ip_locations': ip_locations,
+            'missing_ip_locations': missing_ip_locations,
+            'ip_location_coverage': round(ip_locations / len(comments), 4) if comments else 0,
         }

@@ -6,6 +6,7 @@
 - 线程安全的日志回调
 """
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import List, Dict, Optional, Callable
@@ -380,6 +381,7 @@ class CommentCrawler:
         """
         member = reply.get('member', {})
         content = reply.get('content', {})
+        ip_location = self._extract_ip_location(reply)
 
         return {
             'comment_id': reply.get('rpid'),
@@ -400,8 +402,17 @@ class CommentCrawler:
             'ctime': reply.get('ctime', 0),
             'ctime_text': self._timestamp_to_str(reply.get('ctime', 0)),
             # 其他
-            'ip_location': reply.get('reply_control', {}).get('location', ''),
+            'ip_location': ip_location,
         }
+
+    @staticmethod
+    def _extract_ip_location(reply: Dict) -> str:
+        reply_control = reply.get('reply_control') or {}
+        location = str(reply_control.get('location') or '').strip()
+        if not location:
+            return ''
+        location = re.sub(r'^(IP属地|属地|来自)[:：\s]*', '', location).strip()
+        return location
 
     @staticmethod
     def _timestamp_to_str(timestamp: int) -> str:
