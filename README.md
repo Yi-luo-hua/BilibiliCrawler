@@ -11,9 +11,9 @@ BilibiliCrawler 是一个 B 站评论 / 动态爬取与舆论分析桌面工具�
 如果使用过程中遇到Bug或有新增功能需求请提Issue谢谢喵！
 
 ## 界面展示
-![原始界面](image/ScreenShot_2026-07-20_145934_010.png)
+![原始界面](docs/image/ScreenShot_2026-07-20_145934_010.png)
 
-![设置壁纸后界面](image/ScreenShot_2026-07-20_150142_079.png)
+![设置壁纸后界面](docs/image/ScreenShot_2026-07-20_150142_079.png)
 
 ## 功能
 
