@@ -68,78 +68,18 @@ class DynamicCrawler:
         start_time: int = 0,
         end_time: int = 0,
     ) -> List[Dict]:
-        self._stop_flag = False
-        start_time = _to_int_timestamp(start_time)
-        end_time = _to_int_timestamp(end_time)
-        all_dynamics = []
-        page = 1
-        offset = ""
-        seen_ids = set()
-        max_ts_seen = 0  # 当前页最晚的时间戳，用于判断整页是否超出范围
-
-        self._log(f"开始爬取用户 {host_mid} 的空间动态...")
-        if keyword:
-            self._log(f"关键词过滤: {keyword}")
-        if start_time or end_time:
-            self._log(f"时间范围: {_ts_str(start_time)} ~ {_ts_str(end_time)}")
-
-        while page <= max_pages and not self._stop_flag:
-            self._log(f"正在爬取第 {page} 页动态...")
-
-            data = self.api.get_user_dynamics(host_mid, offset=offset)
-            if not data or not data.get('data'):
-                raise RuntimeError("获取用户动态失败，请检查网络、登录状态或风控日志")
-
-            items = data['data'].get('items', [])
-            if not items:
-                self._log("动态列表为空")
-                break
-
-            new_items = [it for it in items if it.get('id_str') not in seen_ids]
-            if not new_items:
-                self._log("检测到重复数据，停止")
-                break
-
-            seen_ids.update(it.get('id_str') for it in items)
-
-            # 记录本页最早时间戳
-            page_ts = []
-            for it in new_items:
-                author = it.get('modules', {}).get('module_author', {})
-                ts = _to_int_timestamp(author.get('pub_ts', 0))
-                if ts:
-                    page_ts.append(ts)
-            if page_ts:
-                max_ts_seen = max(page_ts)
-
-            before = len(all_dynamics)
-            for item in new_items:
-                if self._stop_flag:
-                    break
-                dynamic = self._process_dynamic(item)
-                if dynamic:
-                    all_dynamics.append(dynamic)
-
-            self._log(f"第 {page} 页: 获取 {len(new_items)} 条，"
-                      f"新增 {len(all_dynamics) - before} 条")
-
-            # 提前停止：当前页全部动态都早于时间范围
-            if start_time and max_ts_seen and max_ts_seen < start_time:
-                self._log("已到达指定时间范围起点，停止翻页")
-                break
-
-            has_more = data['data'].get('has_more', False)
-            offset = data['data'].get('offset', "")
-
-            if has_more and offset:
-                page += 1
-            else:
-                self._log("已到达最后一页")
-                break
-
-        self._log(f"爬取完成！共获取 {len(all_dynamics)} 条动态")
-        all_dynamics = self._enrich_and_filter(all_dynamics, keyword, start_time, end_time)
-        return all_dynamics
+        return self._crawl_feed(
+            fetch_page=lambda offset: self.api.get_user_dynamics(
+                host_mid,
+                offset=offset,
+            ),
+            start_message=f"开始爬取用户 {host_mid} 的空间动态...",
+            failure_message="获取用户动态失败，请检查网络、登录状态或风控日志",
+            keyword=keyword,
+            max_pages=max_pages,
+            start_time=start_time,
+            end_time=end_time,
+        )
 
     def crawl_following_feed(
         self,
@@ -149,6 +89,26 @@ class DynamicCrawler:
         end_time: int = 0,
     ) -> List[Dict]:
         """爬取关注页动态流（需要Cookie）"""
+        return self._crawl_feed(
+            fetch_page=lambda offset: self.api.get_following_feed(offset=offset),
+            start_message="开始爬取关注页动态流...",
+            failure_message="获取关注动态失败，请检查网络、登录状态或风控日志",
+            keyword=keyword,
+            max_pages=max_pages,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    def _crawl_feed(
+        self,
+        fetch_page: Callable[[str], Optional[Dict]],
+        start_message: str,
+        failure_message: str,
+        keyword: str,
+        max_pages: int,
+        start_time: int,
+        end_time: int,
+    ) -> List[Dict]:
         self._stop_flag = False
         start_time = _to_int_timestamp(start_time)
         end_time = _to_int_timestamp(end_time)
@@ -156,9 +116,8 @@ class DynamicCrawler:
         page = 1
         offset = ""
         seen_ids = set()
-        max_ts_seen = 0
 
-        self._log("开始爬取关注页动态流...")
+        self._log(start_message)
         if keyword:
             self._log(f"关键词过滤: {keyword}")
         if start_time or end_time:
@@ -167,9 +126,9 @@ class DynamicCrawler:
         while page <= max_pages and not self._stop_flag:
             self._log(f"正在爬取第 {page} 页动态...")
 
-            data = self.api.get_following_feed(offset=offset)
+            data = fetch_page(offset)
             if not data or not data.get('data'):
-                raise RuntimeError("获取关注动态失败，请检查网络、登录状态或风控日志")
+                raise RuntimeError(failure_message)
 
             items = data['data'].get('items', [])
             if not items:
@@ -183,15 +142,13 @@ class DynamicCrawler:
 
             seen_ids.update(it.get('id_str') for it in items)
 
-            # 记录本页最早时间戳
             page_ts = []
             for it in new_items:
                 author = it.get('modules', {}).get('module_author', {})
                 ts = _to_int_timestamp(author.get('pub_ts', 0))
                 if ts:
                     page_ts.append(ts)
-            if page_ts:
-                max_ts_seen = max(page_ts)
+            max_ts_seen = max(page_ts) if page_ts else 0
 
             before = len(all_dynamics)
             for item in new_items:
