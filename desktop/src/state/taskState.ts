@@ -5,6 +5,7 @@ export type TaskPhase =
   | "starting"
   | "running"
   | "stopping"
+  | "cancelled"
   | "succeeded"
   | "failed";
 
@@ -30,6 +31,7 @@ export type TaskAction =
     }
   | { type: "analysis.progress"; message?: string; percent?: number }
   | { type: "finished"; mode: TaskMode; count: number }
+  | { type: "cancelled"; mode?: TaskMode }
   | { type: "failed"; mode?: TaskMode };
 
 export const initialTaskState: TaskState = {
@@ -102,7 +104,11 @@ export function taskReducer(state: TaskState, action: TaskAction): TaskState {
             nextMode === "analysis" ? "正在停止分析" : "正在停止爬取",
         };
       }
-      if (state.phase === "succeeded" || state.phase === "failed") {
+      if (
+        state.phase === "succeeded" ||
+        state.phase === "cancelled" ||
+        state.phase === "failed"
+      ) {
         return state;
       }
       return {
@@ -131,6 +137,17 @@ export function taskReducer(state: TaskState, action: TaskAction): TaskState {
             ? `分析完成：${action.count} 条`
             : `完成：${action.count} 条`,
       };
+    case "cancelled": {
+      const nextMode = action.mode ?? state.mode;
+      return {
+        ...state,
+        phase: "cancelled",
+        mode: nextMode,
+        progressStatus:
+          nextMode === "analysis" ? "分析已停止" : "爬取已停止",
+        summary: nextMode === "analysis" ? "分析已停止" : "爬取已停止",
+      };
+    }
     case "failed":
       return {
         ...state,

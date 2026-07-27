@@ -138,6 +138,7 @@ export interface SidecarBroadcastEvent {
     | "analysis.result"
     | "stats"
     | "finished"
+    | "cancelled"
     | "error"
     | "qr"
     | "login.success";

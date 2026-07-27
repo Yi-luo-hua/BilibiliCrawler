@@ -290,6 +290,11 @@ export function App() {
         }
         toast.success(`任务完成，获取 ${event.count ?? 0} 条数据`);
         break;
+      case "cancelled":
+        dispatchTask({ type: "cancelled", mode: event.mode });
+        pushLog(event.message || "任务已停止");
+        toast.info(event.mode === "analysis" ? "分析已停止" : "任务已停止");
+        break;
       case "error":
         dispatchTask({ type: "failed", mode: event.mode });
         toast.error(event.message || "任务失败");

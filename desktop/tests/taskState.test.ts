@@ -39,3 +39,34 @@ test("task reducer expresses the complete start, run, stop and finish lifecycle"
   assert.equal(finished.progressPercent, 100);
   assert.equal(finished.summary, "分析完成：18 条");
 });
+
+test("a cancelled analysis becomes restartable without being marked failed", () => {
+  const running = taskReducer(initialTaskState, {
+    type: "session.running",
+    mode: "analysis",
+  });
+  const stopping = taskReducer(running, { type: "stop.requested" });
+
+  const cancelled = taskReducer(stopping, {
+    type: "cancelled",
+    mode: "analysis",
+  });
+
+  assert.equal(cancelled.phase, "cancelled");
+  assert.equal(cancelled.progressStatus, "分析已停止");
+  assert.equal(cancelled.summary, "分析已停止");
+
+  const afterIdle = taskReducer(cancelled, {
+    type: "progress",
+    status: "idle",
+    mode: "analysis",
+    percent: 100,
+  });
+  assert.equal(afterIdle.phase, "cancelled");
+
+  const restarted = taskReducer(afterIdle, {
+    type: "start.requested",
+    mode: "analysis",
+  });
+  assert.equal(restarted.phase, "starting");
+});
