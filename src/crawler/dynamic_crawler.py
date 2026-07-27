@@ -88,8 +88,7 @@ class DynamicCrawler:
 
             data = self.api.get_user_dynamics(host_mid, offset=offset)
             if not data or not data.get('data'):
-                self._log("未获取到数据，可能已到达最后一页")
-                break
+                raise RuntimeError("获取用户动态失败，请检查网络、登录状态或风控日志")
 
             items = data['data'].get('items', [])
             if not items:
@@ -170,8 +169,7 @@ class DynamicCrawler:
 
             data = self.api.get_following_feed(offset=offset)
             if not data or not data.get('data'):
-                self._log("未获取到数据，可能已到达最后一页")
-                break
+                raise RuntimeError("获取关注动态失败，请检查网络、登录状态或风控日志")
 
             items = data['data'].get('items', [])
             if not items:
