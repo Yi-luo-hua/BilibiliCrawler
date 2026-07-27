@@ -4,7 +4,7 @@
 import json
 import logging
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime
 from typing import List, Dict, Optional, Callable
 
@@ -306,17 +306,31 @@ class DynamicCrawler:
             except Exception:
                 return dy_id, ""
 
-        with ThreadPoolExecutor(max_workers=MAX_REPLY_WORKERS) as executor:
-            futures = {executor.submit(fetch_one, did): did for did in dy_ids}
-            for f in as_completed(futures):
-                if self._stop_flag:
-                    break
-                dy_id, text = f.result()
-                if text:
-                    result[dy_id] = text
-                completed[0] += 1
-                if completed[0] % 50 == 0:
-                    self._log(f"  文字补齐进度: {completed[0]}/{len(dy_ids)}")
+        executor = ThreadPoolExecutor(max_workers=MAX_REPLY_WORKERS)
+        futures = {executor.submit(fetch_one, did): did for did in dy_ids}
+        pending = set(futures)
+        try:
+            while pending and not self._stop_flag:
+                done, pending = wait(
+                    pending,
+                    timeout=0.1,
+                    return_when=FIRST_COMPLETED,
+                )
+                for future in done:
+                    dy_id, text = future.result()
+                    if text:
+                        result[dy_id] = text
+                    completed[0] += 1
+                    if completed[0] % 50 == 0:
+                        self._log(f"  文字补齐进度: {completed[0]}/{len(dy_ids)}")
+        finally:
+            if self._stop_flag:
+                for future in pending:
+                    future.cancel()
+            executor.shutdown(
+                wait=not self._stop_flag,
+                cancel_futures=self._stop_flag,
+            )
 
         if result:
             self._log(f"成功补齐 {len(result)} 条动态文字")

@@ -1,3 +1,4 @@
+import threading
 import unittest
 
 from src.crawler.dynamic_crawler import DynamicCrawler
@@ -109,6 +110,58 @@ class DynamicCrawlerTests(unittest.TestCase):
             [item["dynamic_id"] for item in dynamics],
             ["recent-page-1", "in-range-page-2"],
         )
+
+    def test_stop_returns_from_public_crawl_while_opus_request_is_blocked(self) -> None:
+        request_started = threading.Event()
+        release_request = threading.Event()
+
+        class FakeResponse:
+            status_code = 200
+            text = "<html></html>"
+
+        class BlockingSession:
+            def get(self, *args, **kwargs):
+                request_started.set()
+                release_request.wait(timeout=2)
+                return FakeResponse()
+
+        class Api:
+            session = BlockingSession()
+
+            def get_user_dynamics(self, host_mid: int, offset: str = ""):
+                item = dynamic_item("image-dynamic", 200)
+                item["modules"]["module_dynamic"] = {
+                    "major": {
+                        "draw": {
+                            "items": [{"src": "https://example.test/image.jpg"}],
+                        }
+                    }
+                }
+                return {
+                    "data": {
+                        "items": [item],
+                        "has_more": False,
+                        "offset": "",
+                    }
+                }
+
+        crawler = DynamicCrawler(api=Api())
+        worker = threading.Thread(
+            target=crawler.crawl_dynamics,
+            args=(123,),
+            kwargs={"max_pages": 1},
+        )
+        worker.start()
+        self.assertTrue(request_started.wait(timeout=1))
+
+        crawler.stop()
+        worker.join(timeout=0.5)
+        stopped_promptly = not worker.is_alive()
+
+        release_request.set()
+        worker.join(timeout=2)
+
+        self.assertTrue(stopped_promptly, "crawl should return promptly after stop()")
 
 
 if __name__ == "__main__":
