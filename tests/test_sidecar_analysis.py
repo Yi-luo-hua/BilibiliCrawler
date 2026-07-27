@@ -379,7 +379,7 @@ class SidecarAnalysisTests(unittest.TestCase):
         self.assertTrue(any(item.get("event") == "error" and "上游请求被取消" in item.get("message", "") for item in events))
         self.assertFalse(any(item.get("event") == "log" and item.get("message") == "分析任务已取消" for item in events))
 
-    def test_display_analysis_result_writes_word_cloud_image_to_file(self) -> None:
+    def test_display_analysis_result_keeps_word_cloud_data_and_writes_file(self) -> None:
         raw = b"\x89PNG\r\n\x1a\nword-cloud-test"
         result = {
             "summary": "ok",
@@ -393,7 +393,7 @@ class SidecarAnalysisTests(unittest.TestCase):
             try:
                 Sidecar._analysis_asset_root = staticmethod(lambda: Path(temp_dir))
                 display = Sidecar._display_analysis_result(result)
-                self.assertNotIn("word_cloud_image", display)
+                self.assertEqual(display.get("word_cloud_image"), result["word_cloud_image"])
                 image_path = display.get("word_cloud_image_path")
                 self.assertTrue(image_path)
                 self.assertEqual(Path(image_path).read_bytes(), raw)
