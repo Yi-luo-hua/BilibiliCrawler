@@ -15,6 +15,31 @@ $NsisUtilsDll = Join-Path $env:TEMP "nsis_tauri_utils.dll"
 $MirrorRoot = Join-Path $env:TEMP "tauri-bundler-mirror"
 $MirrorPort = 18765
 
+function Get-ReleaseVersion {
+    $PackageVersion = (Get-Content -Raw (Join-Path $Root "desktop\package.json") | ConvertFrom-Json).version
+    $TauriVersion = (Get-Content -Raw (Join-Path $Root "desktop\src-tauri\tauri.conf.json") | ConvertFrom-Json).version
+    $CargoToml = Get-Content -Raw (Join-Path $Root "desktop\src-tauri\Cargo.toml")
+    $CargoLock = Get-Content -Raw (Join-Path $Root "desktop\src-tauri\Cargo.lock")
+    $CargoVersion = [regex]::Match($CargoToml, '(?m)^version = "([^"]+)"$').Groups[1].Value
+    $LockMatch = [regex]::Match(
+        $CargoLock,
+        '(?ms)\[\[package\]\]\s+name = "bilibilicrawler_desktop"\s+version = "([^"]+)"'
+    )
+    $LockVersion = $LockMatch.Groups[1].Value
+    $Versions = @{
+        "desktop/package.json" = $PackageVersion
+        "tauri.conf.json" = $TauriVersion
+        "Cargo.toml" = $CargoVersion
+        "Cargo.lock" = $LockVersion
+    }
+    $Mismatch = $Versions.GetEnumerator() | Where-Object { $_.Value -ne $PackageVersion }
+    if (-not $PackageVersion -or $Mismatch) {
+        $Details = ($Versions.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ", "
+        throw "Release version mismatch: $Details"
+    }
+    return $PackageVersion
+}
+
 function Ensure-Download {
     param(
         [string]$Url,
@@ -36,6 +61,9 @@ function Ensure-Download {
         throw "Failed to download required bundle tool: $Url"
     }
 }
+
+$ReleaseVersion = Get-ReleaseVersion
+Write-Host "Release version verified: $ReleaseVersion"
 
 if (-not (Test-Path $NsisExe)) {
     $NsisUrl = "https://github.com/tauri-apps/binary-releases/releases/download/nsis-3.11/nsis-3.11.zip"
@@ -63,18 +91,16 @@ $env:TAURI_BUNDLER_TOOLS_GITHUB_MIRROR_TEMPLATE = "http://127.0.0.1:$MirrorPort/
 Push-Location $Root
 try {
     & .\scripts\build_backend.ps1 -Python $Python
-    if (Get-Command pnpm -ErrorAction SilentlyContinue) {
+    if (Get-Command corepack -ErrorAction SilentlyContinue) {
+        $PnpmCommand = "corepack"
+        $PnpmArgsPrefix = @("pnpm")
+    } elseif (Get-Command pnpm -ErrorAction SilentlyContinue) {
         $PnpmCommand = "pnpm"
         $PnpmArgsPrefix = @()
     } else {
-        corepack prepare pnpm@10.28.0 --activate
-        if ($LASTEXITCODE -ne 0) {
-            throw "corepack prepare failed with exit code $LASTEXITCODE"
-        }
-        $PnpmCommand = "corepack"
-        $PnpmArgsPrefix = @("pnpm")
+        throw "Neither corepack nor pnpm is available"
     }
-    & $PnpmCommand @PnpmArgsPrefix --dir desktop install
+    & $PnpmCommand @PnpmArgsPrefix --dir desktop install --frozen-lockfile
     if ($LASTEXITCODE -ne 0) {
         throw "pnpm install failed with exit code $LASTEXITCODE"
     }
@@ -90,8 +116,7 @@ try {
     if (-not $Installer) {
         throw "No NSIS installer was produced in: $BundleDir"
     }
-    $Version = (Get-Content -Raw (Join-Path $Root "desktop\package.json") | ConvertFrom-Json).version
-    $Target = Join-Path $BundleDir "BilibiliCrawler-Setup-$Version-x64.exe"
+    $Target = Join-Path $BundleDir "BilibiliCrawler-Setup-$ReleaseVersion-x64.exe"
     if ($Installer.FullName -ne $Target) {
         Move-Item -LiteralPath $Installer.FullName -Destination $Target -Force
     }

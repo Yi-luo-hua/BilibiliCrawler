@@ -159,6 +159,8 @@ corepack pnpm --dir desktop tauri dev
 scripts\build_installer.ps1
 ```
 
+构建脚本会校验 `package.json`、`tauri.conf.json`、`Cargo.toml` 和 `Cargo.lock` 的版本一致性，并使用锁定的 pnpm 版本、冻结锁文件和审核后的依赖构建脚本。
+
 产物位于：
 
 ```text
@@ -170,7 +172,9 @@ desktop\src-tauri\target\release\bundle\nsis\
 ```powershell
 python -m unittest discover -s tests -v
 python -m py_compile backend\sidecar.py src\processor\analysis_processor.py
-corepack pnpm --dir desktop typecheck
+node --experimental-strip-types --test desktop\tests\*.test.ts
+desktop\node_modules\.bin\tsc.cmd --noEmit -p desktop\tsconfig.json
+cargo check --manifest-path desktop\src-tauri\Cargo.toml --locked
 ```
 
 ## 项目结构
@@ -198,7 +202,12 @@ BilibiliCrawler/
 │  │  │  └─ TitleBar.tsx           自定义标题栏
 │  │  ├─ lib/
 │  │  │  ├─ analysisCharts.ts      分析图表、地图和导出资产工具
+│  │  │  ├─ dynamicTarget.ts       动态 UID / 空间链接校验
+│  │  │  ├─ sidecarClient.ts       带请求关联与超时的 sidecar 客户端
 │  │  │  └─ tauri.ts               Tauri invoke 封装
+│  │  ├─ state/
+│  │  │  └─ taskState.ts           爬取 / 分析任务状态机
+│  │  ├─ tests/                     桌面状态机与通信单元测试
 │  │  ├─ App.tsx
 │  │  ├─ main.tsx
 │  │  ├─ styles.css
@@ -211,6 +220,7 @@ BilibiliCrawler/
 │  │  ├─ Cargo.toml
 │  │  └─ tauri.conf.json
 │  ├─ package.json
+│  ├─ pnpm-workspace.yaml            pnpm 依赖脚本审核配置
 │  └─ vite.config.ts
 ├─ scripts/
 │  ├─ build_backend.ps1            安装 Python 依赖并用 PyInstaller 构建 sidecar
@@ -225,13 +235,23 @@ BilibiliCrawler/
 │     └─ data_processor.py         数据清洗与统计
 ├─ tests/
 │  ├─ fixtures/
-│  └─ test_sidecar_analysis.py     sidecar 与分析回归测试
+│  ├─ test_analysis_cancellation.py 分析停止与阻塞请求回归测试
+│  ├─ test_dynamic_crawler.py       动态分页、异常与停止回归测试
+│  └─ test_sidecar_analysis.py      sidecar 与分析回归测试
 ├─ utils/
 │  └─ helpers.py                   链接解析等工具函数
 └─ requirements.txt
 ```
 
 ## 更新日志
+
+### v3.1.0 (2026.07.27)
+- 修复动态接口异常被误报为成功获取 0 条的问题，网络、登录和风控错误现在会进入明确的失败流程。
+- 修复无效动态 UID 静默切换关注流，以及混合新旧时间戳页面导致提前停止、遗漏后续有效动态的问题。
+- 改进动态停止响应，OPUS 文字补齐期间可快速结束任务；空间动态与关注动态共用统一分页流程，减少重复代码。
+- 修复舆论分析在 LLM 请求或词云生成期间点击停止长时间无响应的问题，阻塞阶段会持续检查取消信号。
+- 新增独立的 `cancelled` 业务状态，主动停止不再显示为分析失败，停止后可以立即重新开始任务。
+- 加强 sidecar 服务依赖注入、RPC 请求关联、任务状态机以及动态 / 分析取消链路的自动化回归覆盖。
 
 ### v3.0.1 (2026.06.06)
 - 修复 LLM 返回非标准 JSON（尾随逗号、嵌套对象截断）导致分析失败的问题，改用括号计数解析 + 尾逗号修复回退。
