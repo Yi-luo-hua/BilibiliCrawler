@@ -176,10 +176,8 @@ button {
   width: 44px;
   padding: 0;
 }
-.window-actions button:not(:disabled):hover,
-.ghost-button:not(:disabled):hover,
-.accent-button:not(:disabled):hover,
-.login-button:not(:disabled):hover {
+.window-actions button:not(.danger):not(:disabled):hover,
+.ghost-button:not(:disabled):hover {
   transform: translateY(-2px);
   outline-color: var(--hover-ring);
   outline-offset: 3px;
@@ -834,6 +832,25 @@ button {
   color: white;
   background: var(--accent);
   border-color: transparent;
+}
+.login-button:not(:disabled):hover,
+.accent-button:not(:disabled):hover {
+  color: white;
+  background: color-mix(in srgb, var(--accent) 90%, black);
+  border-color: transparent;
+  transform: translateY(-2px);
+  outline-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 3px;
+  box-shadow: 0 12px 26px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+.window-actions .danger:not(:disabled):hover {
+  color: white;
+  background: color-mix(in srgb, var(--danger) 88%, black);
+  border-color: transparent;
+  transform: translateY(-2px);
+  outline-color: color-mix(in srgb, var(--danger) 55%, transparent);
+  outline-offset: 3px;
+  box-shadow: 0 12px 26px color-mix(in srgb, var(--danger) 30%, transparent);
 }
 .primary-button {
   min-width: 148px;

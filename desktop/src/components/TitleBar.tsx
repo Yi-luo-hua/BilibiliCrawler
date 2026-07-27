@@ -3,6 +3,7 @@ import { Maximize2, Minimize2, Minus, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { toast } from "sonner";
 import { isTauri } from "../lib/tauri";
+import { handleTitleBarMouseDown } from "../lib/titleBarInteraction";
 
 interface Props {
   logo: string;
@@ -14,13 +15,20 @@ export function TitleBar({ logo, onLog }: Props) {
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
-    appWindow?.isMaximized().then(setMaximized).catch(() => undefined);
+    appWindow
+      ?.isMaximized()
+      .then(setMaximized)
+      .catch(() => undefined);
   }, [appWindow]);
 
   async function startDrag(event: MouseEvent<HTMLElement>) {
-    if (event.button !== 0) return;
     try {
-      await appWindow?.startDragging();
+      await handleTitleBarMouseDown(event, {
+        startDragging: async () => {
+          await appWindow?.startDragging();
+        },
+        toggleMaximize,
+      });
     } catch (error) {
       const message = `窗口拖动失败：${String(error)}`;
       onLog(message);
@@ -64,7 +72,7 @@ export function TitleBar({ logo, onLog }: Props) {
   }
 
   return (
-    <header className="titlebar" data-tauri-drag-region onMouseDown={startDrag}>
+    <header className="titlebar" onMouseDown={startDrag}>
       <div className="brand">
         <img src={logo} alt="" />
         <div>
@@ -76,7 +84,10 @@ export function TitleBar({ logo, onLog }: Props) {
         <button aria-label="最小化" onClick={minimizeWindow}>
           <Minus size={18} />
         </button>
-        <button aria-label={maximized ? "还原窗口" : "最大化"} onClick={toggleMaximize}>
+        <button
+          aria-label={maximized ? "还原窗口" : "最大化"}
+          onClick={toggleMaximize}
+        >
           {maximized ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
         </button>
         <button className="danger" aria-label="关闭" onClick={closeWindow}>
