@@ -1,7 +1,6 @@
 {
   "name": "bilibilicrawler-desktop",
   "private": true,
-  "version": "3.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",

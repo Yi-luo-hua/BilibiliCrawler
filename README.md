@@ -159,7 +159,7 @@ corepack pnpm --dir desktop tauri dev
 scripts\build_installer.ps1
 ```
 
-构建脚本会校验 `package.json`、`tauri.conf.json`、`Cargo.toml` 和 `Cargo.lock` 的版本一致性，并使用锁定的 pnpm 版本、冻结锁文件和审核后的依赖构建脚本。
+应用版本以 `desktop/src-tauri/Cargo.toml` 的 `[package].version` 为唯一来源；Tauri 和构建脚本会自动读取该版本，`Cargo.lock` 由 Cargo 同步更新。构建流程使用锁定的 pnpm 版本、冻结锁文件和审核后的依赖构建脚本。
 
 产物位于：
 
@@ -244,6 +244,11 @@ BilibiliCrawler/
 ```
 
 ## 更新日志
+
+### v3.1.1 (2026.07.27)
+- 修复自定义标题栏双击无法最大化或还原窗口的问题，并补充标题栏单击拖动、双击切换最大化的回归测试。
+- 修复扫码登录、选择背景和关闭按钮在鼠标悬浮时背景变白或透明的问题，同时保留蓝色主操作按钮的现有效果。
+- 将应用版本统一由 `Cargo.toml` 管理，Tauri 配置、前端包和安装脚本不再重复维护版本号。
 
 ### v3.1.0 (2026.07.27)
 - 修复动态接口异常被误报为成功获取 0 条的问题，网络、登录和风控错误现在会进入明确的失败流程。

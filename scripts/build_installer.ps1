@@ -16,28 +16,17 @@ $MirrorRoot = Join-Path $env:TEMP "tauri-bundler-mirror"
 $MirrorPort = 18765
 
 function Get-ReleaseVersion {
-    $PackageVersion = (Get-Content -Raw (Join-Path $Root "desktop\package.json") | ConvertFrom-Json).version
-    $TauriVersion = (Get-Content -Raw (Join-Path $Root "desktop\src-tauri\tauri.conf.json") | ConvertFrom-Json).version
-    $CargoToml = Get-Content -Raw (Join-Path $Root "desktop\src-tauri\Cargo.toml")
-    $CargoLock = Get-Content -Raw (Join-Path $Root "desktop\src-tauri\Cargo.lock")
-    $CargoVersion = [regex]::Match($CargoToml, '(?m)^version = "([^"]+)"$').Groups[1].Value
-    $LockMatch = [regex]::Match(
-        $CargoLock,
-        '(?ms)\[\[package\]\]\s+name = "bilibilicrawler_desktop"\s+version = "([^"]+)"'
-    )
-    $LockVersion = $LockMatch.Groups[1].Value
-    $Versions = @{
-        "desktop/package.json" = $PackageVersion
-        "tauri.conf.json" = $TauriVersion
-        "Cargo.toml" = $CargoVersion
-        "Cargo.lock" = $LockVersion
+    $ManifestPath = Join-Path $Root "desktop\src-tauri\Cargo.toml"
+    $MetadataJson = & cargo metadata --format-version 1 --no-deps --manifest-path $ManifestPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "cargo metadata failed with exit code $LASTEXITCODE"
     }
-    $Mismatch = $Versions.GetEnumerator() | Where-Object { $_.Value -ne $PackageVersion }
-    if (-not $PackageVersion -or $Mismatch) {
-        $Details = ($Versions.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ", "
-        throw "Release version mismatch: $Details"
+    $Metadata = $MetadataJson | ConvertFrom-Json
+    $Package = $Metadata.packages | Where-Object { $_.name -eq "bilibilicrawler_desktop" } | Select-Object -First 1
+    if (-not $Package -or $Package.version -notmatch '^\d+\.\d+\.\d+([+-][0-9A-Za-z.-]+)?$') {
+        throw "Invalid release version in Cargo.toml: $($Package.version)"
     }
-    return $PackageVersion
+    return $Package.version
 }
 
 function Ensure-Download {
