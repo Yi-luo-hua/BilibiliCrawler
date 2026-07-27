@@ -22,6 +22,7 @@ import {
   getAutoAnalysisSource,
   normalizeAnalysisChartKeys,
 } from "./lib/analysisCharts";
+import { parseDynamicTarget } from "./lib/dynamicTarget";
 import {
   chooseCsvPath,
   chooseSavePath,
@@ -383,7 +384,7 @@ export function App() {
           sort_mode: forms.sortMode === "time" ? 3 : 2,
         });
       } else {
-        const uid = parseUid(forms.dynamicTarget);
+        const uid = parseDynamicTarget(forms.dynamicTarget);
         if (!uid && !loggedIn) {
           resetStartState();
           toast.warning("爬取关注页动态流需要先扫码登录");
@@ -616,14 +617,4 @@ function parsePageCount(
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(min, Math.min(max, parsed));
-}
-
-function parseUid(input: string): number | null {
-  const trimmed = input.trim();
-  if (!trimmed) return null;
-  const match = trimmed.match(/space\.bilibili\.com\/(\d+)/);
-  if (match) return Number(match[1]);
-  if (/^\d+$/.test(trimmed) && Number(trimmed) < 10 ** 12)
-    return Number(trimmed);
-  return null;
 }
