@@ -75,7 +75,7 @@ class DynamicCrawler:
         page = 1
         offset = ""
         seen_ids = set()
-        min_ts_seen = 0  # 当前页最早的时间戳，用于提前停止
+        max_ts_seen = 0  # 当前页最晚的时间戳，用于判断整页是否超出范围
 
         self._log(f"开始爬取用户 {host_mid} 的空间动态...")
         if keyword:
@@ -110,7 +110,7 @@ class DynamicCrawler:
                 if ts:
                     page_ts.append(ts)
             if page_ts:
-                min_ts_seen = min(page_ts)
+                max_ts_seen = max(page_ts)
 
             before = len(all_dynamics)
             for item in new_items:
@@ -123,8 +123,8 @@ class DynamicCrawler:
             self._log(f"第 {page} 页: 获取 {len(new_items)} 条，"
                       f"新增 {len(all_dynamics) - before} 条")
 
-            # 提前停止：当前页最早动态已超出时间范围
-            if start_time and min_ts_seen and min_ts_seen < start_time:
+            # 提前停止：当前页全部动态都早于时间范围
+            if start_time and max_ts_seen and max_ts_seen < start_time:
                 self._log("已到达指定时间范围起点，停止翻页")
                 break
 
@@ -156,7 +156,7 @@ class DynamicCrawler:
         page = 1
         offset = ""
         seen_ids = set()
-        min_ts_seen = 0
+        max_ts_seen = 0
 
         self._log("开始爬取关注页动态流...")
         if keyword:
@@ -191,7 +191,7 @@ class DynamicCrawler:
                 if ts:
                     page_ts.append(ts)
             if page_ts:
-                min_ts_seen = min(page_ts)
+                max_ts_seen = max(page_ts)
 
             before = len(all_dynamics)
             for item in new_items:
@@ -204,8 +204,8 @@ class DynamicCrawler:
             self._log(f"第 {page} 页: 获取 {len(new_items)} 条，"
                       f"新增 {len(all_dynamics) - before} 条")
 
-            # 提前停止：当前页最早动态已超出时间范围
-            if start_time and min_ts_seen and min_ts_seen < start_time:
+            # 提前停止：当前页全部动态都早于时间范围
+            if start_time and max_ts_seen and max_ts_seen < start_time:
                 self._log("已到达指定时间范围起点，停止翻页")
                 break
 
