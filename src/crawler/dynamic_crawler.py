@@ -40,9 +40,13 @@ def _to_int_timestamp(value) -> int:
 class DynamicCrawler:
     """从B站爬取动态内容（支持用户空间和关注页）"""
 
-    def __init__(self, progress_callback: Optional[Callable[[str], None]] = None,
-                 cookie: str = ""):
-        self.api = BilibiliAPI()
+    def __init__(
+        self,
+        progress_callback: Optional[Callable[[str], None]] = None,
+        cookie: str = "",
+        api: Optional[BilibiliAPI] = None,
+    ):
+        self.api = api or BilibiliAPI()
         if cookie:
             self.api.set_cookie(cookie)
         self.progress_callback = progress_callback or (lambda x: None)

@@ -24,14 +24,18 @@ logger = logging.getLogger(__name__)
 class CommentCrawler:
     """评论爬虫类（支持视频/动态/专栏文章）"""
 
-    def __init__(self, progress_callback: Optional[Callable[[str], None]] = None):
+    def __init__(
+        self,
+        progress_callback: Optional[Callable[[str], None]] = None,
+        api: Optional[BilibiliAPI] = None,
+    ):
         """
         初始化爬虫
 
         Args:
             progress_callback: 进度回调函数，接收日志消息（需线程安全，由调用方保证）
         """
-        self.api = BilibiliAPI()
+        self.api = api or BilibiliAPI()
         self.progress_callback = progress_callback or (lambda x: None)
         self._stop_flag = False
 

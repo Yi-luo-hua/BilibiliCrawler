@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from contextlib import redirect_stdout
 
-from backend.sidecar import Sidecar
+from backend.sidecar import Sidecar, SidecarServices
 from src.api.bilibili_api import BilibiliAPI
 from src.crawler.comment_crawler import CommentCrawler
 from src.crawler.dynamic_crawler import DynamicCrawler
@@ -18,8 +18,8 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
 
 class CaptureSidecar(Sidecar):
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, services: SidecarServices | None = None) -> None:
+        super().__init__(services=services)
         self.messages: list[dict] = []
 
     def _send(self, payload: dict) -> None:
@@ -46,6 +46,56 @@ def repeated_comment_fixture(count: int) -> list[dict]:
 
 
 class SidecarAnalysisTests(unittest.TestCase):
+    def test_comment_request_uses_injected_service_through_public_protocol(self) -> None:
+        api = object()
+        created_with: list[tuple[object, object]] = []
+
+        class FakeCommentCrawler:
+            def __init__(self, injected_api, progress_callback) -> None:
+                created_with.append((injected_api, progress_callback))
+
+            def crawl_comments(self, *args, **kwargs):
+                return [
+                    {
+                        "comment_id": 1,
+                        "content": "依赖注入测试",
+                        "is_reply": False,
+                        "like_count": 2,
+                        "reply_count": 0,
+                        "ip_location": "广东",
+                    }
+                ]
+
+            def stop(self) -> None:
+                return None
+
+        services = SidecarServices(
+            api=api,
+            comment_crawler_factory=lambda progress: FakeCommentCrawler(api, progress),
+        )
+        sidecar = CaptureSidecar(services)
+
+        sidecar.handle(
+            {
+                "id": "comment-request",
+                "method": "comments.start",
+                "params": {"input": "BV1xx", "max_pages": 1},
+            }
+        )
+        wait_for_active_thread(sidecar)
+
+        self.assertEqual(len(created_with), 1)
+        self.assertIs(created_with[0][0], api)
+        self.assertEqual(sidecar._last_comments[0]["content"], "依赖注入测试")
+        self.assertTrue(
+            any(
+                item.get("kind") == "event"
+                and item.get("event") == "finished"
+                and item.get("mode") == "comments"
+                for item in sidecar.messages
+            )
+        )
+
     def test_wbi_sign_adds_required_comment_params(self) -> None:
         signed = BilibiliAPI._sign_wbi_params({"oid": 80433022, "type": 1, "mode": 3}, "a" * 32)
 

@@ -46,8 +46,33 @@ logging.basicConfig(
 logger = logging.getLogger("sidecar")
 
 
+class SidecarServices:
+    """Replaceable application services used by the protocol adapter."""
+
+    def __init__(
+        self,
+        api: Any = None,
+        comment_crawler_factory: Callable[[Callable[[str], None]], Any] | None = None,
+        dynamic_crawler_factory: Callable[[Callable[[str], None]], Any] | None = None,
+        data_processor: Any = DataProcessor,
+        analysis_processor: Any = LLMAnalysisProcessor,
+        exporter: Any = CSVExporter,
+    ) -> None:
+        self.api = api if api is not None else BilibiliAPI()
+        self.comment_crawler_factory = comment_crawler_factory or (
+            lambda progress: CommentCrawler(progress_callback=progress, api=self.api)
+        )
+        self.dynamic_crawler_factory = dynamic_crawler_factory or (
+            lambda progress: DynamicCrawler(progress_callback=progress, api=self.api)
+        )
+        self.data_processor = data_processor
+        self.analysis_processor = analysis_processor
+        self.exporter = exporter
+
+
 class Sidecar:
-    def __init__(self) -> None:
+    def __init__(self, services: SidecarServices | None = None) -> None:
+        self._services = services or SidecarServices()
         self._write_lock = threading.Lock()
         self._task_lock = threading.Lock()
         self._qr_cancel = threading.Event()
@@ -55,7 +80,7 @@ class Sidecar:
         self._active_crawler: CommentCrawler | DynamicCrawler | None = None
         self._active_thread: threading.Thread | None = None
         self._qr_thread: threading.Thread | None = None
-        self._api = BilibiliAPI()
+        self._api = self._services.api
         self._logged_in = False
         self._last_comments: list[dict[str, Any]] = []
         self._last_dynamics: list[dict[str, Any]] = []
@@ -165,8 +190,9 @@ class Sidecar:
         try:
             max_pages = int(params.get("max_pages", 100))
             target_input = str(params.get("input") or "")
-            crawler = CommentCrawler(progress_callback=self._make_progress_callback("comments", max_pages))
-            crawler.api = self._api
+            crawler = self._services.comment_crawler_factory(
+                self._make_progress_callback("comments", max_pages)
+            )
             self._active_crawler = crawler
             comments = crawler.crawl_comments(
                 target_input,
@@ -174,8 +200,8 @@ class Sidecar:
                 max_pages=max_pages,
                 mode=int(params.get("sort_mode", 3)),
             )
-            cleaned = DataProcessor.clean_comments(comments)
-            stats = DataProcessor.get_statistics(cleaned)
+            cleaned = self._services.data_processor.clean_comments(comments)
+            stats = self._services.data_processor.get_statistics(cleaned)
             self._last_comments = cleaned
             self._last_comment_context = self._comment_context(target_input)
             self.emit("stats", mode="comments", stats=stats)
@@ -190,8 +216,9 @@ class Sidecar:
     def _run_dynamics(self, params: dict[str, Any]) -> None:
         try:
             max_pages = int(params.get("max_pages", 20))
-            crawler = DynamicCrawler(progress_callback=self._make_progress_callback("dynamics", max_pages))
-            crawler.api = self._api
+            crawler = self._services.dynamic_crawler_factory(
+                self._make_progress_callback("dynamics", max_pages)
+            )
             self._active_crawler = crawler
             uid = params.get("uid")
             if uid is None:
@@ -228,7 +255,7 @@ class Sidecar:
             def progress(message: str, percent: int) -> None:
                 self.emit("analysis.progress", message=message, percent=percent)
 
-            result = LLMAnalysisProcessor.analyze(
+            result = self._services.analysis_processor.analyze(
                 self._last_comments,
                 self._last_dynamics,
                 params,
@@ -487,9 +514,9 @@ class Sidecar:
         if not path:
             raise ValueError("缺少导出路径")
         if kind == "comments":
-            ok = CSVExporter.export(self._last_comments, path)
+            ok = self._services.exporter.export(self._last_comments, path)
         elif kind == "dynamics":
-            ok = CSVExporter.export_dynamics(self._last_dynamics, path)
+            ok = self._services.exporter.export_dynamics(self._last_dynamics, path)
         else:
             raise ValueError("未知导出类型")
         if not ok:
@@ -518,7 +545,7 @@ class Sidecar:
                         (asset_dir / asset["filename"]).write_text(asset["svg"], encoding="utf-8")
                     elif asset.get("data"):
                         (asset_dir / asset["filename"]).write_bytes(asset["data"])
-            report = LLMAnalysisProcessor._build_markdown_report(
+            report = self._services.analysis_processor._build_markdown_report(
                 self._last_analysis,
                 chart_assets=chart_assets,
                 asset_dir_name=asset_dir_name if chart_assets else "",
