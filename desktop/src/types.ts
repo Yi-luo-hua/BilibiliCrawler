@@ -2,6 +2,18 @@ export type Mode = "comments" | "dynamics" | "analysis" | "settings";
 export type ThemeMode = "light" | "dark";
 export type AnalysisSource = "comments" | "dynamics" | "all";
 export type AnalysisStrategy = "sample" | "full";
+export type TaskMode = Exclude<Mode, "settings">;
+export type SidecarMethod =
+  | "session.status"
+  | "comments.start"
+  | "dynamics.start"
+  | "task.stop"
+  | "qr.login.start"
+  | "qr.login.cancel"
+  | "export.csv"
+  | "analysis.start"
+  | "analysis.latest"
+  | "analysis.export";
 export type AnalysisChartKey =
   | "sentiment_distribution"
   | "topic_ranking"
@@ -99,21 +111,45 @@ export interface AnalysisResult {
   };
 }
 
-export interface SidecarEvent {
-  kind: "event" | "response";
-  event?: string;
-  ok?: boolean;
-  id?: string;
+export interface SidecarRequest {
+  id: string;
+  method: SidecarMethod;
+  params: Record<string, unknown>;
+}
+
+export interface SidecarResponse {
+  kind: "response";
+  id: string;
+  ok: boolean;
+  error?: string;
+  logged_in?: boolean;
+  task_running?: boolean;
+  path?: string;
+  result?: AnalysisResult;
+}
+
+export interface SidecarBroadcastEvent {
+  kind: "event";
+  event:
+    | "ready"
+    | "log"
+    | "progress"
+    | "analysis.progress"
+    | "analysis.result"
+    | "stats"
+    | "finished"
+    | "error"
+    | "qr"
+    | "login.success";
   message?: string;
-  mode?: Mode;
-  status?: string;
+  mode?: TaskMode;
+  status?: "running" | "stopping" | "idle";
   percent?: number;
   image?: string;
   count?: number;
   stats?: Stats;
   result?: AnalysisResult;
-  error?: string;
-  logged_in?: boolean;
-  task_running?: boolean;
   cookies?: Record<string, string>;
 }
+
+export type SidecarMessage = SidecarResponse | SidecarBroadcastEvent;

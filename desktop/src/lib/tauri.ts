@@ -1,60 +1,84 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { DEFAULT_ANALYSIS_CHART_KEYS, normalizeAnalysisChartKeys } from "./analysisCharts";
-import type { SidecarEvent, UIConfig } from "../types";
+import {
+  DEFAULT_ANALYSIS_CHART_KEYS,
+  normalizeAnalysisChartKeys,
+} from "./analysisCharts";
+import { SidecarClient } from "./sidecarClient";
+import type {
+  SidecarBroadcastEvent,
+  SidecarMessage,
+  SidecarMethod,
+  UIConfig,
+} from "../types";
 
 export const isTauri = () => "__TAURI_INTERNALS__" in window;
 
-export async function sendSidecar(method: string, params: Record<string, unknown> = {}) {
-  const request = {
-    id: crypto.randomUUID(),
-    method,
-    params
-  };
+const sidecarClient = new SidecarClient(async (request) => {
   if (!isTauri()) {
-    throw new Error("浏览器预览无法运行 Python sidecar，请使用 Tauri 桌面窗口启动任务。");
+    throw new Error(
+      "浏览器预览无法运行 Python sidecar，请使用 Tauri 桌面窗口启动任务。",
+    );
   }
   await invoke("send_sidecar_request", { request });
-  return request.id;
+});
+
+export async function sendSidecar(
+  method: SidecarMethod,
+  params: Record<string, unknown> = {},
+) {
+  return sidecarClient.request(method, params);
 }
 
-export async function sendSidecarWithTimeout(method: string, params: Record<string, unknown> = {}, timeoutMs = 10000) {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`sidecar request timed out after ${timeoutMs}ms`)), timeoutMs);
-  });
-  try {
-    return await Promise.race([sendSidecar(method, params), timeout]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+export async function sendSidecarWithTimeout(
+  method: SidecarMethod,
+  params: Record<string, unknown> = {},
+  timeoutMs = 10_000,
+) {
+  return sidecarClient.request(method, params, timeoutMs);
 }
 
-export async function onSidecarEvent(callback: (event: SidecarEvent) => void) {
+export async function onSidecarEvent(
+  callback: (event: SidecarBroadcastEvent) => void,
+) {
   if (!isTauri()) return () => undefined;
-  return listen<SidecarEvent>("sidecar-event", (event) => callback(event.payload));
+  const unlisten = await listen<SidecarMessage>("sidecar-event", (event) => {
+    sidecarClient.accept(event.payload);
+    if (event.payload.kind === "event") callback(event.payload);
+  });
+  return () => {
+    sidecarClient.dispose();
+    unlisten();
+  };
 }
 
 export async function chooseBackground(): Promise<string | null> {
   if (!isTauri()) return null;
   const selected = await open({
     multiple: false,
-    filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }]
+    filters: [
+      { name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] },
+    ],
   });
   if (typeof selected !== "string") return null;
   return selected;
 }
 
-export async function chooseCsvPath(defaultName: string): Promise<string | null> {
+export async function chooseCsvPath(
+  defaultName: string,
+): Promise<string | null> {
   return chooseSavePath(defaultName, [{ name: "CSV", extensions: ["csv"] }]);
 }
 
-export async function chooseSavePath(defaultName: string, filters: Array<{ name: string; extensions: string[] }>): Promise<string | null> {
+export async function chooseSavePath(
+  defaultName: string,
+  filters: Array<{ name: string; extensions: string[] }>,
+): Promise<string | null> {
   if (!isTauri()) return null;
   const selected = await save({
     defaultPath: defaultName,
-    filters
+    filters,
   });
   return selected || null;
 }
@@ -75,17 +99,30 @@ export async function readConfig(): Promise<UIConfig> {
     analysis_strategy: "sample",
     analysis_sample_size: 300,
     analysis_batch_size: 80,
-    analysis_chart_keys: [...DEFAULT_ANALYSIS_CHART_KEYS]
+    analysis_chart_keys: [...DEFAULT_ANALYSIS_CHART_KEYS],
   };
   if (isTauri()) {
-    const loaded = { ...defaults, ...(await invoke<UIConfig>("read_ui_config")) };
-    return { ...loaded, analysis_chart_keys: normalizeAnalysisChartKeys(loaded.analysis_chart_keys) };
+    const loaded = {
+      ...defaults,
+      ...(await invoke<UIConfig>("read_ui_config")),
+    };
+    return {
+      ...loaded,
+      analysis_chart_keys: normalizeAnalysisChartKeys(
+        loaded.analysis_chart_keys,
+      ),
+    };
   }
   const raw = localStorage.getItem(fallbackConfigKey);
   if (!raw) return defaults;
   try {
     const loaded = { ...defaults, ...JSON.parse(raw) };
-    return { ...loaded, analysis_chart_keys: normalizeAnalysisChartKeys(loaded.analysis_chart_keys) };
+    return {
+      ...loaded,
+      analysis_chart_keys: normalizeAnalysisChartKeys(
+        loaded.analysis_chart_keys,
+      ),
+    };
   } catch {
     return defaults;
   }
