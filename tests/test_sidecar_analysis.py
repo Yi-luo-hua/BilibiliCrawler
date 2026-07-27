@@ -320,7 +320,8 @@ class SidecarAnalysisTests(unittest.TestCase):
             LLMAnalysisProcessor.analyze = original_analyze
 
         events = [item for item in sidecar.messages if item.get("kind") == "event"]
-        self.assertTrue(any(item.get("event") == "error" and item.get("message") == "分析已被取消" for item in events))
+        self.assertTrue(any(item.get("event") == "cancelled" and item.get("message") == "分析已被取消" for item in events))
+        self.assertFalse(any(item.get("event") == "error" for item in events))
         self.assertTrue(any(item.get("event") == "log" and item.get("message") == "分析任务已取消" for item in events))
 
     def test_run_analysis_cancel_after_result_does_not_emit_finished(self) -> None:
@@ -358,7 +359,8 @@ class SidecarAnalysisTests(unittest.TestCase):
 
         events = [item for item in sidecar.messages if item.get("kind") == "event"]
         self.assertFalse(any(item.get("event") == "finished" for item in events), events)
-        self.assertTrue(any(item.get("event") == "error" and item.get("message") == "分析已被取消" for item in events))
+        self.assertTrue(any(item.get("event") == "cancelled" and item.get("message") == "分析已被取消" for item in events))
+        self.assertFalse(any(item.get("event") == "error" for item in events))
         self.assertIsNone(sidecar._last_analysis)
 
     def test_run_analysis_generic_error_containing_cancel_text_is_not_cancelled(self) -> None:

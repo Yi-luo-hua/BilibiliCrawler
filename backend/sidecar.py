@@ -276,7 +276,7 @@ class Sidecar:
             )
         except AnalysisCancelled as exc:
             msg = str(exc)
-            self.emit("error", mode="analysis", message=msg)
+            self.emit("cancelled", mode="analysis", message=msg)
             self.emit("log", message="分析任务已取消")
         except AnalysisError as exc:
             self.emit("error", mode="analysis", message=str(exc))
