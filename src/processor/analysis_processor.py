@@ -168,13 +168,34 @@ class LLMAnalysisProcessor:
             if progress:
                 percent = 10 + int(index / max(1, len(batches)) * 70)
                 progress(f"正在调用 LLM 分析第 {index}/{len(batches)} 批", percent)
-            batch_results.append(cls._call_llm(base_url, api_key, model, batch, source, strategy, chart_keys))
+            batch_results.append(
+                cls._call_llm(
+                    base_url,
+                    api_key,
+                    model,
+                    batch,
+                    source,
+                    strategy,
+                    chart_keys,
+                    cancel_event=cancel_event,
+                )
+            )
 
         cls._raise_if_cancelled(cancel_event)
         merged = cls._merge_llm_results(batch_results, selected, len(records), len(comments), len(dynamics), strategy, chart_keys)
         if progress and len(batch_results) > 1:
             progress("正在整合分批总结", 84)
-        cls._integrate_summary(base_url, api_key, model, batch_results, merged, strategy, len(records), len(selected))
+        cls._integrate_summary(
+            base_url,
+            api_key,
+            model,
+            batch_results,
+            merged,
+            strategy,
+            len(records),
+            len(selected),
+            cancel_event=cancel_event,
+        )
         cls._raise_if_cancelled(cancel_event)
         if progress:
             progress("正在汇总分析结果", 86)
@@ -205,7 +226,10 @@ class LLMAnalysisProcessor:
             if progress:
                 progress("正在生成词云图", 88)
             cls._raise_if_cancelled(cancel_event)
-            result["word_cloud_image"] = cls._build_word_cloud_image(result.get("word_counts", []))
+            result["word_cloud_image"] = cls._build_word_cloud_image(
+                result.get("word_counts", []),
+                cancel_event=cancel_event,
+            )
             cls._raise_if_cancelled(cancel_event)
             if progress:
                 progress("词云图已生成", 92)
@@ -227,6 +251,7 @@ class LLMAnalysisProcessor:
         source: str,
         strategy: str,
         chart_keys: list[str],
+        cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
         endpoint = base_url.rstrip("/") + "/chat/completions"
         messages = [
@@ -249,19 +274,14 @@ class LLMAnalysisProcessor:
             "response_format": {"type": "json_object"},
         }
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        session = requests.Session()
-        session.trust_env = False
-        try:
-            response = session.post(endpoint, headers=headers, json=payload, timeout=90)
-            if response.status_code in {400, 404, 422}:
-                payload.pop("response_format", None)
-                response = session.post(endpoint, headers=headers, json=payload, timeout=90)
-            response.raise_for_status()
-            data = response.json()
-        except requests.RequestException as exc:
-            raise AnalysisError(f"LLM 请求失败: {exc}") from exc
-        except ValueError as exc:
-            raise AnalysisError("LLM 返回不是有效 JSON 响应") from exc
+        data = cls._post_chat_completion(
+            endpoint,
+            headers,
+            payload,
+            cancel_event,
+            request_error="LLM 请求失败",
+            invalid_json_error="LLM 返回不是有效 JSON 响应",
+        )
 
         try:
             content = data["choices"][0]["message"]["content"]
@@ -280,6 +300,7 @@ class LLMAnalysisProcessor:
         strategy: str,
         total_records: int,
         analyzed: int,
+        cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
         endpoint = base_url.rstrip("/") + "/chat/completions"
         prompt_payload = {
@@ -317,19 +338,14 @@ class LLMAnalysisProcessor:
             "response_format": {"type": "json_object"},
         }
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        session = requests.Session()
-        session.trust_env = False
-        try:
-            response = session.post(endpoint, headers=headers, json=payload, timeout=90)
-            if response.status_code in {400, 404, 422}:
-                payload.pop("response_format", None)
-                response = session.post(endpoint, headers=headers, json=payload, timeout=90)
-            response.raise_for_status()
-            data = response.json()
-        except requests.RequestException as exc:
-            raise AnalysisError(f"LLM 总结整合失败: {exc}") from exc
-        except ValueError as exc:
-            raise AnalysisError("LLM 总结整合返回不是有效 JSON 响应") from exc
+        data = cls._post_chat_completion(
+            endpoint,
+            headers,
+            payload,
+            cancel_event,
+            request_error="LLM 总结整合失败",
+            invalid_json_error="LLM 总结整合返回不是有效 JSON 响应",
+        )
 
         try:
             content = data["choices"][0]["message"]["content"]
@@ -343,6 +359,72 @@ class LLMAnalysisProcessor:
         if not summary:
             raise AnalysisError("LLM 总结整合缺少 summary")
         return {"summary": summary, "summary_points": points}
+
+    @classmethod
+    def _post_chat_completion(
+        cls,
+        endpoint: str,
+        headers: dict[str, str],
+        payload: dict[str, Any],
+        cancel_event: threading.Event | None,
+        *,
+        request_error: str,
+        invalid_json_error: str,
+    ) -> dict[str, Any]:
+        session = requests.Session()
+        session.trust_env = False
+        completed = threading.Event()
+        result: dict[str, Any] = {}
+
+        def send_request() -> None:
+            try:
+                response = session.post(
+                    endpoint,
+                    headers=headers,
+                    json=payload,
+                    timeout=90,
+                )
+                if response.status_code in {400, 404, 422}:
+                    if cancel_event and cancel_event.is_set():
+                        raise AnalysisCancelled("分析已被取消")
+                    payload.pop("response_format", None)
+                    response = session.post(
+                        endpoint,
+                        headers=headers,
+                        json=payload,
+                        timeout=90,
+                    )
+                response.raise_for_status()
+                result["data"] = response.json()
+            except Exception as exc:
+                result["error"] = exc
+            finally:
+                session.close()
+                completed.set()
+
+        request_thread = threading.Thread(target=send_request, daemon=True)
+        request_thread.start()
+
+        while not completed.wait(timeout=0.1):
+            if cancel_event and cancel_event.is_set():
+                session.close()
+                raise AnalysisCancelled("分析已被取消")
+
+        cls._raise_if_cancelled(cancel_event)
+        error = result.get("error")
+        if isinstance(error, AnalysisCancelled):
+            raise error
+        if isinstance(error, requests.RequestException):
+            raise AnalysisError(f"{request_error}: {error}") from error
+        if isinstance(error, ValueError):
+            raise AnalysisError(invalid_json_error) from error
+        if isinstance(error, BaseException):
+            raise error
+
+        data = result.get("data")
+        if not isinstance(data, dict):
+            raise AnalysisError(invalid_json_error)
+        return data
 
     @classmethod
     def _build_prompt(cls, records: list[dict[str, Any]], source: str, strategy: str, chart_keys: list[str]) -> str:
@@ -455,13 +537,26 @@ class LLMAnalysisProcessor:
         strategy: str,
         total_records: int,
         analyzed: int,
+        cancel_event: threading.Event | None = None,
     ) -> None:
         fallback_points = cls._fallback_summary_points(batch_results, merged)
         if len(batch_results) <= 1:
             merged["summary_points"] = fallback_points
             return
         try:
-            integrated = cls._call_summary_llm(base_url, api_key, model, batch_results, merged, strategy, total_records, analyzed)
+            integrated = cls._call_summary_llm(
+                base_url,
+                api_key,
+                model,
+                batch_results,
+                merged,
+                strategy,
+                total_records,
+                analyzed,
+                cancel_event=cancel_event,
+            )
+        except AnalysisCancelled:
+            raise
         except Exception:
             merged["summary_points"] = fallback_points
             if fallback_points:
@@ -982,7 +1077,11 @@ class LLMAnalysisProcessor:
         return ""
 
     @classmethod
-    def _build_word_cloud_image(cls, word_counts: Any) -> str:
+    def _build_word_cloud_image(
+        cls,
+        word_counts: Any,
+        cancel_event: threading.Event | None = None,
+    ) -> str:
         import sys
         import threading
 
@@ -1044,7 +1143,10 @@ class LLMAnalysisProcessor:
 
         thread = threading.Thread(target=_generate, daemon=True)
         thread.start()
-        thread.join(timeout=30)
+        deadline = time.monotonic() + 30
+        while thread.is_alive() and time.monotonic() < deadline:
+            thread.join(timeout=0.1)
+            cls._raise_if_cancelled(cancel_event)
         if thread.is_alive():
             print("[analysis] word_cloud: TIMEOUT after 30s — wordcloud generation hung", file=sys.stderr)
             return ""
