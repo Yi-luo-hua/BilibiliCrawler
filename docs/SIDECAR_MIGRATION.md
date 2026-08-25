@@ -97,7 +97,7 @@
 | 6 | **完整结果不可得** | `TaskSnapshot` 只有 `summary` + `artifacts`；`RunStore.save_analysis` 会 `pop("report_markdown")` 并把词云 base64 换成磁盘路径 | 需要**原始 result** 才能恢复 `_last_analysis`、词云展示和报告导出 | 结构性缺口 |
 | 7 | **分析进度被压缩** | `task.emit(70 + percent * 0.25, …)`，原始百分比已丢失 | `analysis.progress` 需要 0–100 原值 | 结构性缺口 |
 | 8 | **空结果语义** | 空 → `ServiceError(CRAWL_FAILED)` | 旧行为是 `finished(count=0)`，不报错 | 静默行为变更 |
-| 9 | **停止语义** | 停止 → `cancelled` | 旧行为可能带部分数据走 `finished` | 静默行为变更 |
+| 9 | **评论爬取的停止语义** | 停止 → `cancelled` | 旧行为是带部分数据走 `finished`（分析取消才发 `cancelled`，两条路径不同） | 静默行为变更 |
 | 10 | **依赖注入点** | 默认自建 `BilibiliAPI()` | 必须复用 `SidecarServices` 注入的 api / crawler factory / data_processor / analysis_processor | 丢登录态、破坏现有测试替换点 |
 | 11 | 结果呈现 | — | base64 词云、截断、asset 目录命名留在 sidecar | 保持现状即可 |
 
@@ -124,7 +124,8 @@ characterization 测试把当前行为钉住，迁移后保持一致；如果之
 不能任意撤销中间某个 commit。
 
 1. **先补 characterization / golden 测试**（改动前的行为基线）
-   覆盖：评论成功、空结果、异常、停止后保留部分数据、登录态 API 复用、
+   覆盖：评论成功、空结果、异常、评论爬取停止（保留部分数据并发 `finished`）、
+   分析取消（发 `cancelled` 且不发 `finished`）、登录态 API 复用、
    `comments` / `dynamics` / `all` 三种来源的分析，以及完整事件顺序。
 
 2. **分离静态策略与单次请求参数**
@@ -160,8 +161,8 @@ characterization 测试把当前行为钉住，迁移后保持一致；如果之
 | stdout ASCII-safe | `test_protocol_output_is_ascii_safe…` | 已有 |
 | 词云 asset 目录命名 | `test_word_cloud_asset_dir_uses_source_label_timestamp_and_bvid` | 已有 |
 | **空结果：`stats` + `finished(count=0)` 完整 payload，不发 `error`，收尾 `progress(status="idle", percent=100)`** | 无 | 必补（characterization） |
-| **停止：终态事件与完整 payload，且收尾 `idle` 帧仍发出** | 无 | 必补（characterization） |
-| **停止路径不得出现陈旧 `finished`**（停止后不再有任何 `finished` 帧） | 无 | 必补 |
+| **评论爬取停止：`stats` → `finished(count, stats)` → `progress(idle, 100)`** | 无 | 必补（characterization。`_run_comments` 无取消检查，爬虫返回部分数据后照常走完；此处的 `finished` **合法**，不是陈旧帧） |
+| **分析取消：`cancelled` → `log` → `progress(idle, 100)`，且此后不得出现 `finished` 或 `error`** | `test_run_analysis_cancel_after_result_does_not_emit_finished`（部分） | 必补完整帧序列 |
 | **桌面端页数不被夹到 50** | 无 | 必补 |
 | **桌面端 chart_keys 含词云** | 无 | 必补 |
 | **凭据来自 params 而非环境** | 无 | 必补 |
