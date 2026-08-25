@@ -92,9 +92,15 @@ COMMENT_B = {
 class StubCrawler:
     """Same signature as CommentCrawler.crawl_comments, and it records the call.
 
-    stop() deliberately does *not* release the gate: the caller releases it, so
-    that the frames emitted by the task.stop handler are ordered against the
-    worker thread by the test rather than by the scheduler.
+    Two details are deliberately no kinder than the real crawler:
+
+    - stop() does not release the gate. The caller releases it, so the frames
+      emitted by the task.stop handler are ordered against the worker thread by
+      the test rather than by the scheduler.
+    - a stopped crawl returns only the page it had already fetched, the way
+      CommentCrawler returns what it accumulated once _stop_flag is set. A stub
+      that handed back the full list would make "finished carries the partial
+      data" an assertion about nothing.
     """
 
     def __init__(self, progress, comments=None, error=None, gate=None):
@@ -105,6 +111,7 @@ class StubCrawler:
         self.entered = threading.Event()
         self.stopped = False
         self.calls: list[dict] = []
+        self.fetched: list[dict] = []
 
     def stop(self):
         self.stopped = True
@@ -116,12 +123,15 @@ class StubCrawler:
             "max_pages": max_pages,
             "mode": mode,
         })
+        self.fetched = list(self.comments[:1])  # first page, before anyone can stop us
         self.entered.set()
         if self.gate is not None:
             self.gate.wait(timeout=5)
         if self.error is not None:
             raise self.error
-        return list(self.comments)
+        if not self.stopped:
+            self.fetched = list(self.comments)
+        return list(self.fetched)
 
 
 class StubAnalysisProcessor:
@@ -160,7 +170,15 @@ def make(comments=None, error=None, gate=None, processor=None):
     holder: dict = {}
 
     def factory(progress):
-        holder["crawler"] = StubCrawler(progress, comments=comments, error=error, gate=gate)
+        # DataProcessor.clean_comments fills defaults in place, so the crawler
+        # hands over copies: the fixtures above stay as written no matter which
+        # tests ran first.
+        holder["crawler"] = StubCrawler(
+            progress,
+            comments=[dict(comment) for comment in comments or []],
+            error=error,
+            gate=gate,
+        )
         return holder["crawler"]
 
     services = SidecarServices(
@@ -191,11 +209,33 @@ class CommentCrawlBaseline(unittest.TestCase):
 
         finished = sidecar.event("finished", "comments")
         self.assertEqual(finished["count"], 2)
+        # Today both frames carry the same dict; the assertion is here for the
+        # migration, where the two could be recomputed independently.
         self.assertEqual(finished["stats"], sidecar.event("stats", "comments")["stats"])
 
         idle = sidecar.event("progress", "comments")
         self.assertEqual(idle["status"], "idle")
         self.assertEqual(idle["percent"], 100)
+
+    def test_start_acknowledges_the_request_before_announcing_the_task(self) -> None:
+        # The frames _start_task emits before the worker runs are part of the
+        # contract too: the response lands first, then running(percent=0), then
+        # the startup log. taskState.ts drives the button state off that order.
+        sidecar, _ = make(comments=[COMMENT_A])
+        sidecar.handle({"id": "req-1", "method": "comments.start",
+                        "params": {"input": "BV1xx411c7mD", "max_pages": 1}})
+        drain(sidecar)
+
+        self.assertEqual(sidecar.frames[0], {"kind": "response", "id": "req-1", "ok": True})
+        self.assertEqual(
+            [frame["event"] for frame in sidecar.frames[1:]],
+            ["progress", "log", "stats", "finished", "progress"],
+        )
+        running = sidecar.frames[1]
+        self.assertEqual(running["status"], "running")
+        self.assertEqual(running["mode"], "comments")
+        self.assertEqual(running["percent"], 0)
+        self.assertEqual(sidecar.frames[2]["message"], "评论任务已启动")
 
     def test_stats_payload_carries_every_data_processor_field(self) -> None:
         # A migration that recomputes stats differently must not drop fields the
@@ -215,8 +255,12 @@ class CommentCrawlBaseline(unittest.TestCase):
         self.assertEqual(stats["total"], 2)
         self.assertEqual(stats["main_comments"], 1)
         self.assertEqual(stats["replies"], 1)
+        self.assertEqual(stats["total_likes"], 3)
+        self.assertEqual(stats["avg_likes"], 1.5)
+        self.assertEqual(stats["total_replies"], 1)  # counted over main comments only
         self.assertEqual(stats["ip_locations"], 1)
         self.assertEqual(stats["missing_ip_locations"], 1)
+        self.assertEqual(stats["ip_location_coverage"], 0.5)
 
     def test_empty_result_is_a_success_not_an_error(self) -> None:
         # AgentService raises CRAWL_FAILED here. The desktop path does not.
@@ -231,7 +275,12 @@ class CommentCrawlBaseline(unittest.TestCase):
 
     def test_failure_emits_error_without_finished_but_still_goes_idle(self) -> None:
         sidecar, _ = make(error=RuntimeError("接口返回 412"))
-        sidecar._run_comments({"input": "BV1xx411c7mD", "max_pages": 1})
+        # The traceback goes to the sidecar logger, i.e. to stderr, never into
+        # the protocol stream on stdout. Capturing it pins that and keeps the
+        # test output clean.
+        with self.assertLogs("sidecar", level="ERROR") as captured:
+            sidecar._run_comments({"input": "BV1xx411c7mD", "max_pages": 1})
+        self.assertIn("comments task failed", "\n".join(captured.output))
 
         self.assertFalse(sidecar.has("finished", "comments"))
         error = sidecar.event("error", "comments")
@@ -285,7 +334,9 @@ class CommentStopBaseline(unittest.TestCase):
         # finished frame is legitimate, not a stale one -- see conflict 9 in
         # docs/SIDECAR_MIGRATION.md.
         gate = threading.Event()
-        sidecar, holder = make(comments=[COMMENT_A], gate=gate)
+        # Two comments are on offer but the crawler is stopped after the first
+        # page, so finished carries one of them: partial, and still finished.
+        sidecar, holder = make(comments=[COMMENT_A, COMMENT_B], gate=gate)
 
         sidecar.handle({"id": "req-1", "method": "comments.start",
                         "params": {"input": "BV1xx411c7mD", "max_pages": 5}})
@@ -296,12 +347,15 @@ class CommentStopBaseline(unittest.TestCase):
         # test ordered them, not because it won a race against the worker.
         sidecar.handle({"id": "req-2", "method": "task.stop", "params": {}})
         self.assertTrue(holder["crawler"].stopped)
+        # Stopping a crawl must not arm the analysis cancel flag (v3.1.1).
+        self.assertFalse(sidecar._analysis_cancel.is_set())
         gate.set()
         drain(sidecar)
 
         self.assertTrue(sidecar.has("finished", "comments"),
                         "stopping a comment crawl still emits finished today")
         self.assertEqual(sidecar.event("finished", "comments")["count"], 1)
+        self.assertEqual([row["comment_id"] for row in sidecar._last_comments], [1])
 
         statuses = [frame["status"] for frame in sidecar.frames
                     if frame.get("event") == "progress" and frame.get("mode") == "comments"]
