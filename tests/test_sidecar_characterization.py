@@ -10,7 +10,8 @@ before the migration rather than after:
 - an empty crawl result is a success here (finished(count=0)), not a failure;
 - stopping a comment crawl still emits finished with whatever was fetched,
   because _run_comments performs no cancellation check at all;
-- cancelling analysis emits cancelled and never finished.
+- cancelling analysis emits cancelled and never finished;
+- the crawl request's own max_pages is forwarded, with no ceiling of 50.
 
 If a change makes one of these fail, that is a behaviour change and belongs in
 its own PR with its own justification -- not in the migration.
@@ -89,6 +90,13 @@ COMMENT_B = {
 
 
 class StubCrawler:
+    """Same signature as CommentCrawler.crawl_comments, and it records the call.
+
+    stop() deliberately does *not* release the gate: the caller releases it, so
+    that the frames emitted by the task.stop handler are ordered against the
+    worker thread by the test rather than by the scheduler.
+    """
+
     def __init__(self, progress, comments=None, error=None, gate=None):
         self.progress = progress
         self.comments = [] if comments is None else comments
@@ -96,13 +104,18 @@ class StubCrawler:
         self.gate = gate
         self.entered = threading.Event()
         self.stopped = False
+        self.calls: list[dict] = []
 
     def stop(self):
         self.stopped = True
-        if self.gate is not None:
-            self.gate.set()
 
     def crawl_comments(self, url_or_id, include_replies=True, max_pages=100, mode=3):
+        self.calls.append({
+            "url_or_id": url_or_id,
+            "include_replies": include_replies,
+            "max_pages": max_pages,
+            "mode": mode,
+        })
         self.entered.set()
         if self.gate is not None:
             self.gate.wait(timeout=5)
@@ -126,11 +139,20 @@ class StubAnalysisProcessor:
         return dict(self.result or {})
 
 
+# analyzed_records is deliberately different from the number of comments held in
+# _last_comments, so an assertion on finished.count pins where that number comes
+# from. overview carries the keys the desktop stat tiles read for analysis mode.
 ANALYSIS_RESULT = {
     "summary": "总体偏正面",
-    "overview": {"total": 2},
+    "overview": {
+        "total_records": 9,
+        "analyzed_records": 7,
+        "risk_count": 1,
+        "ip_locations": 5,
+        "missing_ip_locations": 4,
+    },
     "report_markdown": "# 报告",
-    "meta": {"analyzed_records": 2, "total_records": 2},
+    "meta": {"analyzed_records": 7, "total_records": 9},
 }
 
 
@@ -224,6 +246,37 @@ class CommentCrawlBaseline(unittest.TestCase):
         self.assertEqual(sidecar._last_comment_context.get("label"), "视频评论")
         self.assertEqual(sidecar._last_comment_context.get("bvid"), "BV1xx411c7mD")
 
+    def test_request_params_reach_the_crawler_verbatim(self) -> None:
+        # Conflicts 1 and 2: AgentService clamps max_pages to its own ceiling of
+        # 50 and decides the rest itself. The desktop path forwards whatever the
+        # UI sent, and renames sort_mode to the crawler's mode.
+        sidecar, holder = make(comments=[COMMENT_A])
+        sidecar._run_comments({
+            "input": "BV1xx411c7mD",
+            "max_pages": 80,
+            "include_replies": False,
+            "sort_mode": 2,
+        })
+
+        self.assertEqual(holder["crawler"].calls, [{
+            "url_or_id": "BV1xx411c7mD",
+            "include_replies": False,
+            "max_pages": 80,
+            "mode": 2,
+        }])
+
+    def test_absent_params_fall_back_to_the_desktop_defaults(self) -> None:
+        # 100 pages, not AgentService's MAX_PAGES_CEILING.
+        sidecar, holder = make(comments=[COMMENT_A])
+        sidecar._run_comments({"input": "BV1xx411c7mD"})
+
+        self.assertEqual(holder["crawler"].calls, [{
+            "url_or_id": "BV1xx411c7mD",
+            "include_replies": True,
+            "max_pages": 100,
+            "mode": 3,
+        }])
+
 
 class CommentStopBaseline(unittest.TestCase):
     def test_stopping_a_crawl_still_finishes_with_the_partial_data(self) -> None:
@@ -238,10 +291,14 @@ class CommentStopBaseline(unittest.TestCase):
                         "params": {"input": "BV1xx411c7mD", "max_pages": 5}})
         self.assertTrue(holder["crawler"].entered.wait(timeout=5))
 
+        # task.stop emits its frames on the calling thread, so the crawler is
+        # released only afterwards: "stopping" then precedes "idle" because the
+        # test ordered them, not because it won a race against the worker.
         sidecar.handle({"id": "req-2", "method": "task.stop", "params": {}})
+        self.assertTrue(holder["crawler"].stopped)
+        gate.set()
         drain(sidecar)
 
-        self.assertTrue(holder["crawler"].stopped)
         self.assertTrue(sidecar.has("finished", "comments"),
                         "stopping a comment crawl still emits finished today")
         self.assertEqual(sidecar.event("finished", "comments")["count"], 1)
@@ -259,6 +316,7 @@ class CommentStopBaseline(unittest.TestCase):
         self.assertTrue(holder["crawler"].entered.wait(timeout=5))
 
         sidecar.handle({"id": "req-2", "method": "task.stop", "params": {}})
+        gate.set()
         drain(sidecar)
 
         logs = [frame["message"] for frame in sidecar.frames if frame.get("event") == "log"]
@@ -275,13 +333,39 @@ class AnalysisBaseline(unittest.TestCase):
         sidecar._run_analysis({"source": "comments", "llm_config": {"api_key": "k"}})
 
         finished = sidecar.event("finished", "analysis")
-        self.assertEqual(finished["count"], 2)
+        # count is meta.analyzed_records, not how many comments were held: the
+        # two differ here so that a migration cannot swap one for the other.
+        self.assertEqual(len(sidecar._last_comments), 2)
+        self.assertEqual(finished["count"], 7)
         # The RPC payload is the compact display shape, not the raw result.
         self.assertEqual(finished["result"]["report_markdown"], "")
         self.assertEqual(finished["result"]["summary"], "总体偏正面")
         # ...while the raw result stays in memory for analysis.export.
         self.assertEqual(sidecar._last_analysis["report_markdown"], "# 报告")
         self.assertEqual(sidecar.event("progress", "analysis")["status"], "idle")
+
+    def test_finished_stats_carry_the_overview_fields_the_ui_reads(self) -> None:
+        # The analysis stat tiles read total_records / analyzed_records /
+        # risk_count / ip_locations / missing_ip_locations off statsByMode
+        # (desktop/src/App.tsx), fed by both finished.stats and
+        # finished.result.overview. Conflict 6 -- RunStore.save_analysis
+        # reshapes the stored result -- is exactly how these could drift.
+        expected = {
+            "total_records": 9,
+            "analyzed_records": 7,
+            "risk_count": 1,
+            "ip_locations": 5,
+            "missing_ip_locations": 4,
+        }
+        sidecar, _ = make(processor=StubAnalysisProcessor(result=ANALYSIS_RESULT))
+        sidecar._last_comments = [COMMENT_A, COMMENT_B]
+
+        sidecar._run_analysis({"source": "comments", "llm_config": {"api_key": "k"}})
+
+        finished = sidecar.event("finished", "analysis")
+        self.assertEqual(finished["stats"], expected)
+        self.assertEqual(finished["result"]["overview"], expected)
+        self.assertEqual(finished["result"]["meta"], {"analyzed_records": 7, "total_records": 9})
 
     def test_progress_percentages_are_forwarded_unscaled(self) -> None:
         # AgentService rescales analysis progress into 70-95; the desktop
