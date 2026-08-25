@@ -275,7 +275,7 @@ BilibiliCrawler/
 
 ## 更新日志
 
-### v3.2.0 (未发布)
+### v3.2.0 (2026.08.25)
 - 新增本地 MCP 服务器，agent 可越过桌面客户端直接完成「爬取 → 分析 → 导出报告」，对应 Issue #3。
 - 新增 headless 业务层 `src/service/`，运行结果按 `run_id` 落盘，MCP 进程重启后仍可继续分析。
 - 新增薄 CLI `python -m backend.agent`，同一套能力可脱离 MCP 宿主直接使用。
