@@ -9,6 +9,30 @@ from src.processor.analysis_processor import AnalysisCancelled, LLMAnalysisProce
 
 
 class AnalysisCancellationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Force the one-time font/matplotlib warm-up outside any timed window.
+
+        test_analyze_stops_promptly_while_word_cloud_is_blocked only sets its
+        event once generate_from_frequencies is reached, but the pipeline first
+        imports wordcloud, resolves a font path and constructs WordCloud(...).
+        Measured on a cold matplotlib cache that prologue costs ~2.9 s, of which
+        WordCloud(**options) alone is ~2.0 s -- enough on its own to blow the
+        2 s wait in that test. It therefore fails on the first run and passes on
+        every run afterwards, which is exactly the intermittent failure this
+        suite kept showing.
+
+        backend/sidecar.py does the same warm-up at startup, for the same reason.
+        """
+        try:
+            font_path = LLMAnalysisProcessor._word_cloud_font_path()
+            options = {"width": 8, "height": 8, "background_color": "white"}
+            if font_path:
+                options["font_path"] = font_path
+            WordCloud(**options).generate_from_frequencies({"预热": 1})
+        except Exception:  # noqa: BLE001 - warm-up is best effort, never fatal
+            pass
+
     def test_analyze_stops_promptly_while_llm_request_is_blocked(self) -> None:
         request_started = threading.Event()
         release_response = threading.Event()

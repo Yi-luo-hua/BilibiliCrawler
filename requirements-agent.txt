@@ -1,0 +1,7 @@
+# Headless agent extras: MCP server + thin CLI.
+# The desktop sidecar does NOT need these; it keeps using requirements.txt.
+-r requirements.txt
+
+# Pinned: the v2 line reworked the server API (mcp.server.MCPServer), so a
+# floating range would silently break this server on a major bump.
+mcp==2.1.0

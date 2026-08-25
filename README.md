@@ -25,6 +25,7 @@ BilibiliCrawler 是一个 B 站评论 / 动态爬取与舆论分析桌面工具�
 - 可视化图表：支持主题排行、时间趋势、等级分布、地域地图、词云图和深度分析模块。
 - 词云图：由 Python `wordcloud` 生成 PNG。
 - 自定义界面：支持浅色 / 暗色主题、本地背景图、背景透明度和模糊效果。
+- MCP 接入：agent 可越过桌面客户端，直接完成爬取与分析，详见 [docs/MCP.md](docs/MCP.md)。
 
 ## 下载使用
 
@@ -167,6 +168,24 @@ scripts\build_installer.ps1
 desktop\src-tauri\target\release\bundle\nsis\
 ```
 
+### MCP / agent 接入
+
+除桌面客户端外，还可以让 agent 通过本地 MCP 服务器直接爬取和分析，无需启动界面。
+
+```powershell
+python -m venv .venv-agent
+.venv-agent\Scripts\python.exe -m pip install -r requirements-agent.txt
+```
+
+在 MCP 宿主里把命令配成 `.venv-agent\Scripts\python.exe -m backend.agent mcp`，
+`cwd` 指向仓库根目录。也可以直接当命令行用：
+
+```powershell
+.venv-agent\Scripts\python.exe -m backend.agent crawl-comments "BV1GJ411x7h7" --max-pages 1
+```
+
+完整的工具清单、凭据配置、安全说明与故障排查见 [docs/MCP.md](docs/MCP.md)。
+
 ### 回归测试
 
 ```powershell
@@ -183,6 +202,8 @@ cargo check --manifest-path desktop\src-tauri\Cargo.toml --locked
 BilibiliCrawler/
 ├─ assets/                         应用 logo 与图标资源
 ├─ backend/
+│  ├─ agent.py                    薄 CLI，也是 MCP 服务器启动入口
+│  ├─ mcp_server.py               MCP stdio 适配层（5 个工具）
 │  └─ sidecar.py                   Python sidecar 入口，与 Tauri 进程通信
 ├─ config/
 │  └─ config.py                    全局配置
@@ -230,20 +251,49 @@ BilibiliCrawler/
 │  ├─ crawler/comment_crawler.py   评论爬虫
 │  ├─ crawler/dynamic_crawler.py   动态爬虫
 │  ├─ exporter/csv_exporter.py     CSV 导出
-│  └─ processor/
-│     ├─ analysis_processor.py     LLM 舆论分析和词云图生成
-│     └─ data_processor.py         数据清洗与统计
+│  ├─ processor/
+│  │  ├─ analysis_processor.py     LLM 舆论分析和词云图生成
+│  │  └─ data_processor.py         数据清洗与统计
+│  └─ service/                    headless 业务层，MCP 与 CLI 共用
+│     ├─ agent_service.py         编排、状态机、取消与持久化
+│     ├─ credentials.py           LLM 凭据解析（不落盘、不进日志）
+│     ├─ models.py                状态、错误码与默认值
+│     ├─ paths.py                 输出目录选择
+│     └─ run_store.py             run 目录读写与路径收敛
 ├─ tests/
 │  ├─ fixtures/
+│  ├─ test_agent_service.py         headless 服务层回归测试
 │  ├─ test_analysis_cancellation.py 分析停止与阻塞请求回归测试
 │  ├─ test_dynamic_crawler.py       动态分页、异常与停止回归测试
+│  ├─ test_mcp_server.py            MCP 工具契约与不可信内容测试
 │  └─ test_sidecar_analysis.py      sidecar 与分析回归测试
 ├─ utils/
 │  └─ helpers.py                   链接解析等工具函数
-└─ requirements.txt
+├─ requirements.txt
+└─ requirements-agent.txt          MCP / CLI 额外依赖
 ```
 
 ## 更新日志
+
+### v3.2.0 (未发布)
+- 新增本地 MCP 服务器，agent 可越过桌面客户端直接完成「爬取 → 分析 → 导出报告」，对应 Issue #3。
+- 新增 headless 业务层 `src/service/`，运行结果按 `run_id` 落盘，MCP 进程重启后仍可继续分析。
+- 新增薄 CLI `python -m backend.agent`，同一套能力可脱离 MCP 宿主直接使用。
+- MCP 工具采用有界阻塞：超过等待窗口即返回 `run_id` 供轮询，长任务不会被宿主单次调用超时打断。
+- 强化不可信内容处理：评论相关的 system prompt 明确禁止执行评论内夹带的指令，工具返回的摘要带不可信标记并限长，原文引用不进入返回值。
+- headless 默认爬取页数下调为 5、硬上限 50，且不可被工具参数突破。
+- 上游报错中回显的 API Key 会被脱敏，不会写入 manifest、日志或工具返回值。
+- run 目录下所有文件采用临时文件 + 原子替换写入，进程中途被杀不会留下截断的 manifest。
+- 停止任务在导出阶段落下时也会正确判定为已取消，不会被完成状态覆盖；停止与终态提交在同一把锁内完成，不会出现内存与 manifest 状态不一致。
+- 开始爬取前发出的停止请求现在真正生效，不会再因爬虫入口重置停止标志而空跑一轮网络请求。
+- 中途停止会保留已经爬到的评论，与 stop_task 的提示一致。
+- CSV 导出失败会在 warnings 中明确报告，不再静默按成功处理。
+- 修复停止真实爬虫时的无限递归：爬虫 stop() 会写进度日志并重新进入进度回调，现改为可重入保护，停止在真实链路上可用且不会误判为失败。
+- 修正凭据自动探测路径：按 tauri.conf.json 的 installMode=currentUser，默认安装位置是 `%LOCALAPPDATA%\BilibiliCrawler`，此前误写为其下的 Programs 子目录。
+- 取消任务时的提示按是否真的落盘了数据区分，不再无条件声称保留了部分结果。
+- 取消发生在爬虫构造期间时直接短路，不再发出 BV/动态元数据请求；此前虽不会抓取评论分页，但仍会调用一次视频信息接口。
+- 修复词云取消测试在冷启动首次运行时因字体缓存构建而偶发超时的问题。
+- 桌面端 `backend/sidecar.py` 本版未作改动。
 
 ### v3.1.1 (2026.07.27)
 - 修复自定义标题栏双击无法最大化或还原窗口的问题，并补充标题栏单击拖动、双击切换最大化的回归测试。
