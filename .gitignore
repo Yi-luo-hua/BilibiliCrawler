@@ -15,6 +15,7 @@ htmlcov/
 # ===== Virtual environments =====
 venv/
 .venv/
+.venv-agent/
 env/
 .env/
 
@@ -71,3 +72,4 @@ desktop/src-tauri/gen/
 *.tsbuildinfo
 .install-test/
 analysis-assets/
+analysis-runs/
