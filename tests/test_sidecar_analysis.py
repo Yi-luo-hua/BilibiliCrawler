@@ -427,6 +427,27 @@ class SidecarAnalysisTests(unittest.TestCase):
             finally:
                 Sidecar._analysis_asset_root = original_root
 
+    def test_analysis_asset_root_matches_the_shared_path_policy(self) -> None:
+        # The sidecar used to carry its own copy of this root decision. It now
+        # delegates to src/service/paths.py, so this pins the location the
+        # desktop app writes to and keeps the two front ends from drifting.
+        from src.service.paths import ASSETS_DIR_NAME, analysis_assets_root, user_output_root
+
+        resolved = Sidecar._analysis_asset_root()
+
+        self.assertEqual(resolved, analysis_assets_root())
+        self.assertEqual(resolved, user_output_root() / ASSETS_DIR_NAME)
+        self.assertEqual(resolved.name, "analysis-assets")
+        self.assertTrue(resolved.is_dir())
+
+    def test_analysis_asset_root_probe_leaves_no_files_behind(self) -> None:
+        root = Sidecar._analysis_asset_root()
+        before = sorted(p.name for p in root.parent.iterdir())
+        Sidecar._analysis_asset_root()
+        after = sorted(p.name for p in root.parent.iterdir())
+        self.assertEqual(before, after)
+        self.assertFalse((root.parent / ".write-test").exists())
+
     def test_chart_assets_accept_png_file_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             image_path = Path(temp_dir) / "word-cloud.png"

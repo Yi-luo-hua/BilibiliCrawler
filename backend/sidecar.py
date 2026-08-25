@@ -36,6 +36,7 @@ from src.crawler.dynamic_crawler import DynamicCrawler
 from src.exporter.csv_exporter import CSVExporter
 from src.processor.analysis_processor import AnalysisCancelled, AnalysisError, LLMAnalysisProcessor
 from src.processor.data_processor import DataProcessor
+from src.service.paths import analysis_assets_root
 from utils.helpers import ContentType, extract_uid, parse_input
 
 logging.basicConfig(
@@ -411,21 +412,10 @@ class Sidecar:
 
     @staticmethod
     def _analysis_asset_root() -> Path:
-        # Prefer the project root so users can easily find exported assets.
-        candidate = ROOT / "analysis-assets"
-        try:
-            candidate.mkdir(parents=True, exist_ok=True)
-            # Quick writability check
-            (candidate / ".write-test"). touch()
-            (candidate / ".write-test").unlink(missing_ok=True)
-            return candidate
-        except (OSError, PermissionError):
-            pass
-        # Fall back to %LOCALAPPDATA% for installed / non-writable layouts.
-        local_app_data = os.environ.get("LOCALAPPDATA")
-        if local_app_data:
-            return Path(local_app_data) / "BilibiliCrawler" / "analysis-assets"
-        return Path.home() / "AppData" / "Local" / "BilibiliCrawler" / "analysis-assets"
+        # Same root decision as the agent service: project root when writable,
+        # %LOCALAPPDATA% for installed layouts. Kept as a method because the
+        # tests substitute it.
+        return analysis_assets_root()
 
     @staticmethod
     def _safe_file_part(value: Any) -> str:
