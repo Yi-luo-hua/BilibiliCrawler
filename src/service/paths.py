@@ -31,8 +31,21 @@ def _is_writable(candidate: Path) -> bool:
         handle, name = tempfile.mkstemp(dir=str(candidate), prefix=".write-probe-")
     except (OSError, PermissionError):
         return False
-    os.close(handle)
-    Path(name).unlink(missing_ok=True)
+
+    probe = Path(name)
+    try:
+        os.close(handle)
+    except OSError:
+        # Already closed or invalid; removal below still decides the verdict.
+        pass
+    try:
+        probe.unlink(missing_ok=True)
+    except (OSError, PermissionError):
+        # A directory we cannot clean up after is not one to write into: an
+        # antivirus scanner holding the file, or a directory that denies
+        # deletes, would otherwise raise out of here instead of falling back,
+        # and leave the probe behind.
+        return False
     return True
 
 
@@ -63,19 +76,6 @@ def output_dir(name: str) -> Path:
     # Nothing was writable; hand back the last resort so the caller surfaces a
     # real error at write time rather than a confusing empty path.
     return bases[-1] / name
-
-
-def user_output_root() -> Path:
-    """Return the base directory that holds the output directories.
-
-    Prefer output_dir(): this reports the base only, so it cannot account for a
-    subdirectory whose permissions differ from its parent.
-    """
-    bases = candidate_bases()
-    for base in bases:
-        if _is_writable(base):
-            return base
-    return bases[-1]
 
 
 def agent_runs_root() -> Path:

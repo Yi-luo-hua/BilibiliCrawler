@@ -473,6 +473,84 @@ class SidecarAnalysisTests(unittest.TestCase):
             )
             self.assertNotEqual(resolved, project_assets)
 
+    def test_analysis_asset_root_falls_back_past_an_unwritable_local_app_data(self) -> None:
+        # Second fallback branch: the old sidecar returned the %LOCALAPPDATA%
+        # path without probing it, so an unwritable one produced a directory
+        # that simply failed later. Now the home candidate is tried too.
+        import src.service.paths as paths
+
+        with tempfile.TemporaryDirectory() as project, \
+                tempfile.TemporaryDirectory() as local_app_data, \
+                tempfile.TemporaryDirectory() as home:
+            denied = {
+                Path(project) / "analysis-assets",
+                Path(local_app_data) / "BilibiliCrawler" / "analysis-assets",
+            }
+            real_is_writable = paths._is_writable
+
+            def deny(candidate: Path) -> bool:
+                return False if candidate in denied else real_is_writable(candidate)
+
+            with unittest.mock.patch.object(paths, "ROOT", Path(project)), \
+                    unittest.mock.patch.object(paths, "_is_writable", deny), \
+                    unittest.mock.patch.object(paths.Path, "home", staticmethod(lambda: Path(home))), \
+                    unittest.mock.patch.dict(
+                        os.environ, {"LOCALAPPDATA": local_app_data}, clear=False):
+                resolved = Sidecar._analysis_asset_root()
+
+            self.assertEqual(
+                resolved,
+                Path(home) / "AppData" / "Local" / "BilibiliCrawler" / "analysis-assets",
+            )
+
+    def test_analysis_asset_root_without_local_app_data_uses_the_home_candidate(self) -> None:
+        import src.service.paths as paths
+
+        with tempfile.TemporaryDirectory() as project, tempfile.TemporaryDirectory() as home:
+            denied = {Path(project) / "analysis-assets"}
+            real_is_writable = paths._is_writable
+
+            def deny(candidate: Path) -> bool:
+                return False if candidate in denied else real_is_writable(candidate)
+
+            environ = {k: v for k, v in os.environ.items() if k != "LOCALAPPDATA"}
+            with unittest.mock.patch.object(paths, "ROOT", Path(project)), \
+                    unittest.mock.patch.object(paths, "_is_writable", deny), \
+                    unittest.mock.patch.object(paths.Path, "home", staticmethod(lambda: Path(home))), \
+                    unittest.mock.patch.dict(os.environ, environ, clear=True):
+                self.assertNotIn("LOCALAPPDATA", os.environ)
+                resolved = Sidecar._analysis_asset_root()
+
+            self.assertEqual(
+                resolved,
+                Path(home) / "AppData" / "Local" / "BilibiliCrawler" / "analysis-assets",
+            )
+
+    def test_a_probe_that_cannot_be_removed_marks_the_candidate_unusable(self) -> None:
+        # An antivirus scanner holding the probe, or a directory that denies
+        # deletes, must not raise out of the resolver or leave the probe
+        # behind -- it means "do not write here", so the next candidate wins.
+        import src.service.paths as paths
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir)
+            original_unlink = Path.unlink
+
+            def refuse_probe_removal(self, missing_ok=False):
+                if self.name.startswith(".write-probe-"):
+                    raise PermissionError("probe locked by another process")
+                return original_unlink(self, missing_ok=missing_ok)
+
+            with unittest.mock.patch.object(Path, "unlink", refuse_probe_removal):
+                verdict = paths._is_writable(target)
+
+            self.assertFalse(verdict, "an unremovable probe must fail the candidate")
+            # The probe itself is still there because removal genuinely failed;
+            # what matters is that no exception escaped the resolver.
+            leftovers = list(target.glob(".write-probe-*"))
+            for leftover in leftovers:
+                original_unlink(leftover, missing_ok=True)
+
     def test_analysis_asset_root_probe_leaves_no_files_behind(self) -> None:
         # The probe runs inside the target directory, so that is where a stray
         # file would land. The old implementation used a fixed ".write-test"
