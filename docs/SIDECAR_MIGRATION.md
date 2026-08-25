@@ -44,7 +44,8 @@
 
 ### 来源分叉：只迁精确的评论来源
 
-桌面端的 `getAutoAnalysisSource()` 会产生三种取值，`_normalize_source` 还会把
+桌面端的 `getAutoAnalysisSource()` 会产生三种非空取值，另外在既无评论也无动态时返回
+`null`（此时前端直接提示并中止，不会发起 `analysis.start`）。`_normalize_source` 还会把
 `auto` 归一化。只有精确匹配才迁移：
 
 | `source` | 走哪条路径 |
@@ -91,7 +92,7 @@
 | 1 | 页数上限 | `MAX_PAGES_CEILING = 50` 强制夹取 | 默认 100，用户可调，无 agent 上限 | 静默回归 |
 | 2 | 图表模块 | 强制 `AGENT_CHART_KEYS`，排除词云 | 用 UI 勾选的 `chart_keys`，含词云 | 静默回归 |
 | 3 | LLM 凭据 | 内部 `resolve_llm_credentials()` | 用请求里 `params.llm_config` 的 key | 功能失效 |
-| 4 | 取消路由 | 每个 `_Task` 各有独立 `cancel_event`，但取消要按 `task_id` 调 `AgentService.stop(task_id)` | Sidecar 需保存当前 `task_id` 并精确转发；停爬虫**不**得置分析取消位（v3.1.1 行为） | 有测试守 |
+| 4 | 取消路由 | 每个 `_Task` 各有独立 `cancel_event`，但取消要按 `task_id` 调 `AgentService.stop(task_id)` | Sidecar 需保存当前 `task_id` 并精确转发；停爬虫**不**得置分析取消位（v3.1.1 行为） | 部分覆盖 |
 | 5 | `batch_size` | 不透传 | UI 可配，需透传给 processor | 易漏 |
 | 6 | **完整结果不可得** | `TaskSnapshot` 只有 `summary` + `artifacts`；`RunStore.save_analysis` 会 `pop("report_markdown")` 并把词云 base64 换成磁盘路径 | 需要**原始 result** 才能恢复 `_last_analysis`、词云展示和报告导出 | 结构性缺口 |
 | 7 | **分析进度被压缩** | `task.emit(70 + percent * 0.25, …)`，原始百分比已丢失 | `analysis.progress` 需要 0–100 原值 | 结构性缺口 |
@@ -158,23 +159,24 @@ characterization 测试把当前行为钉住，迁移后保持一致；如果之
 | LLM 阻塞时能迅速停止 | `test_analyze_stops_promptly_while_llm_request_is_blocked` | 已有 |
 | stdout ASCII-safe | `test_protocol_output_is_ascii_safe…` | 已有 |
 | 词云 asset 目录命名 | `test_word_cloud_asset_dir_uses_source_label_timestamp_and_bvid` | 已有 |
-| **空结果仍发 `finished(count=0)` 且不报错** | 无 | 必补（characterization，含 stats payload） |
-| **停止后带部分数据的收尾行为** | 无 | 必补（characterization） |
+| **空结果：`stats` + `finished(count=0)` 完整 payload，不发 `error`，收尾 `progress(status="idle", percent=100)`** | 无 | 必补（characterization） |
+| **停止：终态事件与完整 payload，且收尾 `idle` 帧仍发出** | 无 | 必补（characterization） |
+| **停止路径不得出现陈旧 `finished`**（停止后不再有任何 `finished` 帧） | 无 | 必补 |
 | **桌面端页数不被夹到 50** | 无 | 必补 |
 | **桌面端 chart_keys 含词云** | 无 | 必补 |
 | **凭据来自 params 而非环境** | 无 | 必补 |
 | **API Key 不进 manifest / 不进策略对象** | 部分（agent 侧有） | 必补（桌面路径） |
 | **`dynamics` 与 `all` 仍走旧路径** | 无 | 必补 |
 | **`analysis.progress` 仍是 0–100** | 无 | 必补 |
+| **`task.stop` 精确转发到 `AgentService.stop(task_id)`** | 无 | 必补（Sidecar 需保存当前 task_id；现有测试只覆盖旧路径的取消位隔离） |
 | **内部 `_last_analysis` 保留原始结果** | 无 | 必补（`analysis.export` 的 markdown 依赖它） |
 | **`analysis.latest` 返回值与当前 compact display payload 完全一致** | 无 | 必补（含 `word_cloud_image` / `word_cloud_image_path`，且 `report_markdown` 仍为空串） |
 | **复用注入的 api / factory / processor** | `test_comment_task_reuses_logged_in_api_session` | 必补（迁移后保持） |
 | **事件序列逐帧一致：名称、顺序与 payload** | 部分 | 必补（录制迁移前后 `CaptureSidecar.messages` 比对，不只比事件名） |
 | **`stats` 事件携带完整 comments stats 字段** | 无 | 必补（逐字段断言，非仅 `total`） |
 | **`_last_comment_context` 保持** | 无 | 必补（词云 asset 目录命名依赖它） |
-| **评论成功：终态 + 完整 finished payload** | 无 | 必补（characterization） |
-| **评论异常：终态 + `error` payload** | 无 | 必补（characterization） |
-| **停止后不再出现陈旧 `finished`** | 无 | 必补 |
+| **评论成功：`stats` + `finished(count, stats)` 完整 payload + 收尾 `idle` 帧** | 无 | 必补（characterization） |
+| **评论异常：`error(mode, message)` 完整 payload，不发 `finished`，收尾 `idle` 帧仍发出** | 无 | 必补（characterization） |
 | **`auto` / 缺失 / 非法 source 走旧路径** | 无 | 必补 |
 | `batch_size` 透传 | 无 | 补 |
 | `export.csv` 在迁移后仍可用 | 无 | 补 |
