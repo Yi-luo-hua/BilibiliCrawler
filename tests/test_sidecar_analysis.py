@@ -1,9 +1,11 @@
 import json
+import os
 import logging
 import io
 import base64
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 from contextlib import redirect_stdout
 
@@ -427,26 +429,66 @@ class SidecarAnalysisTests(unittest.TestCase):
             finally:
                 Sidecar._analysis_asset_root = original_root
 
-    def test_analysis_asset_root_matches_the_shared_path_policy(self) -> None:
-        # The sidecar used to carry its own copy of this root decision. It now
-        # delegates to src/service/paths.py, so this pins the location the
-        # desktop app writes to and keeps the two front ends from drifting.
-        from src.service.paths import ASSETS_DIR_NAME, analysis_assets_root, user_output_root
+    def test_analysis_asset_root_uses_the_project_dir_when_writable(self) -> None:
+        # The sidecar used to carry its own copy of this root decision; it now
+        # delegates to src/service/paths.py. Pins the location the desktop app
+        # writes to, inside a temp ROOT so the repo is not polluted.
+        import src.service.paths as paths
 
-        resolved = Sidecar._analysis_asset_root()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with unittest.mock.patch.object(paths, "ROOT", Path(temp_dir)):
+                resolved = Sidecar._analysis_asset_root()
 
-        self.assertEqual(resolved, analysis_assets_root())
-        self.assertEqual(resolved, user_output_root() / ASSETS_DIR_NAME)
-        self.assertEqual(resolved.name, "analysis-assets")
-        self.assertTrue(resolved.is_dir())
+            self.assertEqual(resolved, Path(temp_dir) / "analysis-assets")
+            self.assertTrue(resolved.is_dir())
+
+    def test_analysis_asset_root_falls_back_when_the_target_dir_is_unwritable(self) -> None:
+        # The regression that a parent-only probe introduced: on Windows an
+        # existing subdirectory can carry an ACL its parent does not. Probing
+        # only the project root would return a directory that then fails on
+        # export, instead of falling back to %LOCALAPPDATA%.
+        import src.service.paths as paths
+
+        with tempfile.TemporaryDirectory() as project, tempfile.TemporaryDirectory() as fallback:
+            project_assets = Path(project) / "analysis-assets"
+            real_is_writable = paths._is_writable
+
+            def deny_target(candidate: Path) -> bool:
+                if candidate == project_assets:
+                    return False          # the subdirectory is denied ...
+                if candidate == Path(project):
+                    return True           # ... while its parent is fine
+                return real_is_writable(candidate)
+
+            with unittest.mock.patch.object(paths, "ROOT", Path(project)), \
+                    unittest.mock.patch.object(paths, "_is_writable", deny_target), \
+                    unittest.mock.patch.dict(
+                        os.environ, {"LOCALAPPDATA": fallback}, clear=False):
+                resolved = Sidecar._analysis_asset_root()
+
+            self.assertEqual(
+                resolved,
+                Path(fallback) / "BilibiliCrawler" / "analysis-assets",
+                "an unwritable target directory must fall back, not be returned anyway",
+            )
+            self.assertNotEqual(resolved, project_assets)
 
     def test_analysis_asset_root_probe_leaves_no_files_behind(self) -> None:
-        root = Sidecar._analysis_asset_root()
-        before = sorted(p.name for p in root.parent.iterdir())
-        Sidecar._analysis_asset_root()
-        after = sorted(p.name for p in root.parent.iterdir())
-        self.assertEqual(before, after)
-        self.assertFalse((root.parent / ".write-test").exists())
+        # The probe runs inside the target directory, so that is where a stray
+        # file would land. The old implementation used a fixed ".write-test"
+        # name there and deleted it unconditionally.
+        import src.service.paths as paths
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with unittest.mock.patch.object(paths, "ROOT", Path(temp_dir)):
+                root = Sidecar._analysis_asset_root()
+                before = sorted(p.name for p in root.iterdir())
+                Sidecar._analysis_asset_root()
+                after = sorted(p.name for p in root.iterdir())
+
+            self.assertEqual(before, after)
+            self.assertFalse((root / ".write-test").exists())
+            self.assertEqual([p.name for p in root.glob(".write-probe-*")], [])
 
     def test_chart_assets_accept_png_file_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
