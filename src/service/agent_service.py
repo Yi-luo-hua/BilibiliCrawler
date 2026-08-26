@@ -22,7 +22,7 @@ from src.api.bilibili_api import BilibiliAPI
 from src.crawler.comment_crawler import CommentCrawler
 from src.processor.analysis_processor import AnalysisCancelled, AnalysisError, LLMAnalysisProcessor
 from src.processor.data_processor import DataProcessor
-from src.service.credentials import resolve_llm_credentials, scrub
+from src.service.credentials import LLMCredentials, resolve_llm_credentials, scrub
 from src.service.models import (
     SAMPLE_SIZE_DEFAULT,
     CallerPolicy,
@@ -335,7 +335,7 @@ class AgentService:
         strategy: str = "sample",
         chart_keys: list[str] | None = None,
         batch_size: int | None = None,
-        credentials: Any = None,
+        credentials: LLMCredentials | None = None,
     ) -> TaskSnapshot:
         # Validate the run and its data before claiming the single task slot,
         # so a bad run_id cannot make the service look busy.
@@ -365,7 +365,7 @@ class AgentService:
         strategy: str = "sample",
         chart_keys: list[str] | None = None,
         batch_size: int | None = None,
-        credentials: Any = None,
+        credentials: LLMCredentials | None = None,
     ) -> TaskSnapshot:
         crawl_params = self._crawl_params(url, max_pages, include_replies, sort_mode)
         analysis_params = self._analysis_params(sample_size, strategy, chart_keys, batch_size, credentials)
@@ -581,7 +581,7 @@ class AgentService:
         strategy: Any,
         chart_keys: Any = None,
         batch_size: Any = None,
-        credentials: Any = None,
+        credentials: LLMCredentials | None = None,
     ) -> dict[str, Any]:
         """Build one analysis request.
 
@@ -591,7 +591,19 @@ class AgentService:
         chosen = str(strategy or "sample").strip()
         if chosen not in {"sample", "all"}:
             chosen = "sample"
-        resolved = credentials if credentials is not None else self._resolve_credentials()
+        if credentials is None:
+            resolved = self._resolve_credentials()
+        elif isinstance(credentials, LLMCredentials):
+            resolved = credentials
+        else:
+            # A caller holding the RPC's llm_config dict should convert it with
+            # LLMCredentials.from_config rather than get an AttributeError from
+            # somewhere deeper.
+            raise ServiceError(
+                ErrorCode.INVALID_INPUT,
+                "credentials 必须是 LLMCredentials；如果手上是 llm_config 字典，"
+                "请先用 LLMCredentials.from_config() 转换。",
+            )
         params: dict[str, Any] = {
             "source": "comments",
             "strategy": chosen,

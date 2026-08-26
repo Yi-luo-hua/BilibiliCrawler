@@ -24,6 +24,8 @@ from src.service.models import (
     DESKTOP_POLICY,
     MAX_PAGES_CEILING,
     CallerPolicy,
+    ErrorCode,
+    ServiceError,
 )
 from src.service.run_store import RunStore
 
@@ -81,10 +83,22 @@ class PolicyTestCase(unittest.TestCase):
         self.addCleanup(self._drain)
 
     def _drain(self) -> None:
+        # Ask first, then join, then insist: a thread still running when the
+        # TemporaryDirectory is destroyed races the next test through a
+        # directory that no longer exists.
+        stragglers = []
         for service in self.services:
             for task in list(service._tasks.values()):
-                if task.thread is not None:
-                    task.thread.join(timeout=5)
+                if task.thread is None or not task.thread.is_alive():
+                    continue
+                try:
+                    service.stop(task.task_id)
+                except Exception:  # noqa: BLE001 - cleanup must not mask failures
+                    pass
+                task.thread.join(timeout=5)
+                if task.thread.is_alive():
+                    stragglers.append(task.task_id)
+        assert not stragglers, f'tasks still running at teardown: {stragglers}'
 
     def make(self, policy=None, resolver=None) -> AgentService:
         def factory(progress):
@@ -159,6 +173,29 @@ class PolicyValueTests(unittest.TestCase):
             self.assertNotIn(banned, names)
         with self.assertRaises(dataclasses.FrozenInstanceError):
             AGENT_POLICY.max_pages_ceiling = 999  # type: ignore[misc]
+
+
+class PolicyValidationTests(unittest.TestCase):
+    def test_a_policy_that_would_yield_a_non_positive_page_count_is_rejected(self) -> None:
+        # Both of these used to construct happily and then hand the crawler 0
+        # or -2 pages, which nothing downstream checks.
+        with self.assertRaises(ValueError):
+            CallerPolicy(max_pages_default=0)
+        with self.assertRaises(ValueError):
+            CallerPolicy(max_pages_ceiling=-2)
+
+    def test_a_ceiling_below_the_default_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            CallerPolicy(max_pages_default=10, max_pages_ceiling=2)
+
+    def test_an_empty_default_chart_set_is_rejected(self) -> None:
+        # Empty would mean "every chart" downstream, word cloud included.
+        with self.assertRaises(ValueError):
+            CallerPolicy(default_chart_keys=())
+
+    def test_the_shipped_policies_are_valid(self) -> None:
+        self.assertEqual(AGENT_POLICY, CallerPolicy(**dataclasses.asdict(AGENT_POLICY)))
+        self.assertEqual(DESKTOP_POLICY, CallerPolicy(**dataclasses.asdict(DESKTOP_POLICY)))
 
 
 class PolicyReachesTheCrawlerTests(PolicyTestCase):
@@ -244,7 +281,14 @@ class InjectionPointTests(PolicyTestCase):
             @staticmethod
             def get_statistics(comments):
                 calls.append("get_statistics")
-                return {"total": len(comments), "sentinel": "from the injected processor"}
+                # Values no real DataProcessor would produce for one comment, so
+                # the assertions below fail if production ignores this return.
+                return {
+                    "total": len(comments),
+                    "main_comments": 41,
+                    "replies": 42,
+                    "sentinel": "from the injected processor",
+                }
 
         def factory(progress):
             crawler = RecordingCrawler(progress)
@@ -264,26 +308,58 @@ class InjectionPointTests(PolicyTestCase):
         snapshot = self.finish(service, service.start_crawl("BV1xx411c7mD"))
 
         self.assertEqual(calls, ["clean_comments", "get_statistics"])
-        # Its output is what got persisted and counted, not a default's.
+
+        # Counted: the snapshot's numbers come from this processor's statistics,
+        # not from a default's view of the same comment.
+        self.assertEqual(snapshot.counts["main_comments"], 41)
+        self.assertEqual(snapshot.counts["replies"], 42)
+
+        # Persisted: and its cleaned rows are what landed on disk.
         manifest = self.store.read_manifest(snapshot.run_id)
-        self.assertEqual(manifest["counts"]["comments"], 1)
+        self.assertEqual(manifest["counts"]["main_comments"], 41)
         stored = self.store.load_comments(snapshot.run_id)
         self.assertEqual(stored[0]["content"], "cleaned by the injected processor")
 
-    def test_the_injected_api_reaches_the_default_crawler_factory(self) -> None:
-        # With no crawler_factory supplied, the service builds a real
-        # CommentCrawler; the desktop's logged-in session must be the one it uses.
-        sentinel = object()
+    def test_the_injected_api_is_used_by_a_real_start_crawl(self) -> None:
+        # No crawler_factory, so the service builds a real CommentCrawler and
+        # drives it through start_crawl. Calling _crawler_factory directly would
+        # prove only that the lambda is wired, not that the run path uses it.
+        class RecordingAPI:
+            def __init__(self):
+                self.calls: list[str] = []
+
+            def get_video_info(self, bvid):
+                self.calls.append("get_video_info")
+                return {"data": {"aid": 12345}}
+
+            def get_comments(self, *args, **kwargs):
+                self.calls.append("get_comments")
+                return {"data": {"replies": [{
+                    "rpid": 1,
+                    "member": {"uname": "u", "mid": 1, "level_info": {"current_level": 1}},
+                    "content": {"message": "hi"},
+                    "like": 0, "rcount": 0, "ctime": 1735660800,
+                    "reply_control": {"location": "IP属地：广东"},
+                }], "cursor": {"is_end": True}}}
+
+            def get_replies(self, *args, **kwargs):
+                self.calls.append("get_replies")
+                return {"data": {"replies": []}}
+
+        api = RecordingAPI()
         service = AgentService(
             store=self.store,
-            api=sentinel,
+            api=api,
             analysis_processor=self.processor,
             credentials_resolver=lambda: LLMCredentials(api_key=SECRET_KEY),
         )
         self.services.append(service)
 
-        crawler = service._crawler_factory(lambda message: None)
-        self.assertIs(crawler.api, sentinel)
+        snapshot = self.finish(service, service.start_crawl("BV1xx411c7mD", max_pages=1))
+
+        self.assertIn("get_video_info", api.calls)
+        self.assertIn("get_comments", api.calls)
+        self.assertEqual(snapshot.counts["comments"], 1)
 
 
 class CredentialsStayPerRequestTests(PolicyTestCase):
@@ -336,15 +412,75 @@ class CredentialsStayPerRequestTests(PolicyTestCase):
         )
 
     def test_the_key_never_reaches_the_manifest(self) -> None:
+        # start_crawl_and_analyze is the entry point that writes analysis params
+        # into a manifest, so it is the one _public() has to strip. start_analyze
+        # never calls create_run, which made the earlier version of this test
+        # pass without exercising the stripping at all.
         service = self.make()
-        run_id = self.finish(service, service.start_crawl("BV1xx411c7mD")).run_id
-        supplied = LLMCredentials(api_key="sk-MANIFEST-CANARY-5555")
-        self.finish(service, service.start_analyze(run_id, credentials=supplied))
+        supplied = LLMCredentials(api_key="sk-MANIFEST-CANARY-5555",
+                                  base_url="https://x/v1", model="m")
+        snapshot = self.finish(
+            service,
+            service.start_crawl_and_analyze("BV1xx411c7mD", credentials=supplied),
+        )
 
-        for path in self.store.run_dir(run_id).rglob("*"):
+        manifest = self.store.read_manifest(snapshot.run_id)
+        self.assertNotIn("llm_config", manifest["params"])
+        self.assertNotIn("api_key", manifest["params"])
+        # The crawl params it does keep are still there.
+        self.assertIn("url", manifest["params"])
+
+        for path in self.store.run_dir(snapshot.run_id).rglob("*"):
             if path.is_file():
                 self.assertNotIn(b"sk-MANIFEST-CANARY-5555", path.read_bytes(),
                                  f"the key leaked into {path.name}")
+
+    def test_the_combined_entry_point_forwards_every_request_parameter(self) -> None:
+        # The highest-level MCP tool routes through here, so its pass-through
+        # deserves the same coverage as the standalone analyse entry point.
+        service = self.make(policy=DESKTOP_POLICY)
+        supplied = LLMCredentials(api_key="sk-COMBINED-1234567",
+                                  base_url="https://combined/v1", model="combined-model")
+
+        self.finish(service, service.start_crawl_and_analyze(
+            "BV1xx411c7mD",
+            max_pages=250,
+            sample_size=321,
+            chart_keys=["word_cloud", "region_map"],
+            batch_size=45,
+            credentials=supplied,
+        ))
+
+        self.assertEqual(self.crawlers[0].calls[0]["max_pages"], 250)
+        params = self.processor.params[0]
+        self.assertEqual(params["chart_keys"], ["word_cloud", "region_map"])
+        self.assertEqual(params["batch_size"], 45)
+        self.assertEqual(params["sample_size"], 321)
+        self.assertEqual(params["llm_config"], {
+            "api_key": "sk-COMBINED-1234567",
+            "base_url": "https://combined/v1",
+            "model": "combined-model",
+        })
+
+    def test_a_raw_llm_config_dict_is_rejected_with_a_readable_error(self) -> None:
+        # The desktop holds {api_key, base_url, model} from its RPC. Passing it
+        # straight in used to reach .to_llm_config() and raise AttributeError.
+        service = self.make()
+        run_id = self.finish(service, service.start_crawl("BV1xx411c7mD")).run_id
+
+        with self.assertRaises(ServiceError) as ctx:
+            service.start_analyze(run_id, credentials={"api_key": "sk-dict-form-123"})
+        self.assertEqual(ctx.exception.code, ErrorCode.INVALID_INPUT)
+        self.assertIn("from_config", str(ctx.exception))
+
+    def test_from_config_converts_the_rpc_shape(self) -> None:
+        credentials = LLMCredentials.from_config(
+            {"api_key": " sk-from-dict-9876 ", "base_url": "https://x/v1", "model": "m"}
+        )
+        self.assertEqual(credentials.to_llm_config(), {
+            "api_key": "sk-from-dict-9876", "base_url": "https://x/v1", "model": "m",
+        })
+        self.assertNotIn("sk-from-dict-9876", repr(credentials))
 
 
 if __name__ == "__main__":

@@ -108,6 +108,24 @@ class CallerPolicy:
     # None means "do not force a set"; the processor applies its own default.
     default_chart_keys: tuple[str, ...] | None = tuple(AGENT_CHART_KEYS)
 
+    def __post_init__(self) -> None:
+        # A misconfigured policy would otherwise hand the crawler a page count
+        # of zero or a negative one, which no downstream code checks for.
+        if self.max_pages_default < 1:
+            raise ValueError(f"max_pages_default must be >= 1, got {self.max_pages_default}")
+        if self.max_pages_ceiling is not None:
+            if self.max_pages_ceiling < 1:
+                raise ValueError(f"max_pages_ceiling must be >= 1, got {self.max_pages_ceiling}")
+            if self.max_pages_ceiling < self.max_pages_default:
+                raise ValueError(
+                    "max_pages_ceiling must not be below max_pages_default: "
+                    f"{self.max_pages_ceiling} < {self.max_pages_default}"
+                )
+        if self.default_chart_keys is not None and not self.default_chart_keys:
+            # _normalize_chart_keys reads an empty list as "give me everything",
+            # so an empty default would silently re-enable the word cloud.
+            raise ValueError("default_chart_keys must be None or non-empty")
+
     def resolve_max_pages(self, value: Any) -> int:
         try:
             number = int(value)
