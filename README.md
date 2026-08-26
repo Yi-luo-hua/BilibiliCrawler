@@ -2,6 +2,8 @@
 
 BilibiliCrawler 是一个 B 站评论 / 动态爬取与舆论分析桌面工具。v2.00 起项目迁移为 **Tauri 2 + React + TypeScript** 桌面应用，Python 爬虫和分析逻辑作为本地 sidecar 后端运行，通过本地进程通信完成爬取、扫码登录、LLM 分析和导出。
 
+现已支持MCP调用，请阅读docs/MCP.md。
+
 > 旧版 Python GUI / 单 exe 代码保留在 `legacy-python-gui` 分支。主分支以后以 Windows 安装包桌面应用为主。
 
 本项目先后使用Cursor,Trae,Warp,antigravity,Claude Code,Codex完成。
