@@ -114,17 +114,20 @@
 | 结果 | `AgentService(retain_outcome=True)` + `take_outcome(task_id)` | `TaskOutcome`：清洗后的评论、**完整** stats 字典、处理器原样返回的 `result` |
 | 事件 | `AgentService(events=listener)` | `TaskEvent`：`EventKind.LOG`（爬虫原文）、`EventKind.ANALYSIS_PROGRESS`（未压缩的 0–100） |
 
-三条约束写进了测试：
+四条约束写进了测试：
 
 - **`TaskSnapshot` 不变胖**——词云 base64 与完整报告都不进快照，MCP 返回值不膨胀。
 - **不装监听器就完全无感**——进度队列与快照逐字段相同，`retain_outcome` 默认 `False`，
   MCP / CLI 一个字节都不多留。
-- **结果先取后存**——`_record_outcome` 在 `save_analysis` 之前拿到 `dict(result)` 的副本。
-  今天的 `save_analysis` 恰好是在自己的副本上改的，但那是巧合不是契约，
-  所以测试用一个「就地改写」的 store 把顺序和拷贝都钉住了。
+- **结果先取后存，而且是深拷贝**——两半都在 store 拿到同一个对象之前记录，
+  拷贝是 `copy.deepcopy`。浅拷贝会把每个嵌套 list / dict 继续和 store 共享，
+  而 `save_analysis` 下一步要改的正是那些。测试用一个「就地改写嵌套对象」的 store 把
+  顺序和深度一起钉住。
+- **只有终态任务能 `take_outcome()`**——组合任务的两半在不同时刻记录，
+  提前取会拿到半个 outcome、把另外半个留成第二个，同一个任务被消费两次。
 
-终态**不走事件通道**，只能从 `TaskSnapshot` 读——只留一条得知任务结束的路径，
-就不会有第二条路径发出陈旧的 `finished`。
+终态既不走事件通道，也不能从 `take_outcome()` 反推，只能从 `TaskSnapshot` 读——
+只留一条得知任务结束的路径，就不会有第二条路径发出陈旧的 `finished`。
 
 ### 第 8、9 条要先固化再决定
 

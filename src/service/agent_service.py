@@ -12,6 +12,7 @@ adapter is talking to a particular front end.
 """
 from __future__ import annotations
 
+import copy
 import dataclasses
 import logging
 import queue
@@ -468,14 +469,25 @@ class AgentService:
         return task.snapshot()
 
     def take_outcome(self, task_id: str) -> TaskOutcome | None:
-        """Hand the adapter the heavy results, once.
+        """Hand the adapter the heavy results of a finished task, once.
 
         Ownership transfers: the service drops its reference, so a caller that
         annotates the result dict is not quietly editing the service's copy too.
 
-        Returns None when the task is not the most recent one, when the service
-        was built without retain_outcome, or when the outcome was already taken.
+        Refused while the task is still running. A crawl-and-analyse task
+        records its two halves at different moments, so an early call would hand
+        over one incomplete outcome and leave the other half behind to be taken
+        as a second one -- the same task consumed twice, neither time whole.
+        This is also not a back door to terminal state: that is read from
+        TaskSnapshot, and there is still only one way to learn a task ended.
+
+        Returns None when the task is unknown or still running, when it is not
+        the most recent one, when the service was built without retain_outcome,
+        or when the outcome was already taken.
         """
+        task = self._tasks.get(task_id)
+        if task is None or task.alive:
+            return None
         with self._lock:
             outcome = self._outcome
             if outcome is None or outcome.task_id != task_id:
@@ -486,14 +498,26 @@ class AgentService:
     def _record_outcome(self, task: _Task, **fields: Any) -> None:
         """Fold one stage's results into the current task's outcome.
 
+        Callers pass the live objects; the copying happens here, behind the
+        retain_outcome check, so a caller who never asked for the channel pays
+        nothing at all -- not even a container copy.
+
+        The copy is deep. A shallow one leaves every nested list and dict shared
+        with whoever the value came from, and RunStore.save_analysis is right
+        next in line to edit exactly those. Deep-copying a crawl's worth of
+        comments costs single-digit milliseconds against a JSON and CSV write.
+
         The slot always belongs to this task: _begin clears it, and it cannot
         begin a second task until the first one's thread has finished recording.
         """
         if not self._retain_outcome:
             return
+        # Copied outside the lock: it is the expensive part, and nothing else
+        # touches the slot while this task is the active one.
+        copied = {key: copy.deepcopy(value) for key, value in fields.items()}
         with self._lock:
             current = self._outcome or TaskOutcome(task_id=task.task_id, run_id=task.run_id)
-            self._outcome = dataclasses.replace(current, **fields)
+            self._outcome = dataclasses.replace(current, **copied)
 
     def drain_progress(self, task_id: str) -> list[ProgressEvent]:
         task = self._tasks.get(task_id)
@@ -582,20 +606,26 @@ class AgentService:
 
     def _crawl_results(self, task: _Task, cleaned: list[dict[str, Any]]) -> dict[str, Any]:
         """Persist the crawled comments and build the resulting state changes."""
-        # Computed even for an empty result, because a caller that stopped the
-        # crawl before its first page still has a statistics frame to render,
-        # and the zeros have to come from the same processor as everything else.
-        stats = self._data_processor.get_statistics(cleaned)
-        # counts keeps three integers; the rest of this dict is what the desktop
-        # renders. Recomputing it from reloaded JSON would give the same numbers
-        # only for as long as nothing drifts, and no way to notice when it does.
-        self._record_outcome(task, comments=list(cleaned), stats=stats)
         if not cleaned:
+            # The data processor is deliberately not called here. It never was
+            # on this path, and it is an injection point: one that rejects an
+            # empty list would turn a crawl stopped before its first page from
+            # `cancelled` into `failed`.
             return {"percent": 70}
+        # Snapshotted before the store is handed the same list. save_comments
+        # does not edit it today, but the analysis half records early for
+        # exactly this reason and there is no case for the crawl half being the
+        # weaker of the two.
+        self._record_outcome(task, comments=cleaned)
         artifacts = self._store.save_comments(task.run_id, cleaned)
         if "comments_csv" not in artifacts:
             # The CSV is a convenience export; losing it must not look like success.
             task.add_warning("CSV 导出失败，评论数据仍完整保存在 comments.json 中。")
+        stats = self._data_processor.get_statistics(cleaned)
+        # counts keeps three integers; the rest of this dict is what the desktop
+        # renders. Recomputing it from reloaded JSON would give the same numbers
+        # only for as long as nothing drifts, and no way to notice when it does.
+        self._record_outcome(task, stats=stats)
         return {
             "counts": {
                 **task.counts,
@@ -639,12 +669,12 @@ class AgentService:
             self._settle(task, "分析完成", cancelled_stage="分析已取消")
             return
 
-        # Recorded before the store sees it, and as a copy. save_analysis
-        # lifts report_markdown into its own file and rewrites word_cloud_image
-        # from a base64 data URL into a path; it happens to work on a copy of
-        # its own today, but the desktop needs both originals whether or not it
-        # keeps doing that.
-        self._record_outcome(task, analysis=dict(result))
+        # Recorded before the store sees it. save_analysis lifts
+        # report_markdown into its own file and rewrites word_cloud_image from a
+        # base64 data URL into a path; it happens to work on a shallow copy of
+        # its own today, but the desktop needs the originals whether or not it
+        # keeps doing that. _record_outcome takes the deep copy.
+        self._record_outcome(task, analysis=result)
 
         task.update(status=RunStatus.EXPORTING, stage="正在导出分析结果", percent=95)
         artifacts = self._store.save_analysis(task.run_id, result)

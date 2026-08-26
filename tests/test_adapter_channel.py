@@ -17,6 +17,7 @@ without the new arguments retains nothing.
 No wiring yet -- backend/sidecar.py is untouched at this stage.
 """
 import base64
+import copy
 import json
 import tempfile
 import threading
@@ -133,19 +134,53 @@ class RichProcessor:
 
     def __init__(self):
         self.params: list[dict] = []
+        # A pristine record of what was handed back, so a test can compare
+        # against it even after something downstream has edited the original.
+        self.returned: list[dict] = []
+
+    def build_result(self, comments):
+        return {
+            "summary": "总体正面",
+            "report_markdown": REPORT_MARKDOWN,
+            "word_cloud_image": WORD_CLOUD_DATA_URL,
+            # Nested on purpose: a shallow copy would leave these shared with
+            # whoever gets the result next.
+            "overview": {"total": len(comments), "keep_me": "处理器写的值"},
+            "topic_counts": [{"name": "话题一", "value": 7}],
+            "meta": {"analyzed_records": len(comments), "total_records": len(comments)},
+        }
 
     def analyze(self, comments, dynamics, params, progress=None, cancel_event=None):
         self.params.append(dict(params))
         for message, percent in self.STEPS:
             if progress is not None:
                 progress(message, percent)
-        return {
-            "summary": "总体正面",
-            "report_markdown": REPORT_MARKDOWN,
-            "word_cloud_image": WORD_CLOUD_DATA_URL,
-            "overview": {"total": len(comments)},
-            "meta": {"analyzed_records": len(comments), "total_records": len(comments)},
-        }
+        result = self.build_result(comments)
+        self.returned.append(copy.deepcopy(result))
+        return result
+
+
+class PausingProcessor(RichProcessor):
+    """Holds the analysis open so a test can act between the two halves."""
+
+    def __init__(self):
+        super().__init__()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def analyze(self, comments, dynamics, params, progress=None, cancel_event=None):
+        self.entered.set()
+        self.release.wait(timeout=5)
+        return super().analyze(comments, dynamics, params, progress, cancel_event)
+
+
+class EchoingProcessor(RichProcessor):
+    """Puts its own configuration into the result, the way some processors do."""
+
+    def build_result(self, comments):
+        result = super().build_result(comments)
+        result["meta"]["config"] = dict(self.params[-1])
+        return result
 
 
 class BlockingProcessor:
@@ -185,6 +220,53 @@ class SentinelDataProcessor:
         return dict(cls.SENTINEL_STATS)
 
 
+class StrictDataProcessor:
+    """Rejects an empty list, the way a stricter processor reasonably might."""
+
+    @staticmethod
+    def clean_comments(comments):
+        return DataProcessor.clean_comments(comments)
+
+    @staticmethod
+    def get_statistics(comments):
+        if not comments:
+            raise ValueError("没有评论可统计")
+        return DataProcessor.get_statistics(comments)
+
+
+class CountingDataProcessor:
+    """Counts how often each half is called."""
+
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def clean_comments(self, comments):
+        self.calls.append("clean_comments")
+        return DataProcessor.clean_comments(comments)
+
+    def get_statistics(self, comments):
+        self.calls.append("get_statistics")
+        return DataProcessor.get_statistics(comments)
+
+
+class EmptyBlockingCrawler(TalkativeCrawler):
+    """Stopped before its first page, so it has nothing at all to return."""
+
+    def __init__(self, progress):
+        super().__init__(progress)
+        self.reached = threading.Event()
+        self.stopped = threading.Event()
+
+    def stop(self):
+        super().stop()
+        self.stopped.set()
+
+    def crawl_comments(self, url_or_id, include_replies=True, max_pages=100, mode=3):
+        self.reached.set()
+        self.stopped.wait(timeout=5)
+        return []
+
+
 class RewritingStore(RunStore):
     """A store that edits the result in place instead of copying it first.
 
@@ -197,7 +279,19 @@ class RewritingStore(RunStore):
     def save_analysis(self, run_id, result):
         result.pop("report_markdown", None)
         result["word_cloud_image"] = "already/rewritten/word_cloud.png"
+        # Nested, where a shallow copy offers no protection at all.
+        if isinstance(result.get("overview"), dict):
+            result["overview"]["keep_me"] = "store 改掉的值"
+        if isinstance(result.get("topic_counts"), list):
+            result["topic_counts"].clear()
         return super().save_analysis(run_id, result)
+
+    def save_comments(self, run_id, comments):
+        # Same question for the crawl half: the outcome holds comment dicts that
+        # the store is handed straight afterwards.
+        for comment in comments:
+            comment["content"] = "store 改掉的正文"
+        return super().save_comments(run_id, comments)
 
 
 class ChannelTestCase(unittest.TestCase):
@@ -304,6 +398,22 @@ class OutcomeCarriesWhatTheSnapshotDropsTests(ChannelTestCase):
         outcome = service.take_outcome(final.task_id)
         self.assertEqual(outcome.analysis["report_markdown"], REPORT_MARKDOWN)
         self.assertEqual(outcome.analysis["word_cloud_image"], WORD_CLOUD_DATA_URL)
+        # Nested values too: a shallow copy leaves these shared with the store.
+        self.assertEqual(outcome.analysis["overview"]["keep_me"], "处理器写的值")
+        self.assertEqual(outcome.analysis["topic_counts"], [{"name": "话题一", "value": 7}])
+        # And the same for the comment dicts on the crawl half.
+        self.assertEqual([c["content"] for c in outcome.comments], ["一条主评论", "一条回复"])
+
+    def test_the_outcome_is_exactly_what_the_processor_returned(self) -> None:
+        # Both directions of the hand-off in one assertion: the service merges
+        # nothing of its own in (its params, which hold the key, are right
+        # there) and takes nothing out.
+        processor = EchoingProcessor()
+        service = self.make(processor=processor)
+        final = self.finish(service, service.start_crawl_and_analyze("BV1xx411c7mD"))
+
+        outcome = service.take_outcome(final.task_id)
+        self.assertEqual(outcome.analysis, processor.returned[0])
 
     def test_the_snapshot_still_carries_neither(self) -> None:
         # The MCP return value must not grow a megabyte of base64 or the whole
@@ -395,6 +505,33 @@ class OwnershipTests(ChannelTestCase):
         self.assertIsNone(service.take_outcome(final.task_id))
         self.assertIsNone(service._outcome)
 
+    def test_the_outcome_cannot_be_taken_while_the_task_is_still_running(self) -> None:
+        # A crawl-and-analyse task records its two halves at different moments.
+        # An early take would hand over the crawl half and leave the analysis
+        # half behind to be taken as a second outcome: one task consumed twice,
+        # neither time whole.
+        processor = PausingProcessor()
+        service = self.make(processor=processor)
+        snapshot = service.start_crawl_and_analyze("BV1xx411c7mD")
+        self.assertTrue(processor.entered.wait(timeout=5))
+
+        self.assertIsNone(service.take_outcome(snapshot.task_id))
+
+        processor.release.set()
+        final = self.finish(service, snapshot)
+
+        # Nothing was consumed early, so what arrives now is whole.
+        outcome = service.take_outcome(final.task_id)
+        self.assertEqual(len(outcome.comments), 2)
+        self.assertTrue(outcome.stats)
+        self.assertIsNotNone(outcome.analysis)
+        self.assertIsNone(service.take_outcome(final.task_id))
+
+    def test_an_unknown_task_id_yields_nothing(self) -> None:
+        service = self.make()
+        self.finish(service, service.start_crawl("BV1xx411c7mD"))
+        self.assertIsNone(service.take_outcome("task-never-existed"))
+
     def test_a_new_task_drops_the_previous_outcome(self) -> None:
         # _tasks never shrinks, so an outcome per task would grow with every run.
         service = self.make()
@@ -438,6 +575,41 @@ class OwnershipTests(ChannelTestCase):
         )
         self.services.append(service)
         final = self.finish(service, service.start_crawl("BV1xx411c7mD"))
+
+        self.assertIsNone(service.take_outcome(final.task_id))
+
+
+class TheEmptyPathIsUnchangedTests(ChannelTestCase):
+    def _stop_an_empty_crawl(self, service):
+        snapshot = service.start_crawl("BV1xx411c7mD")
+        self.assertTrue(self.crawler_built.wait(timeout=5))
+        self.assertTrue(self.crawlers[0].reached.wait(timeout=5))
+        service.stop(snapshot.task_id)
+        return service.wait(snapshot.task_id, 5)
+
+    def test_an_empty_stopped_crawl_is_still_cancelled_not_failed(self) -> None:
+        # The data processor is an injection point. Asking it to describe an
+        # empty list is a question it never used to be asked, and one that
+        # raises turns a stopped crawl into a failed one.
+        service = self.make(crawler_class=EmptyBlockingCrawler,
+                            data_processor=StrictDataProcessor)
+        final = self._stop_an_empty_crawl(service)
+
+        self.assertEqual(final.status, "cancelled")
+        self.assertIsNone(final.error)
+
+    def test_the_data_processor_is_not_asked_about_an_empty_result(self) -> None:
+        counting = CountingDataProcessor()
+        service = self.make(crawler_class=EmptyBlockingCrawler, data_processor=counting)
+        self._stop_an_empty_crawl(service)
+
+        self.assertEqual(counting.calls, ["clean_comments"])
+
+    def test_an_empty_stopped_crawl_hands_over_no_outcome(self) -> None:
+        # Nothing was crawled, so there is nothing to hand over. Deciding what
+        # an empty stats frame should look like belongs to the adapter.
+        service = self.make(crawler_class=EmptyBlockingCrawler)
+        final = self._stop_an_empty_crawl(service)
 
         self.assertIsNone(service.take_outcome(final.task_id))
 
@@ -546,15 +718,19 @@ class TheChannelIsInvisibleWithoutAListenerTests(ChannelTestCase):
 
 class CredentialsStayOutOfTheChannelTests(ChannelTestCase):
     def test_no_event_carries_the_key(self) -> None:
+        # Events are built from a message and a number, never from params.
         service = self.make(listen=True)
         self.finish(service, service.start_crawl_and_analyze("BV1xx411c7mD"))
 
         for event in self.events:
             self.assertNotIn(SECRET_KEY, json.dumps(event.__dict__, ensure_ascii=False, default=str))
 
-    def test_the_outcome_carries_no_key(self) -> None:
-        # The processor is handed llm_config and could echo it back into its
-        # result; the outcome is a hand-off, not a place to launder one.
+    def test_the_service_puts_no_credentials_into_the_outcome(self) -> None:
+        # Scoped to what the service itself controls. The outcome is a faithful
+        # hand-off of the processor's result (see
+        # test_the_outcome_is_exactly_what_the_processor_returned), so this
+        # cannot promise anything about a processor that echoes its own config
+        # back -- only that the service does not merge its params in on the way.
         service = self.make()
         final = self.finish(service, service.start_crawl_and_analyze("BV1xx411c7mD"))
 
