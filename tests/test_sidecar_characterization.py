@@ -16,8 +16,11 @@ before the migration rather than after:
 If a change makes one of these fail, that is a behaviour change and belongs in
 its own PR with its own justification -- not in the migration.
 """
+import base64
+import tempfile
 import threading
 import unittest
+from pathlib import Path
 
 from backend.sidecar import Sidecar, SidecarServices
 from src.processor.analysis_processor import AnalysisCancelled
@@ -167,7 +170,7 @@ ANALYSIS_RESULT = {
 
 
 def make(comments=None, error=None, gate=None, processor=None):
-    holder: dict = {}
+    holder: dict = {"created": threading.Event()}
 
     def factory(progress):
         # DataProcessor.clean_comments fills defaults in place, so the crawler
@@ -179,6 +182,7 @@ def make(comments=None, error=None, gate=None, processor=None):
             error=error,
             gate=gate,
         )
+        holder["created"].set()
         return holder["crawler"]
 
     services = SidecarServices(
@@ -187,6 +191,30 @@ def make(comments=None, error=None, gate=None, processor=None):
         analysis_processor=processor or StubAnalysisProcessor(result=ANALYSIS_RESULT),
     )
     return RecordingSidecar(services), holder
+
+
+def crawler_of(holder: dict, timeout: float = 5.0) -> StubCrawler:
+    """Wait for the worker thread to build the crawler, then return it.
+
+    comments.start returns as soon as the thread is spawned; the factory runs
+    inside that thread. Reading holder["crawler"] straight after handle() is a
+    race that raises KeyError whenever the scheduler is slow.
+    """
+    if not holder["created"].wait(timeout=timeout):
+        raise AssertionError("crawler was never created")
+    crawler = holder["crawler"]
+    if not crawler.entered.wait(timeout=timeout):
+        raise AssertionError("crawler never entered crawl_comments")
+    return crawler
+
+
+def sequence(sidecar: RecordingSidecar) -> list[tuple]:
+    """Every event frame as (event, mode), logs included, in emission order."""
+    return [
+        (frame["event"], frame.get("mode"))
+        for frame in sidecar.frames
+        if frame.get("kind") == "event"
+    ]
 
 
 def drain(sidecar: RecordingSidecar, timeout: float = 5.0) -> None:
@@ -267,11 +295,14 @@ class CommentCrawlBaseline(unittest.TestCase):
         sidecar, _ = make(comments=[])
         sidecar._run_comments({"input": "BV1xx411c7mD", "max_pages": 1})
 
-        self.assertFalse(sidecar.has("error", "comments"))
+        # Exact sequence: an extra frame or a reordering is a contract change.
+        self.assertEqual(sequence(sidecar),
+                         [("stats", "comments"), ("finished", "comments"), ("progress", "comments")])
         finished = sidecar.event("finished", "comments")
         self.assertEqual(finished["count"], 0)
         self.assertEqual(finished["stats"]["total"], 0)
-        self.assertEqual(sidecar.event("progress", "comments")["status"], "idle")
+        idle = sidecar.event("progress", "comments")
+        self.assertEqual((idle["status"], idle["percent"]), ("idle", 100))
 
     def test_failure_emits_error_without_finished_but_still_goes_idle(self) -> None:
         sidecar, _ = make(error=RuntimeError("接口返回 412"))
@@ -282,11 +313,14 @@ class CommentCrawlBaseline(unittest.TestCase):
             sidecar._run_comments({"input": "BV1xx411c7mD", "max_pages": 1})
         self.assertIn("comments task failed", "\n".join(captured.output))
 
-        self.assertFalse(sidecar.has("finished", "comments"))
+        # No stats frame on this path, and no finished -- just error then idle.
+        self.assertEqual(sequence(sidecar),
+                         [("error", "comments"), ("progress", "comments")])
         error = sidecar.event("error", "comments")
         self.assertEqual(error["mode"], "comments")
         self.assertIn("412", error["message"])
-        self.assertEqual(sidecar.event("progress", "comments")["status"], "idle")
+        idle = sidecar.event("progress", "comments")
+        self.assertEqual((idle["status"], idle["percent"]), ("idle", 100))
 
     def test_comment_context_is_recorded_for_asset_naming(self) -> None:
         sidecar, _ = make(comments=[COMMENT_A])
@@ -340,13 +374,13 @@ class CommentStopBaseline(unittest.TestCase):
 
         sidecar.handle({"id": "req-1", "method": "comments.start",
                         "params": {"input": "BV1xx411c7mD", "max_pages": 5}})
-        self.assertTrue(holder["crawler"].entered.wait(timeout=5))
+        crawler = crawler_of(holder)
 
         # task.stop emits its frames on the calling thread, so the crawler is
         # released only afterwards: "stopping" then precedes "idle" because the
         # test ordered them, not because it won a race against the worker.
         sidecar.handle({"id": "req-2", "method": "task.stop", "params": {}})
-        self.assertTrue(holder["crawler"].stopped)
+        self.assertTrue(crawler.stopped)
         # Stopping a crawl must not arm the analysis cancel flag (v3.1.1).
         self.assertFalse(sidecar._analysis_cancel.is_set())
         gate.set()
@@ -357,17 +391,30 @@ class CommentStopBaseline(unittest.TestCase):
         self.assertEqual(sidecar.event("finished", "comments")["count"], 1)
         self.assertEqual([row["comment_id"] for row in sidecar._last_comments], [1])
 
-        statuses = [frame["status"] for frame in sidecar.frames
-                    if frame.get("event") == "progress" and frame.get("mode") == "comments"]
-        self.assertIn("stopping", statuses)
-        self.assertEqual(statuses[-1], "idle")
+        # Full sequence, both threads: start frames, the stop frames emitted on
+        # the calling thread, then the worker finishing normally.
+        self.assertEqual(sequence(sidecar), [
+            ("progress", "comments"),   # running, 0
+            ("log", None),              # 评论任务已启动
+            ("log", None),              # 正在停止爬取任务...
+            ("progress", "comments"),   # stopping, 0
+            ("stats", "comments"),
+            ("finished", "comments"),
+            ("progress", "comments"),   # idle, 100
+        ])
+        progress_frames = [frame for frame in sidecar.frames
+                           if frame.get("event") == "progress" and frame.get("mode") == "comments"]
+        self.assertEqual(
+            [(frame["status"], frame["percent"]) for frame in progress_frames],
+            [("running", 0), ("stopping", 0), ("idle", 100)],
+        )
 
     def test_stop_reports_the_crawler_wording_not_the_analysis_wording(self) -> None:
         gate = threading.Event()
         sidecar, holder = make(comments=[COMMENT_A], gate=gate)
         sidecar.handle({"id": "req-1", "method": "comments.start",
                         "params": {"input": "BV1xx411c7mD", "max_pages": 5}})
-        self.assertTrue(holder["crawler"].entered.wait(timeout=5))
+        crawler_of(holder)
 
         sidecar.handle({"id": "req-2", "method": "task.stop", "params": {}})
         gate.set()
@@ -439,30 +486,105 @@ class AnalysisBaseline(unittest.TestCase):
 
         sidecar._run_analysis({"source": "comments", "llm_config": {"api_key": "k"}})
 
-        self.assertFalse(sidecar.has("finished", "analysis"))
-        self.assertFalse(sidecar.has("error", "analysis"))
+        # cancelled -> log -> idle, in that order, and nothing else after.
+        self.assertEqual(sequence(sidecar), [
+            ("analysis.progress", None),
+            ("cancelled", "analysis"),
+            ("log", None),
+            ("progress", "analysis"),
+        ])
         self.assertEqual(sidecar.event("cancelled", "analysis")["mode"], "analysis")
-        logs = [frame["message"] for frame in sidecar.frames if frame.get("event") == "log"]
-        self.assertIn("分析任务已取消", logs)
-        self.assertEqual(sidecar.event("progress", "analysis")["status"], "idle")
+        self.assertEqual(sidecar.event("cancelled", "analysis")["message"], "分析已被取消")
+        self.assertEqual(sidecar.event("log")["message"], "分析任务已取消")
+        idle = sidecar.event("progress", "analysis")
+        self.assertEqual((idle["status"], idle["percent"]), ("idle", 100))
 
     def test_every_source_reaches_the_processor_with_both_datasets(self) -> None:
         # Source routing lives inside the processor, so the sidecar contract is
         # simply that it hands over both datasets plus the params untouched.
         # The migration must keep dynamics and all on this path.
-        for source in ("comments", "dynamics", "all"):
+        # "auto", a missing key and an unknown value must reach the processor
+        # untouched too: _normalize_source resolves them from the data, and the
+        # migration must not route on that inferred value.
+        for source in ("comments", "dynamics", "all", "auto", "not-a-source", None):
             with self.subTest(source=source):
                 processor = StubAnalysisProcessor(result=ANALYSIS_RESULT)
                 sidecar, _ = make(processor=processor)
                 sidecar._last_comments = [COMMENT_A]
                 sidecar._last_dynamics = [{"dynamic_id": "d1", "content": "一条动态"}]
 
-                sidecar._run_analysis({"source": source, "llm_config": {"api_key": "k"}})
+                request = {"llm_config": {"api_key": "k"}}
+                if source is not None:
+                    request["source"] = source
+                sidecar._run_analysis(request)
 
                 comments, dynamics, params = processor.calls[0]
                 self.assertEqual(len(comments), 1)
                 self.assertEqual(len(dynamics), 1)
-                self.assertEqual(params["source"], source)
+                if source is None:
+                    self.assertNotIn("source", params)
+                else:
+                    self.assertEqual(params["source"], source)
+                # Whatever the source, the sidecar never resolves it itself.
+                self.assertTrue(sidecar.has("finished", "analysis"))
+
+    def test_analysis_latest_returns_the_compact_display_shape(self) -> None:
+        # The RPC never returns the raw result: _display_analysis_result
+        # truncates every field and blanks report_markdown, while the raw result
+        # stays in memory for analysis.export. Both halves are pinned here.
+        raw_png = b"characterization-word-cloud-bytes"
+        processor = StubAnalysisProcessor(result={
+            **ANALYSIS_RESULT,
+            "word_counts": [{"name": "关键词", "value": 3}],
+            "notable_quotes": ["一条代表性评论"],
+            "word_cloud_image": "data:image/png;base64," + base64.b64encode(raw_png).decode("ascii"),
+        })
+        sidecar, _ = make(processor=processor)
+        sidecar._last_comments = [COMMENT_A]
+
+        original_root = Sidecar._analysis_asset_root
+        with tempfile.TemporaryDirectory() as temp_dir:
+            try:
+                Sidecar._analysis_asset_root = staticmethod(lambda: Path(temp_dir))
+                sidecar._run_analysis({"source": "comments", "llm_config": {"api_key": "k"}})
+                sidecar.handle({"id": "latest-1", "method": "analysis.latest", "params": {}})
+
+                responses = [frame for frame in sidecar.frames
+                             if frame.get("kind") == "response" and frame.get("id") == "latest-1"]
+                self.assertEqual(len(responses), 1)
+                self.assertTrue(responses[0]["ok"])
+                payload = responses[0]["result"]
+
+                self.assertEqual(sorted(payload), sorted([
+                    "summary", "summary_points", "overview", "sentiment_counts",
+                    "topic_counts", "word_counts", "risk_points", "insights",
+                    "notable_quotes", "time_series", "region_counts",
+                    "overseas_region_counts", "user_level_counts",
+                    "content_type_counts", "engagement_items", "deep_analysis",
+                    "report_markdown", "meta",
+                    "word_cloud_image", "word_cloud_image_path",
+                ]))
+                self.assertEqual(payload["report_markdown"], "")
+                self.assertEqual(payload["summary"], "总体偏正面")
+                self.assertTrue(payload["word_cloud_image"].startswith("data:image/png;base64,"))
+                image_path = Path(payload["word_cloud_image_path"])
+                self.assertTrue(image_path.is_file())
+                self.assertEqual(image_path.read_bytes(), raw_png)
+            finally:
+                Sidecar._analysis_asset_root = original_root
+
+        # The RPC payload is a projection; the raw result is untouched.
+        self.assertEqual(sidecar._last_analysis["report_markdown"], "# 报告")
+
+    def test_analysis_latest_without_a_result_answers_not_ok(self) -> None:
+        sidecar, _ = make()
+        sidecar.handle({"id": "latest-2", "method": "analysis.latest", "params": {}})
+
+        responses = [frame for frame in sidecar.frames
+                     if frame.get("kind") == "response" and frame.get("id") == "latest-2"]
+        self.assertEqual(len(responses), 1)
+        self.assertFalse(responses[0]["ok"])
+        self.assertIn("暂无分析结果", responses[0]["error"])
 
     def test_analysis_params_are_passed_through_verbatim(self) -> None:
         processor = StubAnalysisProcessor(result=ANALYSIS_RESULT)
