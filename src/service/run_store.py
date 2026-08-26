@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from src.exporter.csv_exporter import CSVExporter
+from src.service.credentials import scrub
 from src.service.models import ErrorCode, RunStatus, ServiceError
 from src.service.paths import agent_runs_root
 
@@ -186,12 +187,12 @@ class RunStore:
         report = str(payload.pop("report_markdown", "") or "")
         if report:
             report_path = path / REPORT_MD
-            _atomic_write_text(report_path, report)
+            _atomic_write_text(report_path, scrub(report))
             artifacts["report_markdown"] = str(report_path)
 
         analysis_path = path / ANALYSIS_JSON
         _atomic_write_text(
-            analysis_path, json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+            analysis_path, scrub(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
         )
         artifacts["analysis_json"] = str(analysis_path)
         return artifacts
