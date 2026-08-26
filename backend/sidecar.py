@@ -37,6 +37,7 @@ from src.exporter.csv_exporter import CSVExporter
 from src.processor.analysis_processor import AnalysisCancelled, AnalysisError, LLMAnalysisProcessor
 from src.processor.data_processor import DataProcessor
 from src.service.agent_service import AgentService
+from src.service.credentials import LLMCredentials
 from src.service.models import DESKTOP_POLICY, EventKind, RunStatus, TaskEvent
 from src.service.paths import analysis_assets_root
 from utils.helpers import ContentType, extract_uid, parse_input
@@ -207,6 +208,8 @@ class Sidecar:
     def _handle_agent_event(self, event: TaskEvent) -> None:
         if event.kind == EventKind.LOG:
             self._make_progress_callback("comments", self._agent_comment_max_pages)(event.message)
+        elif event.kind == EventKind.ANALYSIS_PROGRESS:
+            self.emit("analysis.progress", message=event.message, percent=int(event.percent or 0))
 
     def _run_comments(self, params: dict[str, Any]) -> None:
         try:
@@ -278,6 +281,61 @@ class Sidecar:
             self.emit("progress", status="idle", mode="dynamics", percent=100)
 
     def _run_analysis(self, params: dict[str, Any]) -> None:
+        # Public desktop comment sessions have a persisted run id from stage 4.
+        # Keep the legacy path for dynamics/all and for injected pre-migration
+        # in-memory comment state used by compatibility callers.
+        if params.get("source") == "comments" and self._last_comment_run_id:
+            self._run_comment_analysis(params)
+            return
+        self._run_legacy_analysis(params)
+
+    def _run_comment_analysis(self, params: dict[str, Any]) -> None:
+        try:
+            credentials = LLMCredentials.from_config(params.get("llm_config"), source="desktop")
+            started = self._agent_service.start_analyze(
+                self._last_comment_run_id,
+                sample_size=params.get("sample_size", 300),
+                strategy=str(params.get("strategy") or "sample"),
+                chart_keys=params.get("chart_keys"),
+                batch_size=params.get("batch_size"),
+                credentials=credentials,
+            )
+            self._active_agent_task_id = started.task_id
+            snapshot = started
+            while not snapshot.done:
+                snapshot = self._agent_service.wait(started.task_id, timeout=0.1)
+
+            if snapshot.status == RunStatus.CANCELLED:
+                self.emit("cancelled", mode="analysis", message="分析已被取消")
+                self.emit("log", message="分析任务已取消")
+                return
+            if snapshot.status == RunStatus.FAILED:
+                raise AnalysisError(snapshot.error or "分析任务失败")
+
+            outcome = self._agent_service.take_outcome(started.task_id)
+            if outcome is None or outcome.analysis is None:
+                raise AnalysisError("分析任务完成但结果不可用")
+            result = outcome.analysis
+            result["_asset_context"] = self._analysis_asset_context(params)
+            self._last_analysis = result
+            display_result = self._display_analysis_result(result)
+            self.emit(
+                "finished",
+                mode="analysis",
+                count=(result.get("meta") or {}).get("analyzed_records", 0),
+                stats=result.get("overview") or {},
+                result=display_result,
+            )
+        except AnalysisError as exc:
+            self.emit("error", mode="analysis", message=str(exc))
+        except Exception as exc:
+            logger.exception("analysis task failed")
+            self.emit("error", mode="analysis", message=str(exc))
+        finally:
+            self._active_agent_task_id = ""
+            self.emit("progress", status="idle", mode="analysis", percent=100)
+
+    def _run_legacy_analysis(self, params: dict[str, Any]) -> None:
         try:
             self._active_crawler = None
             self._analysis_cancel.clear()
