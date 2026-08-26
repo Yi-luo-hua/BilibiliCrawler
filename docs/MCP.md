@@ -2,8 +2,6 @@
 
 让 agent 直接爬取并分析 B 站公开评论，无需启动桌面客户端。
 
-对应 [Issue #3](https://github.com/Yi-luo-hua/BilibiliCrawler/issues/3)。
-
 ---
 
 ## 这是什么
