@@ -223,6 +223,69 @@ class PerRequestParameterTests(PolicyTestCase):
         self.assertEqual(self.processor.params[0]["batch_size"], 200)
 
 
+class InjectionPointTests(PolicyTestCase):
+    """Stage 4 hands AgentService the objects SidecarServices already holds.
+
+    crawler_factory and analysis_processor are substituted by every test in this
+    file, so they are covered implicitly. data_processor and api were not, and a
+    desktop path silently using a different DataProcessor would report different
+    stats to the UI.
+    """
+
+    def test_an_injected_data_processor_is_the_one_that_runs(self) -> None:
+        calls: list[str] = []
+
+        class RecordingDataProcessor:
+            @staticmethod
+            def clean_comments(comments):
+                calls.append("clean_comments")
+                return [dict(row, content="cleaned by the injected processor") for row in comments]
+
+            @staticmethod
+            def get_statistics(comments):
+                calls.append("get_statistics")
+                return {"total": len(comments), "sentinel": "from the injected processor"}
+
+        def factory(progress):
+            crawler = RecordingCrawler(progress)
+            self.crawlers.append(crawler)
+            return crawler
+
+        service = AgentService(
+            store=self.store,
+            api=object(),
+            crawler_factory=factory,
+            analysis_processor=self.processor,
+            data_processor=RecordingDataProcessor,
+            credentials_resolver=lambda: LLMCredentials(api_key=SECRET_KEY),
+        )
+        self.services.append(service)
+
+        snapshot = self.finish(service, service.start_crawl("BV1xx411c7mD"))
+
+        self.assertEqual(calls, ["clean_comments", "get_statistics"])
+        # Its output is what got persisted and counted, not a default's.
+        manifest = self.store.read_manifest(snapshot.run_id)
+        self.assertEqual(manifest["counts"]["comments"], 1)
+        stored = self.store.load_comments(snapshot.run_id)
+        self.assertEqual(stored[0]["content"], "cleaned by the injected processor")
+
+    def test_the_injected_api_reaches_the_default_crawler_factory(self) -> None:
+        # With no crawler_factory supplied, the service builds a real
+        # CommentCrawler; the desktop's logged-in session must be the one it uses.
+        sentinel = object()
+        service = AgentService(
+            store=self.store,
+            api=sentinel,
+            analysis_processor=self.processor,
+            credentials_resolver=lambda: LLMCredentials(api_key=SECRET_KEY),
+        )
+        self.services.append(service)
+
+        crawler = service._crawler_factory(lambda message: None)
+        self.assertIs(crawler.api, sentinel)
+
+
 class CredentialsStayPerRequestTests(PolicyTestCase):
     def test_supplied_credentials_are_used_instead_of_the_resolver(self) -> None:
         def explode():
