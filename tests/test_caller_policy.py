@@ -193,6 +193,20 @@ class PolicyValidationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             CallerPolicy(default_chart_keys=())
 
+    def test_a_mutable_chart_set_is_copied_rather_than_referenced(self) -> None:
+        # frozen=True does not stop the caller emptying a list they still hold.
+        # An emptied set means "every chart" downstream, word cloud included.
+        keys = ["topic_ranking", "time_trend"]
+        policy = CallerPolicy(default_chart_keys=keys)
+        keys.clear()
+
+        self.assertEqual(policy.resolve_chart_keys(), ["topic_ranking", "time_trend"])
+        self.assertIsInstance(policy.default_chart_keys, tuple)
+
+    def test_a_string_chart_set_is_rejected_rather_than_split_into_letters(self) -> None:
+        with self.assertRaises(ValueError):
+            CallerPolicy(default_chart_keys="topic_ranking")
+
     def test_the_shipped_policies_are_valid(self) -> None:
         self.assertEqual(AGENT_POLICY, CallerPolicy(**dataclasses.asdict(AGENT_POLICY)))
         self.assertEqual(DESKTOP_POLICY, CallerPolicy(**dataclasses.asdict(DESKTOP_POLICY)))
@@ -472,6 +486,27 @@ class CredentialsStayPerRequestTests(PolicyTestCase):
             service.start_analyze(run_id, credentials={"api_key": "sk-dict-form-123"})
         self.assertEqual(ctx.exception.code, ErrorCode.INVALID_INPUT)
         self.assertIn("from_config", str(ctx.exception))
+
+    def test_a_resolver_returning_the_wrong_type_is_rejected_the_same_way(self) -> None:
+        # The explicit argument and the resolver's return both reach
+        # to_llm_config(); validating only the first left this path raising a
+        # bare AttributeError.
+        service = self.make(resolver=lambda: {"api_key": "sk-resolver-dict-123"})
+        run_id = self.finish(service, service.start_crawl("BV1xx411c7mD")).run_id
+
+        with self.assertRaises(ServiceError) as ctx:
+            service.start_analyze(run_id)
+        self.assertEqual(ctx.exception.code, ErrorCode.INVALID_INPUT)
+        self.assertIn("credentials_resolver", str(ctx.exception))
+        self.assertIn("from_config", str(ctx.exception))
+
+    def test_the_rejection_message_names_the_type_it_got(self) -> None:
+        service = self.make()
+        run_id = self.finish(service, service.start_crawl("BV1xx411c7mD")).run_id
+
+        with self.assertRaises(ServiceError) as ctx:
+            service.start_analyze(run_id, credentials="sk-a-bare-string")
+        self.assertIn("str", str(ctx.exception))
 
     def test_from_config_converts_the_rpc_shape(self) -> None:
         credentials = LLMCredentials.from_config(

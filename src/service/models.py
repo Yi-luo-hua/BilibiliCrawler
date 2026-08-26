@@ -109,6 +109,19 @@ class CallerPolicy:
     default_chart_keys: tuple[str, ...] | None = tuple(AGENT_CHART_KEYS)
 
     def __post_init__(self) -> None:
+        # frozen=True only stops rebinding the attribute; it does not stop a
+        # caller keeping a reference to a list they passed in and emptying it
+        # later. An emptied chart set means "every chart" downstream, which puts
+        # the word cloud back, so the sequence is copied into a tuple here.
+        if self.default_chart_keys is not None:
+            if isinstance(self.default_chart_keys, (str, bytes)):
+                raise ValueError("default_chart_keys must be a sequence of names, not a string")
+            try:
+                frozen_keys = tuple(str(item) for item in self.default_chart_keys)
+            except TypeError as exc:
+                raise ValueError("default_chart_keys must be iterable or None") from exc
+            object.__setattr__(self, "default_chart_keys", frozen_keys)
+
         # A misconfigured policy would otherwise hand the crawler a page count
         # of zero or a negative one, which no downstream code checks for.
         if self.max_pages_default < 1:

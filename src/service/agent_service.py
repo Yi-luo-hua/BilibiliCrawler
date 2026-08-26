@@ -183,7 +183,7 @@ class AgentService:
         crawler_factory: Callable[[Callable[[str], None]], Any] | None = None,
         analysis_processor: Any = LLMAnalysisProcessor,
         data_processor: Any = DataProcessor,
-        credentials_resolver: Callable[[], Any] = resolve_llm_credentials,
+        credentials_resolver: Callable[[], LLMCredentials] = resolve_llm_credentials,
         policy: CallerPolicy | None = None,
     ) -> None:
         self._store = store or RunStore()
@@ -592,18 +592,9 @@ class AgentService:
         if chosen not in {"sample", "all"}:
             chosen = "sample"
         if credentials is None:
-            resolved = self._resolve_credentials()
-        elif isinstance(credentials, LLMCredentials):
-            resolved = credentials
+            resolved = _require_credentials(self._resolve_credentials(), "credentials_resolver 的返回值")
         else:
-            # A caller holding the RPC's llm_config dict should convert it with
-            # LLMCredentials.from_config rather than get an AttributeError from
-            # somewhere deeper.
-            raise ServiceError(
-                ErrorCode.INVALID_INPUT,
-                "credentials 必须是 LLMCredentials；如果手上是 llm_config 字典，"
-                "请先用 LLMCredentials.from_config() 转换。",
-            )
+            resolved = _require_credentials(credentials, "credentials 参数")
         params: dict[str, Any] = {
             "source": "comments",
             "strategy": chosen,
@@ -656,6 +647,22 @@ class AgentService:
             error=error,
             error_code=error_code,
         )
+
+
+def _require_credentials(value: Any, origin: str) -> LLMCredentials:
+    """Check anything credential-shaped at the boundary it arrives through.
+
+    Both the explicit argument and whatever credentials_resolver returns end up
+    calling to_llm_config(); validating only the former left a caller supplying
+    a resolver to trip over a bare AttributeError instead.
+    """
+    if isinstance(value, LLMCredentials):
+        return value
+    raise ServiceError(
+        ErrorCode.INVALID_INPUT,
+        f"{origin} 必须是 LLMCredentials，收到 {type(value).__name__}；"
+        "如果手上是 llm_config 字典，请先用 LLMCredentials.from_config() 转换。",
+    )
 
 
 def _public(params: dict[str, Any]) -> dict[str, Any]:
