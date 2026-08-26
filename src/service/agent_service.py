@@ -24,29 +24,20 @@ from src.processor.analysis_processor import AnalysisCancelled, AnalysisError, L
 from src.processor.data_processor import DataProcessor
 from src.service.credentials import resolve_llm_credentials, scrub
 from src.service.models import (
-    AGENT_CHART_KEYS,
-    MAX_PAGES_CEILING,
-    MAX_PAGES_DEFAULT,
     SAMPLE_SIZE_DEFAULT,
+    CallerPolicy,
     ErrorCode,
     RunStatus,
     ServiceError,
     TaskKind,
     TaskSnapshot,
+    clamp_int as _clamp,
 )
 from src.service.run_store import RunStore, new_run_id
 
 logger = logging.getLogger(__name__)
 
 ProgressEvent = tuple[int, str]
-
-
-def _clamp(value: Any, default: int, low: int, high: int) -> int:
-    try:
-        number = int(value)
-    except (TypeError, ValueError):
-        return default
-    return max(low, min(high, number))
 
 
 class _Task:
@@ -193,6 +184,7 @@ class AgentService:
         analysis_processor: Any = LLMAnalysisProcessor,
         data_processor: Any = DataProcessor,
         credentials_resolver: Callable[[], Any] = resolve_llm_credentials,
+        policy: CallerPolicy | None = None,
     ) -> None:
         self._store = store or RunStore()
         self._api = api if api is not None else BilibiliAPI()
@@ -202,6 +194,9 @@ class AgentService:
         self._analysis_processor = analysis_processor
         self._data_processor = data_processor
         self._resolve_credentials = credentials_resolver
+        # Static limits only. Credentials are never stored here; they arrive per
+        # analysis call and leave with it.
+        self._policy = policy or CallerPolicy()
 
         self._lock = threading.Lock()
         self._active: _Task | None = None
@@ -210,6 +205,10 @@ class AgentService:
     @property
     def store(self) -> RunStore:
         return self._store
+
+    @property
+    def policy(self) -> CallerPolicy:
+        return self._policy
 
     # -- task lifecycle ----------------------------------------------------
     def _begin(self, kind: str, run_id: str) -> _Task:
@@ -317,7 +316,7 @@ class AgentService:
     def start_crawl(
         self,
         url: str,
-        max_pages: int = MAX_PAGES_DEFAULT,
+        max_pages: int | None = None,
         include_replies: bool = True,
         sort_mode: int = 3,
     ) -> TaskSnapshot:
@@ -334,12 +333,15 @@ class AgentService:
         run_id: str,
         sample_size: int = SAMPLE_SIZE_DEFAULT,
         strategy: str = "sample",
+        chart_keys: list[str] | None = None,
+        batch_size: int | None = None,
+        credentials: Any = None,
     ) -> TaskSnapshot:
         # Validate the run and its data before claiming the single task slot,
         # so a bad run_id cannot make the service look busy.
         self._store.run_dir(run_id)
         self._store.load_comments(run_id)
-        params = self._analysis_params(sample_size, strategy)
+        params = self._analysis_params(sample_size, strategy, chart_keys, batch_size, credentials)
         task = self._begin(TaskKind.ANALYZE, run_id)
         # Carry the crawl's counts and artifacts forward so the snapshot for a
         # re-analysis still reports how many comments the run holds.
@@ -356,14 +358,17 @@ class AgentService:
     def start_crawl_and_analyze(
         self,
         url: str,
-        max_pages: int = MAX_PAGES_DEFAULT,
+        max_pages: int | None = None,
         include_replies: bool = True,
         sort_mode: int = 3,
         sample_size: int = SAMPLE_SIZE_DEFAULT,
         strategy: str = "sample",
+        chart_keys: list[str] | None = None,
+        batch_size: int | None = None,
+        credentials: Any = None,
     ) -> TaskSnapshot:
         crawl_params = self._crawl_params(url, max_pages, include_replies, sort_mode)
-        analysis_params = self._analysis_params(sample_size, strategy)
+        analysis_params = self._analysis_params(sample_size, strategy, chart_keys, batch_size, credentials)
         task = self._begin(TaskKind.CRAWL_AND_ANALYZE, new_run_id())
         self._create_run_or_release(
             task, TaskKind.CRAWL_AND_ANALYZE, {**crawl_params, **_public(analysis_params)}
@@ -561,29 +566,48 @@ class AgentService:
             raise ServiceError(ErrorCode.INVALID_INPUT, "url 不能为空")
         return {
             "url": target,
-            # Ceiling is enforced here, not in the adapter, so no tool argument
-            # or CLI flag can raise it.
-            "max_pages": _clamp(max_pages, MAX_PAGES_DEFAULT, 1, MAX_PAGES_CEILING),
+            # The ceiling comes from the caller's policy and is applied here,
+            # not in the adapter, so no tool argument or CLI flag can raise it.
+            "max_pages": self._policy.resolve_max_pages(max_pages),
             "include_replies": bool(include_replies),
             # Only 3 (by time) and 2 (by popularity) are meaningful to the
             # upstream API; anything else would be forwarded verbatim.
             "sort_mode": int(sort_mode) if sort_mode in (2, 3, "2", "3") else 3,
         }
 
-    def _analysis_params(self, sample_size: Any, strategy: Any) -> dict[str, Any]:
+    def _analysis_params(
+        self,
+        sample_size: Any,
+        strategy: Any,
+        chart_keys: Any = None,
+        batch_size: Any = None,
+        credentials: Any = None,
+    ) -> dict[str, Any]:
+        """Build one analysis request.
+
+        Everything credential-shaped is resolved here and handed straight to the
+        processor, so no caller has to keep a key alive between requests.
+        """
         chosen = str(strategy or "sample").strip()
         if chosen not in {"sample", "all"}:
             chosen = "sample"
-        credentials = self._resolve_credentials()
-        return {
+        resolved = credentials if credentials is not None else self._resolve_credentials()
+        params: dict[str, Any] = {
             "source": "comments",
             "strategy": chosen,
             "sample_size": _clamp(sample_size, SAMPLE_SIZE_DEFAULT, 20, 2000),
-            # Must stay explicit and non-empty: _normalize_chart_keys falls back
-            # to the full set (word cloud included) when handed an empty list.
-            "chart_keys": list(AGENT_CHART_KEYS),
-            "llm_config": credentials.to_llm_config(),
+            "llm_config": resolved.to_llm_config(),
         }
+        # Omitted rather than sent empty: _normalize_chart_keys falls back to the
+        # full set (word cloud included) when handed an empty list, so an agent
+        # must always send an explicit non-empty list while the desktop wants the
+        # processor's own default when the UI ticked nothing.
+        selected = self._policy.resolve_chart_keys(chart_keys)
+        if selected is not None:
+            params["chart_keys"] = selected
+        if batch_size is not None:
+            params["batch_size"] = _clamp(batch_size, 80, 20, 200)
+        return params
 
     def _snapshot_from_manifest(self, run_id: str) -> TaskSnapshot:
         """Rebuild state for a run this process did not start.
