@@ -17,10 +17,13 @@ If a change makes one of these fail, that is a behaviour change and belongs in
 its own PR with its own justification -- not in the migration.
 """
 import base64
+import json
+import os
 import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from backend.sidecar import Sidecar, SidecarServices
 from src.processor.analysis_processor import AnalysisCancelled
@@ -256,6 +259,26 @@ def drain(sidecar: RecordingSidecar, timeout: float = 5.0) -> None:
 
 
 class CommentCrawlBaseline(unittest.TestCase):
+    def test_success_persists_a_run_for_followup_analysis(self) -> None:
+        with tempfile.TemporaryDirectory() as run_root, patch.dict(
+            os.environ, {"BILIBILI_AGENT_RUNS_DIR": run_root}
+        ):
+            sidecar, _ = make(comments=[COMMENT_A, COMMENT_B])
+            sidecar.handle({"id": "req-1", "method": "comments.start",
+                            "params": {"input": "BV1xx411c7mD", "max_pages": 1}})
+            drain(sidecar)
+
+            run_dirs = [path for path in Path(run_root).iterdir() if path.is_dir()]
+            self.assertEqual(len(run_dirs), 1)
+            run_dir = run_dirs[0]
+            self.assertEqual(sidecar._last_comment_run_id, run_dir.name)
+            self.assertEqual(
+                json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))["status"],
+                "completed",
+            )
+            persisted = json.loads((run_dir / "comments.json").read_text(encoding="utf-8"))
+            self.assertEqual([row["comment_id"] for row in persisted], [1, 2])
+
     def test_success_emits_stats_then_finished_then_idle(self) -> None:
         sidecar, _ = make(comments=[COMMENT_A, COMMENT_B])
         sidecar._run_comments({"input": "BV1xx411c7mD", "max_pages": 1})

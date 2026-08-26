@@ -36,6 +36,8 @@ from src.crawler.dynamic_crawler import DynamicCrawler
 from src.exporter.csv_exporter import CSVExporter
 from src.processor.analysis_processor import AnalysisCancelled, AnalysisError, LLMAnalysisProcessor
 from src.processor.data_processor import DataProcessor
+from src.service.agent_service import AgentService
+from src.service.models import DESKTOP_POLICY, EventKind, RunStatus, TaskEvent
 from src.service.paths import analysis_assets_root
 from utils.helpers import ContentType, extract_uid, parse_input
 
@@ -87,6 +89,18 @@ class Sidecar:
         self._last_dynamics: list[dict[str, Any]] = []
         self._last_analysis: dict[str, Any] | None = None
         self._last_comment_context: dict[str, str] = {}
+        self._last_comment_run_id = ""
+        self._active_agent_task_id = ""
+        self._agent_comment_max_pages = 100
+        self._agent_service = AgentService(
+            api=self._services.api,
+            crawler_factory=self._services.comment_crawler_factory,
+            analysis_processor=self._services.analysis_processor,
+            data_processor=self._services.data_processor,
+            policy=DESKTOP_POLICY,
+            events=self._handle_agent_event,
+            retain_outcome=True,
+        )
         self._responses: "queue.Queue[dict[str, Any]]" = queue.Queue()
 
     def emit(self, event: str, **payload: Any) -> None:
@@ -167,6 +181,9 @@ class Sidecar:
             thread.start()
 
     def _stop_task(self) -> None:
+        if self._active_agent_task_id:
+            self._agent_service.stop(self._active_agent_task_id)
+            return
         crawler = self._active_crawler
         if crawler:
             crawler.stop()
@@ -187,31 +204,43 @@ class Sidecar:
 
         return callback
 
+    def _handle_agent_event(self, event: TaskEvent) -> None:
+        if event.kind == EventKind.LOG:
+            self._make_progress_callback("comments", self._agent_comment_max_pages)(event.message)
+
     def _run_comments(self, params: dict[str, Any]) -> None:
         try:
             max_pages = int(params.get("max_pages", 100))
             target_input = str(params.get("input") or "")
-            crawler = self._services.comment_crawler_factory(
-                self._make_progress_callback("comments", max_pages)
-            )
-            self._active_crawler = crawler
-            comments = crawler.crawl_comments(
+            self._agent_comment_max_pages = max_pages
+            started = self._agent_service.start_crawl(
                 target_input,
-                include_replies=bool(params.get("include_replies", True)),
                 max_pages=max_pages,
-                mode=int(params.get("sort_mode", 3)),
+                include_replies=bool(params.get("include_replies", True)),
+                sort_mode=int(params.get("sort_mode", 3)),
             )
-            cleaned = self._services.data_processor.clean_comments(comments)
-            stats = self._services.data_processor.get_statistics(cleaned)
-            self._last_comments = cleaned
+            self._active_agent_task_id = started.task_id
+            snapshot = started
+            while not snapshot.done:
+                snapshot = self._agent_service.wait(started.task_id, timeout=0.1)
+            if snapshot.status == RunStatus.FAILED:
+                raise RuntimeError(snapshot.error or "评论任务失败")
+
+            outcome = self._agent_service.take_outcome(started.task_id)
+            if outcome is None:
+                raise RuntimeError("评论任务完成但结果不可用")
+            comments = list(outcome.comments)
+            stats = dict(outcome.stats)
+            self._last_comments = comments
+            self._last_comment_run_id = started.run_id
             self._last_comment_context = self._comment_context(target_input)
             self.emit("stats", mode="comments", stats=stats)
-            self.emit("finished", mode="comments", count=len(cleaned), stats=stats)
+            self.emit("finished", mode="comments", count=len(comments), stats=stats)
         except Exception as exc:
             logger.exception("comments task failed")
             self.emit("error", mode="comments", message=str(exc))
         finally:
-            self._active_crawler = None
+            self._active_agent_task_id = ""
             self.emit("progress", status="idle", mode="comments", percent=100)
 
     def _run_dynamics(self, params: dict[str, Any]) -> None:

@@ -91,15 +91,15 @@ def clamp_int(value: Any, default: int, low: int, high: int) -> int:
 
 @dataclass(frozen=True)
 class CallerPolicy:
-    """Static limits that belong to a caller, not to a single request.
+    """Static behavior and limits that belong to a caller, not to a request.
 
     Deliberately holds no credentials. An API key is scoped to one analysis
     call, so it travels as an argument and is never stored on a long-lived
     object that could reach a repr, a log line or a manifest.
 
-    The defaults are the agent's: conservative page limits, and a chart set that
-    excludes the word cloud because an agent cannot use a PNG. The desktop needs
-    the opposite on both counts, which is what DESKTOP_POLICY expresses.
+    The defaults are the agent's: conservative page limits, an error for an empty
+    crawl, and a chart set that excludes the word cloud because an agent cannot
+    use a PNG. DESKTOP_POLICY expresses the desktop's different behavior.
     """
 
     max_pages_default: int = MAX_PAGES_DEFAULT
@@ -107,6 +107,8 @@ class CallerPolicy:
     max_pages_ceiling: int | None = MAX_PAGES_CEILING
     # None means "do not force a set"; the processor applies its own default.
     default_chart_keys: tuple[str, ...] | None = tuple(AGENT_CHART_KEYS)
+    # The desktop has always treated an empty crawl as a successful result.
+    empty_crawl_is_success: bool = False
 
     def __post_init__(self) -> None:
         # frozen=True only stops rebinding the attribute; it does not stop a
@@ -167,12 +169,13 @@ class CallerPolicy:
 # What every MCP tool and the CLI run under.
 AGENT_POLICY = CallerPolicy()
 
-# What backend/sidecar.py will pass once the migration wires it up: the desktop
-# default of 100 pages, no ceiling, and whatever chart set the UI ticked.
+# What backend/sidecar.py passes: the desktop default of 100 pages, no ceiling,
+# empty crawl results accepted, and whatever chart set the UI ticked.
 DESKTOP_POLICY = CallerPolicy(
     max_pages_default=100,
     max_pages_ceiling=None,
     default_chart_keys=None,
+    empty_crawl_is_success=True,
 )
 
 

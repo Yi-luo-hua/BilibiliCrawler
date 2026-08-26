@@ -233,8 +233,8 @@ class AgentService:
         self._analysis_processor = analysis_processor
         self._data_processor = data_processor
         self._resolve_credentials = credentials_resolver
-        # Static limits only. Credentials are never stored here; they arrive per
-        # analysis call and leave with it.
+        # Static caller behavior and limits only. Credentials are never stored
+        # here; they arrive per analysis call and leave with it.
         self._policy = policy or CallerPolicy()
         # The adapter-only channel. Both halves default to off, so the MCP and
         # CLI paths allocate nothing extra and behave exactly as before.
@@ -587,7 +587,7 @@ class AgentService:
             self._settle(task, "评论爬取完成", **self._crawl_results(task, cleaned))
             return
 
-        if not cleaned:
+        if not cleaned and not self._policy.empty_crawl_is_success:
             raise ServiceError(
                 ErrorCode.CRAWL_FAILED,
                 "没有爬到任何评论，请检查链接是否为公开可访问的视频/动态/专栏。",
@@ -606,7 +606,7 @@ class AgentService:
 
     def _crawl_results(self, task: _Task, cleaned: list[dict[str, Any]]) -> dict[str, Any]:
         """Persist the crawled comments and build the resulting state changes."""
-        if not cleaned:
+        if not cleaned and not self._policy.empty_crawl_is_success:
             # The data processor is deliberately not called here. It never was
             # on this path, and it is an injection point: one that rejects an
             # empty list would turn a crawl stopped before its first page from
