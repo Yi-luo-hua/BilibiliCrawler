@@ -215,6 +215,62 @@ class TaskSnapshot:
         }
 
 
+class EventKind:
+    """Typed progress events for an adapter that renders its own protocol.
+
+    Not a mirror of the sidecar's frame set, even where a name happens to match:
+    the service reports what happened and the adapter decides what to emit. In
+    particular terminal state is not an event here -- it is read from
+    TaskSnapshot -- so there is exactly one way to learn a task ended, and no
+    second path that could emit a stale `finished`.
+    """
+
+    # One line of crawler output, verbatim. The desktop parses its own page
+    # number out of this text, so it must not be reworded or reformatted.
+    LOG = "log"
+    # The processor's own 0-100, before the service folds it into the 70-95
+    # band a combined crawl-and-analyse run reports.
+    ANALYSIS_PROGRESS = "analysis_progress"
+
+
+@dataclass(frozen=True)
+class TaskEvent:
+    """One thing that happened while a task was running."""
+
+    kind: str
+    task_id: str
+    run_id: str
+    message: str = ""
+    # Raw, adapter-facing percentage. Only ANALYSIS_PROGRESS carries one.
+    percent: int | None = None
+
+
+@dataclass(frozen=True)
+class TaskOutcome:
+    """The heavy results TaskSnapshot deliberately drops.
+
+    TaskSnapshot travels back to an MCP client, so it stays small: a summary
+    string, a few counts and some file paths. Never comment bodies, never a
+    base64 word cloud, never the full report. A desktop adapter needs all three,
+    and needs the analysis exactly as the processor returned it -- before
+    RunStore.save_analysis rewrites word_cloud_image into a path and lifts
+    report_markdown out into its own file.
+
+    Handed over rather than copied: take_outcome() gives the caller these
+    objects and the service forgets them. Two owners of one mutable result dict
+    is how an adapter's own annotations would end up in the service's copy.
+    """
+
+    task_id: str
+    run_id: str
+    comments: list[dict[str, Any]] = field(default_factory=list)
+    # The full statistics dict, not the three integers that fit in
+    # TaskSnapshot.counts.
+    stats: dict[str, Any] = field(default_factory=dict)
+    # The processor's untouched return value, or None if analysis never ran.
+    analysis: dict[str, Any] | None = None
+
+
 class ServiceError(RuntimeError):
     """Business error with a machine-readable code and a human message."""
 

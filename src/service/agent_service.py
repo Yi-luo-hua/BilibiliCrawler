@@ -12,6 +12,7 @@ adapter is talking to a particular front end.
 """
 from __future__ import annotations
 
+import dataclasses
 import logging
 import queue
 import threading
@@ -27,9 +28,12 @@ from src.service.models import (
     SAMPLE_SIZE_DEFAULT,
     CallerPolicy,
     ErrorCode,
+    EventKind,
     RunStatus,
     ServiceError,
+    TaskEvent,
     TaskKind,
+    TaskOutcome,
     TaskSnapshot,
     clamp_int as _clamp,
 )
@@ -43,10 +47,17 @@ ProgressEvent = tuple[int, str]
 class _Task:
     """Mutable task state. All mutation goes through the instance lock."""
 
-    def __init__(self, task_id: str, run_id: str, kind: str) -> None:
+    def __init__(
+        self,
+        task_id: str,
+        run_id: str,
+        kind: str,
+        events: Callable[[TaskEvent], None] | None = None,
+    ) -> None:
         self.task_id = task_id
         self.run_id = run_id
         self.kind = kind
+        self._events = events
         self.status = RunStatus.QUEUED
         self.stage = ""
         self.percent = 0
@@ -170,6 +181,31 @@ class _Task:
         self.update(percent=percent, stage=message)
         self.progress.put((percent, message))
 
+    def notify(self, kind: str, message: str = "", percent: int | None = None) -> None:
+        """Push one typed event to the adapter listener, if there is one.
+
+        Called without the instance lock on purpose: a listener writes a frame
+        and may take locks of its own, and one that reads the snapshot back
+        would deadlock against a lock held across this call.
+        """
+        listener = self._events
+        if listener is None:
+            return
+        try:
+            listener(
+                TaskEvent(
+                    kind=kind,
+                    task_id=self.task_id,
+                    run_id=self.run_id,
+                    message=message,
+                    percent=percent,
+                )
+            )
+        except Exception:  # noqa: BLE001 - a broken listener must not kill the task
+            logger.error(
+                "listener failed for task %s: %s", self.task_id, scrub(traceback.format_exc())
+            )
+
     @property
     def alive(self) -> bool:
         return not self.done_event.is_set()
@@ -185,6 +221,8 @@ class AgentService:
         data_processor: Any = DataProcessor,
         credentials_resolver: Callable[[], LLMCredentials] = resolve_llm_credentials,
         policy: CallerPolicy | None = None,
+        events: Callable[[TaskEvent], None] | None = None,
+        retain_outcome: bool = False,
     ) -> None:
         self._store = store or RunStore()
         self._api = api if api is not None else BilibiliAPI()
@@ -197,6 +235,11 @@ class AgentService:
         # Static limits only. Credentials are never stored here; they arrive per
         # analysis call and leave with it.
         self._policy = policy or CallerPolicy()
+        # The adapter-only channel. Both halves default to off, so the MCP and
+        # CLI paths allocate nothing extra and behave exactly as before.
+        self._events = events
+        self._retain_outcome = bool(retain_outcome)
+        self._outcome: TaskOutcome | None = None
 
         self._lock = threading.Lock()
         self._active: _Task | None = None
@@ -222,9 +265,18 @@ class AgentService:
                     task_id=active.task_id,
                     run_id=active.run_id,
                 )
-            task = _Task(task_id=f"task-{new_run_id()}", run_id=run_id, kind=kind)
+            task = _Task(
+                task_id=f"task-{new_run_id()}",
+                run_id=run_id,
+                kind=kind,
+                events=self._events,
+            )
             self._active = task
             self._tasks[task.task_id] = task
+            # Only the newest task's outcome is kept. _tasks itself never
+            # shrinks, so hanging comment lists off it would turn a small leak
+            # into one that grows with every run.
+            self._outcome = None
             return task
 
     def _create_run_or_release(self, task: _Task, kind: str, params: dict[str, Any]) -> None:
@@ -415,6 +467,34 @@ class AgentService:
         task.done_event.wait(timeout=max(0.0, timeout))
         return task.snapshot()
 
+    def take_outcome(self, task_id: str) -> TaskOutcome | None:
+        """Hand the adapter the heavy results, once.
+
+        Ownership transfers: the service drops its reference, so a caller that
+        annotates the result dict is not quietly editing the service's copy too.
+
+        Returns None when the task is not the most recent one, when the service
+        was built without retain_outcome, or when the outcome was already taken.
+        """
+        with self._lock:
+            outcome = self._outcome
+            if outcome is None or outcome.task_id != task_id:
+                return None
+            self._outcome = None
+            return outcome
+
+    def _record_outcome(self, task: _Task, **fields: Any) -> None:
+        """Fold one stage's results into the current task's outcome.
+
+        The slot always belongs to this task: _begin clears it, and it cannot
+        begin a second task until the first one's thread has finished recording.
+        """
+        if not self._retain_outcome:
+            return
+        with self._lock:
+            current = self._outcome or TaskOutcome(task_id=task.task_id, run_id=task.run_id)
+            self._outcome = dataclasses.replace(current, **fields)
+
     def drain_progress(self, task_id: str) -> list[ProgressEvent]:
         task = self._tasks.get(task_id)
         if task is None:
@@ -449,8 +529,12 @@ class AgentService:
             # re-entrancy guarded because stop() itself logs through here.
             if task.cancel_event.is_set():
                 task.stop_crawler()
+            text = str(message)
             # Must never print: stdout belongs to the MCP JSON-RPC stream.
-            task.emit(min(70, task.percent + 2), str(message))
+            task.emit(min(70, task.percent + 2), text)
+            # Verbatim, and after the emit so a listener reading the snapshot
+            # back sees the state this line already produced.
+            task.notify(EventKind.LOG, text)
 
         crawler = self._crawler_factory(progress)
         task.attach_crawler(crawler)
@@ -498,13 +582,20 @@ class AgentService:
 
     def _crawl_results(self, task: _Task, cleaned: list[dict[str, Any]]) -> dict[str, Any]:
         """Persist the crawled comments and build the resulting state changes."""
+        # Computed even for an empty result, because a caller that stopped the
+        # crawl before its first page still has a statistics frame to render,
+        # and the zeros have to come from the same processor as everything else.
+        stats = self._data_processor.get_statistics(cleaned)
+        # counts keeps three integers; the rest of this dict is what the desktop
+        # renders. Recomputing it from reloaded JSON would give the same numbers
+        # only for as long as nothing drifts, and no way to notice when it does.
+        self._record_outcome(task, comments=list(cleaned), stats=stats)
         if not cleaned:
             return {"percent": 70}
         artifacts = self._store.save_comments(task.run_id, cleaned)
         if "comments_csv" not in artifacts:
             # The CSV is a convenience export; losing it must not look like success.
             task.add_warning("CSV 导出失败，评论数据仍完整保存在 comments.json 中。")
-        stats = self._data_processor.get_statistics(cleaned)
         return {
             "counts": {
                 **task.counts,
@@ -523,7 +614,12 @@ class AgentService:
         comments = self._store.load_comments(task.run_id)
 
         def progress(message: str, percent: int) -> None:
-            task.emit(70 + int(percent * 0.25), str(message))
+            text = str(message)
+            task.emit(70 + int(percent * 0.25), text)
+            # The unremapped number. 70 + p*0.25 cannot be inverted once a
+            # combined run has folded the crawl into the same scale, and the
+            # desktop's analysis.progress is a 0-100 contract.
+            task.notify(EventKind.ANALYSIS_PROGRESS, text, percent=int(percent))
 
         try:
             result = self._analysis_processor.analyze(
@@ -542,6 +638,13 @@ class AgentService:
         if task.cancel_event.is_set():
             self._settle(task, "分析完成", cancelled_stage="分析已取消")
             return
+
+        # Recorded before the store sees it, and as a copy. save_analysis
+        # lifts report_markdown into its own file and rewrites word_cloud_image
+        # from a base64 data URL into a path; it happens to work on a copy of
+        # its own today, but the desktop needs both originals whether or not it
+        # keeps doing that.
+        self._record_outcome(task, analysis=dict(result))
 
         task.update(status=RunStatus.EXPORTING, stage="正在导出分析结果", percent=95)
         artifacts = self._store.save_analysis(task.run_id, result)
