@@ -118,6 +118,11 @@ class StubCrawler:
 
     def stop(self):
         self.stopped = True
+        # CommentCrawler.stop() calls _log("正在停止爬取..."), which reaches the
+        # sidecar's progress callback and becomes a log frame. A silent stub
+        # would let the migration drop that frame unnoticed, so the stub is as
+        # loud as the real thing.
+        self.progress("正在停止爬取...")
 
     def crawl_comments(self, url_or_id, include_replies=True, max_pages=100, mode=3):
         self.calls.append({
@@ -167,6 +172,31 @@ ANALYSIS_RESULT = {
     "report_markdown": "# 报告",
     "meta": {"analyzed_records": 7, "total_records": 9},
 }
+
+
+# DataProcessor.get_statistics output for the fixtures above, recorded rather
+# than hand-written: an assertion on a stats dict someone guessed is worthless.
+FULL_STATS = {
+    "total": 2, "main_comments": 1, "replies": 1, "total_likes": 3, "avg_likes": 1.5,
+    "total_replies": 1, "ip_locations": 1, "missing_ip_locations": 1,
+    "ip_location_coverage": 0.5,
+}
+
+EMPTY_STATS = {
+    "total": 0, "main_comments": 0, "replies": 0, "total_likes": 0, "avg_likes": 0,
+    "total_replies": 0, "ip_locations": 0, "missing_ip_locations": 0,
+    "ip_location_coverage": 0,
+}
+
+# Only COMMENT_A survives a stop after the first page.
+PARTIAL_STATS = {
+    "total": 1, "main_comments": 1, "replies": 0, "total_likes": 3, "avg_likes": 3.0,
+    "total_replies": 1, "ip_locations": 1, "missing_ip_locations": 0,
+    "ip_location_coverage": 1.0,
+}
+
+WORD_CLOUD_BYTES = b"characterization-word-cloud-bytes"
+WORD_CLOUD_DATA_URL = "data:image/png;base64,Y2hhcmFjdGVyaXphdGlvbi13b3JkLWNsb3VkLWJ5dGVz"
 
 
 def make(comments=None, error=None, gate=None, processor=None):
@@ -272,14 +302,7 @@ class CommentCrawlBaseline(unittest.TestCase):
         sidecar._run_comments({"input": "BV1xx411c7mD", "max_pages": 1})
 
         stats = sidecar.event("stats", "comments")["stats"]
-        self.assertEqual(
-            sorted(stats),
-            sorted([
-                "total", "main_comments", "replies", "total_likes", "avg_likes",
-                "total_replies", "ip_locations", "missing_ip_locations",
-                "ip_location_coverage",
-            ]),
-        )
+        self.assertEqual(stats, FULL_STATS)
         self.assertEqual(stats["total"], 2)
         self.assertEqual(stats["main_comments"], 1)
         self.assertEqual(stats["replies"], 1)
@@ -300,7 +323,8 @@ class CommentCrawlBaseline(unittest.TestCase):
                          [("stats", "comments"), ("finished", "comments"), ("progress", "comments")])
         finished = sidecar.event("finished", "comments")
         self.assertEqual(finished["count"], 0)
-        self.assertEqual(finished["stats"]["total"], 0)
+        self.assertEqual(finished["stats"], EMPTY_STATS)
+        self.assertEqual(sidecar.event("stats", "comments")["stats"], EMPTY_STATS)
         idle = sidecar.event("progress", "comments")
         self.assertEqual((idle["status"], idle["percent"]), ("idle", 100))
 
@@ -316,9 +340,10 @@ class CommentCrawlBaseline(unittest.TestCase):
         # No stats frame on this path, and no finished -- just error then idle.
         self.assertEqual(sequence(sidecar),
                          [("error", "comments"), ("progress", "comments")])
-        error = sidecar.event("error", "comments")
-        self.assertEqual(error["mode"], "comments")
-        self.assertIn("412", error["message"])
+        self.assertEqual(
+            sidecar.event("error", "comments"),
+            {"kind": "event", "event": "error", "mode": "comments", "message": "接口返回 412"},
+        )
         idle = sidecar.event("progress", "comments")
         self.assertEqual((idle["status"], idle["percent"]), ("idle", 100))
 
@@ -388,7 +413,10 @@ class CommentStopBaseline(unittest.TestCase):
 
         self.assertTrue(sidecar.has("finished", "comments"),
                         "stopping a comment crawl still emits finished today")
-        self.assertEqual(sidecar.event("finished", "comments")["count"], 1)
+        finished = sidecar.event("finished", "comments")
+        self.assertEqual(finished["count"], 1)
+        self.assertEqual(finished["stats"], PARTIAL_STATS)
+        self.assertEqual(sidecar.event("stats", "comments")["stats"], PARTIAL_STATS)
         self.assertEqual([row["comment_id"] for row in sidecar._last_comments], [1])
 
         # Full sequence, both threads: start frames, the stop frames emitted on
@@ -396,12 +424,17 @@ class CommentStopBaseline(unittest.TestCase):
         self.assertEqual(sequence(sidecar), [
             ("progress", "comments"),   # running, 0
             ("log", None),              # 评论任务已启动
-            ("log", None),              # 正在停止爬取任务...
+            ("log", None),              # 正在停止爬取...      (from crawler.stop)
+            ("log", None),              # 正在停止爬取任务...  (from the task.stop handler)
             ("progress", "comments"),   # stopping, 0
             ("stats", "comments"),
             ("finished", "comments"),
             ("progress", "comments"),   # idle, 100
         ])
+        self.assertEqual(
+            [frame["message"] for frame in sidecar.frames if frame.get("event") == "log"],
+            ["评论任务已启动", "正在停止爬取...", "正在停止爬取任务..."],
+        )
         progress_frames = [frame for frame in sidecar.frames
                            if frame.get("event") == "progress" and frame.get("mode") == "comments"]
         self.assertEqual(
@@ -493,8 +526,14 @@ class AnalysisBaseline(unittest.TestCase):
             ("log", None),
             ("progress", "analysis"),
         ])
-        self.assertEqual(sidecar.event("cancelled", "analysis")["mode"], "analysis")
-        self.assertEqual(sidecar.event("cancelled", "analysis")["message"], "分析已被取消")
+        self.assertEqual(
+            sidecar.event("analysis.progress"),
+            {"kind": "event", "event": "analysis.progress", "message": "正在调用 LLM", "percent": 50},
+        )
+        self.assertEqual(
+            sidecar.event("cancelled", "analysis"),
+            {"kind": "event", "event": "cancelled", "mode": "analysis", "message": "分析已被取消"},
+        )
         self.assertEqual(sidecar.event("log")["message"], "分析任务已取消")
         idle = sidecar.event("progress", "analysis")
         self.assertEqual((idle["status"], idle["percent"]), ("idle", 100))
@@ -532,7 +571,7 @@ class AnalysisBaseline(unittest.TestCase):
         # The RPC never returns the raw result: _display_analysis_result
         # truncates every field and blanks report_markdown, while the raw result
         # stays in memory for analysis.export. Both halves are pinned here.
-        raw_png = b"characterization-word-cloud-bytes"
+        raw_png = WORD_CLOUD_BYTES
         processor = StubAnalysisProcessor(result={
             **ANALYSIS_RESULT,
             "word_counts": [{"name": "关键词", "value": 3}],
@@ -555,26 +594,47 @@ class AnalysisBaseline(unittest.TestCase):
                 self.assertTrue(responses[0]["ok"])
                 payload = responses[0]["result"]
 
-                self.assertEqual(sorted(payload), sorted([
-                    "summary", "summary_points", "overview", "sentiment_counts",
-                    "topic_counts", "word_counts", "risk_points", "insights",
-                    "notable_quotes", "time_series", "region_counts",
-                    "overseas_region_counts", "user_level_counts",
-                    "content_type_counts", "engagement_items", "deep_analysis",
-                    "report_markdown", "meta",
-                    "word_cloud_image", "word_cloud_image_path",
-                ]))
-                self.assertEqual(payload["report_markdown"], "")
-                self.assertEqual(payload["summary"], "总体偏正面")
-                self.assertTrue(payload["word_cloud_image"].startswith("data:image/png;base64,"))
-                image_path = Path(payload["word_cloud_image_path"])
+                # The whole payload, value by value. Only the asset path is
+                # dynamic, so it is popped and checked separately.
+                image_path = Path(payload.pop("word_cloud_image_path"))
+                self.assertEqual(payload, {
+                    "summary": "总体偏正面",
+                    "summary_points": [],
+                    "overview": {
+                        "total_records": 9, "analyzed_records": 7, "risk_count": 1,
+                        "ip_locations": 5, "missing_ip_locations": 4,
+                    },
+                    "sentiment_counts": [],
+                    "topic_counts": [],
+                    "word_counts": [{"name": "关键词", "value": 3}],
+                    "risk_points": [],
+                    "insights": [],
+                    "notable_quotes": ["一条代表性评论"],
+                    "time_series": [],
+                    "region_counts": [],
+                    "overseas_region_counts": [],
+                    "user_level_counts": [],
+                    "content_type_counts": [],
+                    "engagement_items": [],
+                    "deep_analysis": {"sociology": "", "psychology": "", "philosophy": ""},
+                    "report_markdown": "",
+                    "meta": {"analyzed_records": 7, "total_records": 9},
+                    "word_cloud_image": WORD_CLOUD_DATA_URL,
+                })
                 self.assertTrue(image_path.is_file())
                 self.assertEqual(image_path.read_bytes(), raw_png)
             finally:
                 Sidecar._analysis_asset_root = original_root
 
-        # The RPC payload is a projection; the raw result is untouched.
-        self.assertEqual(sidecar._last_analysis["report_markdown"], "# 报告")
+        # The RPC payload is a projection; the raw result keeps everything the
+        # display shape dropped or rewrote.
+        raw = sidecar._last_analysis
+        self.assertEqual(raw["report_markdown"], "# 报告")
+        self.assertEqual(raw["summary"], "总体偏正面")
+        self.assertEqual(raw["word_counts"], [{"name": "关键词", "value": 3}])
+        self.assertEqual(raw["notable_quotes"], ["一条代表性评论"])
+        self.assertEqual(raw["meta"], {"analyzed_records": 7, "total_records": 9})
+        self.assertTrue(raw["word_cloud_image"].startswith("data:image/png;base64,"))
 
     def test_analysis_latest_without_a_result_answers_not_ok(self) -> None:
         sidecar, _ = make()
