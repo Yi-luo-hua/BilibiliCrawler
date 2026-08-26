@@ -80,6 +80,102 @@ UNTRUSTED_CLOSE = "</untrusted-data>"
 SUMMARY_CHAR_LIMIT = 2000
 
 
+def clamp_int(value: Any, default: int, low: int, high: int) -> int:
+    """Coerce value to an int inside [low, high], falling back to default."""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(low, min(high, number))
+
+
+@dataclass(frozen=True)
+class CallerPolicy:
+    """Static limits that belong to a caller, not to a single request.
+
+    Deliberately holds no credentials. An API key is scoped to one analysis
+    call, so it travels as an argument and is never stored on a long-lived
+    object that could reach a repr, a log line or a manifest.
+
+    The defaults are the agent's: conservative page limits, and a chart set that
+    excludes the word cloud because an agent cannot use a PNG. The desktop needs
+    the opposite on both counts, which is what DESKTOP_POLICY expresses.
+    """
+
+    max_pages_default: int = MAX_PAGES_DEFAULT
+    # None means "no ceiling": the caller's own number is honoured.
+    max_pages_ceiling: int | None = MAX_PAGES_CEILING
+    # None means "do not force a set"; the processor applies its own default.
+    default_chart_keys: tuple[str, ...] | None = tuple(AGENT_CHART_KEYS)
+
+    def __post_init__(self) -> None:
+        # frozen=True only stops rebinding the attribute; it does not stop a
+        # caller keeping a reference to a list they passed in and emptying it
+        # later. An emptied chart set means "every chart" downstream, which puts
+        # the word cloud back, so the sequence is copied into a tuple here.
+        if self.default_chart_keys is not None:
+            if isinstance(self.default_chart_keys, (str, bytes)):
+                raise ValueError("default_chart_keys must be a sequence of names, not a string")
+            try:
+                frozen_keys = tuple(str(item) for item in self.default_chart_keys)
+            except TypeError as exc:
+                raise ValueError("default_chart_keys must be iterable or None") from exc
+            object.__setattr__(self, "default_chart_keys", frozen_keys)
+
+        # A misconfigured policy would otherwise hand the crawler a page count
+        # of zero or a negative one, which no downstream code checks for.
+        if self.max_pages_default < 1:
+            raise ValueError(f"max_pages_default must be >= 1, got {self.max_pages_default}")
+        if self.max_pages_ceiling is not None:
+            if self.max_pages_ceiling < 1:
+                raise ValueError(f"max_pages_ceiling must be >= 1, got {self.max_pages_ceiling}")
+            if self.max_pages_ceiling < self.max_pages_default:
+                raise ValueError(
+                    "max_pages_ceiling must not be below max_pages_default: "
+                    f"{self.max_pages_ceiling} < {self.max_pages_default}"
+                )
+        if self.default_chart_keys is not None and not self.default_chart_keys:
+            # _normalize_chart_keys reads an empty list as "give me everything",
+            # so an empty default would silently re-enable the word cloud.
+            raise ValueError("default_chart_keys must be None or non-empty")
+
+    def resolve_max_pages(self, value: Any) -> int:
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            return self.max_pages_default
+        number = max(1, number)
+        if self.max_pages_ceiling is not None:
+            number = min(number, self.max_pages_ceiling)
+        return number
+
+    def resolve_chart_keys(self, requested: Any = None) -> list[str] | None:
+        """Pick the chart set for one analysis.
+
+        A non-empty request wins; otherwise the policy default applies.
+        Returning None tells the caller to omit chart_keys entirely -- passing
+        an empty list instead would make _normalize_chart_keys fall back to the
+        full set, word cloud included.
+        """
+        if isinstance(requested, (list, tuple)) and requested:
+            return [str(item) for item in requested]
+        if self.default_chart_keys is None:
+            return None
+        return list(self.default_chart_keys)
+
+
+# What every MCP tool and the CLI run under.
+AGENT_POLICY = CallerPolicy()
+
+# What backend/sidecar.py will pass once the migration wires it up: the desktop
+# default of 100 pages, no ceiling, and whatever chart set the UI ticked.
+DESKTOP_POLICY = CallerPolicy(
+    max_pages_default=100,
+    max_pages_ceiling=None,
+    default_chart_keys=None,
+)
+
+
 @dataclass
 class TaskSnapshot:
     """Immutable view of a task's state, safe to hand to any adapter."""

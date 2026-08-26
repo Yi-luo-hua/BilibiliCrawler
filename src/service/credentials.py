@@ -124,6 +124,25 @@ class LLMCredentials:
 
     __str__ = __repr__
 
+    @classmethod
+    def from_config(cls, config: Any, source: str = "request") -> "LLMCredentials":
+        """Build credentials from an RPC-shaped llm_config mapping.
+
+        The desktop sends {api_key, base_url, model} inside its analysis
+        request. Giving callers this instead of letting them pass the raw dict
+        keeps the service's own signature typed.
+        """
+        if isinstance(config, cls):
+            return config
+        if not isinstance(config, dict):
+            raise TypeError(f"llm_config must be a mapping, got {type(config).__name__}")
+        return cls(
+            api_key=str(config.get("api_key") or "").strip(),
+            base_url=str(config.get("base_url") or "").strip(),
+            model=str(config.get("model") or "").strip(),
+            source=source,
+        )
+
     def to_llm_config(self) -> dict[str, str]:
         """Build the dict LLMAnalysisProcessor.analyze expects under 'llm_config'.
 
