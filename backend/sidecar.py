@@ -82,6 +82,7 @@ class Sidecar:
         self._qr_cancel = threading.Event()
         self._analysis_cancel = threading.Event()
         self._agent_comment_cancel = threading.Event()
+        self._agent_analysis_cancel = threading.Event()
         self._active_crawler: CommentCrawler | DynamicCrawler | None = None
         self._active_thread: threading.Thread | None = None
         self._qr_thread: threading.Thread | None = None
@@ -179,6 +180,10 @@ class Sidecar:
                 # soon as that response is visible, before the worker has an
                 # AgentService task id to receive it.
                 self._agent_comment_cancel.clear()
+            elif name == "analysis":
+                # The migrated comment-analysis path has the same handoff
+                # window. Legacy analysis ignores this separate pending bit.
+                self._agent_analysis_cancel.clear()
             thread = threading.Thread(target=runner, args=(params,), daemon=True, name=name)
             self._active_thread = thread
             self.respond(request_id)
@@ -201,6 +206,7 @@ class Sidecar:
             return
         if active_mode == "analysis":
             self._analysis_cancel.set()
+            self._agent_analysis_cancel.set()
 
     def _make_progress_callback(self, mode: str, max_pages: int) -> Callable[[str], None]:
         def callback(message: str) -> None:
@@ -313,9 +319,11 @@ class Sidecar:
                 credentials=credentials,
             )
             self._active_agent_task_id = started.task_id
-            snapshot = started
-            while not snapshot.done:
-                snapshot = self._agent_service.wait(started.task_id, timeout=0.1)
+            if self._agent_analysis_cancel.is_set():
+                self._agent_service.stop(started.task_id)
+            while not self._agent_service.wait_until_finished(started.task_id, timeout=0.1):
+                pass
+            snapshot = self._agent_service.get_status(task_id=started.task_id)
 
             if snapshot.status == RunStatus.CANCELLED:
                 self.emit("cancelled", mode="analysis", message="分析已被取消")
@@ -345,6 +353,7 @@ class Sidecar:
             self.emit("error", mode="analysis", message=str(exc))
         finally:
             self._active_agent_task_id = ""
+            self._agent_analysis_cancel.clear()
             self.emit("progress", status="idle", mode="analysis", percent=100)
 
     def _run_legacy_analysis(self, params: dict[str, Any]) -> None:
@@ -385,6 +394,7 @@ class Sidecar:
             self.emit("error", mode="analysis", message=str(exc))
         finally:
             self._active_crawler = None
+            self._agent_analysis_cancel.clear()
             self.emit("progress", status="idle", mode="analysis", percent=100)
 
     @staticmethod

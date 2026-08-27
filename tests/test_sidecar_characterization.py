@@ -746,6 +746,103 @@ class AnalysisBaseline(unittest.TestCase):
                 ("progress", "analysis"),
             ])
 
+    def test_comment_analysis_stop_before_task_id_handoff_is_forwarded(self) -> None:
+        processor = BlockingAnalysisProcessor()
+        return_gate = threading.Event()
+        with tempfile.TemporaryDirectory() as run_root, patch.dict(
+            os.environ, {"BILIBILI_AGENT_RUNS_DIR": run_root}
+        ):
+            sidecar, _ = make(comments=[COMMENT_A], processor=processor)
+            sidecar.handle({"id": "crawl-1", "method": "comments.start",
+                            "params": {"input": "BV1xx411c7mD", "max_pages": 1}})
+            drain(sidecar)
+            sidecar.frames.clear()
+
+            start_returned = threading.Event()
+            started_holder = {}
+            original_start = sidecar._agent_service.start_analyze
+
+            def delayed_start(*args, **kwargs):
+                started = original_start(*args, **kwargs)
+                started_holder["task"] = started
+                start_returned.set()
+                if not return_gate.wait(timeout=5):
+                    raise TimeoutError("AgentService.start_analyze was never released")
+                return started
+
+            try:
+                with patch.object(sidecar._agent_service, "start_analyze", side_effect=delayed_start), \
+                        patch.object(
+                            sidecar._agent_service,
+                            "stop",
+                            wraps=sidecar._agent_service.stop,
+                        ) as stop:
+                    sidecar.handle({
+                        "id": "analysis-1",
+                        "method": "analysis.start",
+                        "params": {"source": "comments", "llm_config": {"api_key": "test-key"}},
+                    })
+                    self.assertTrue(start_returned.wait(timeout=5))
+                    sidecar.handle({"id": "stop-1", "method": "task.stop", "params": {}})
+                    return_gate.set()
+                    drain(sidecar)
+                    stop.assert_called_once_with(started_holder["task"].task_id)
+            finally:
+                return_gate.set()
+                drain(sidecar)
+
+            self.assertTrue(sidecar.has("cancelled", "analysis"))
+            self.assertFalse(sidecar.has("finished", "analysis"))
+            self.assertFalse(sidecar.has("error", "analysis"))
+
+    def test_comment_analysis_idle_waits_until_agent_service_is_ready(self) -> None:
+        processor = StubAnalysisProcessor(result=ANALYSIS_RESULT)
+        release_terminal_persist = threading.Event()
+        with tempfile.TemporaryDirectory() as run_root, patch.dict(
+            os.environ, {"BILIBILI_AGENT_RUNS_DIR": run_root}
+        ):
+            sidecar, _ = make(comments=[COMMENT_A], processor=processor)
+            sidecar.handle({"id": "crawl-1", "method": "comments.start",
+                            "params": {"input": "BV1xx411c7mD", "max_pages": 1}})
+            drain(sidecar)
+            sidecar.frames.clear()
+
+            terminal_persist_started = threading.Event()
+            task_ids = []
+            original_persist = sidecar._agent_service._persist
+
+            def blocking_persist(task):
+                if task.kind == "analyze" and task.snapshot().done:
+                    task_ids.append(task.task_id)
+                    terminal_persist_started.set()
+                    if not release_terminal_persist.wait(timeout=5):
+                        raise TimeoutError("terminal analysis persist was never released")
+                return original_persist(task)
+
+            sidecar._agent_service._persist = blocking_persist
+            try:
+                sidecar.handle({
+                    "id": "analysis-1",
+                    "method": "analysis.start",
+                    "params": {"source": "comments", "llm_config": {"api_key": "test-key"}},
+                })
+                self.assertTrue(terminal_persist_started.wait(timeout=5))
+
+                sidecar._active_thread.join(timeout=0.3)
+                self.assertTrue(sidecar._active_thread.is_alive(), "sidecar announced idle too early")
+                self.assertFalse(sidecar.has("finished", "analysis"))
+                self.assertFalse(any(
+                    frame.get("event") == "progress"
+                    and frame.get("mode") == "analysis"
+                    and frame.get("status") == "idle"
+                    for frame in sidecar.frames
+                ))
+            finally:
+                release_terminal_persist.set()
+                if task_ids:
+                    sidecar._agent_service.wait_until_finished(task_ids[0], timeout=5)
+                drain(sidecar)
+
     def test_nonexact_sources_stay_legacy_even_after_a_comment_run_exists(self) -> None:
         processor = StubAnalysisProcessor(result=ANALYSIS_RESULT)
         with tempfile.TemporaryDirectory() as run_root, patch.dict(

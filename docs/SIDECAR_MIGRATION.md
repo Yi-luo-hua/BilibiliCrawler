@@ -180,27 +180,28 @@ characterization 测试把当前行为钉住，迁移后保持一致；如果之
 | LLM 阻塞时能迅速停止 | `test_analyze_stops_promptly_while_llm_request_is_blocked` | 已有 |
 | stdout ASCII-safe | `test_protocol_output_is_ascii_safe…` | 已有 |
 | 词云 asset 目录命名 | `test_word_cloud_asset_dir_uses_source_label_timestamp_and_bvid` | 已有 |
-| **空结果：`stats` + `finished(count=0)` 完整 payload，不发 `error`，收尾 `progress(status="idle", percent=100)`** | 无 | 必补（characterization） |
-| **评论爬取停止：`stats` → `finished(count, stats)` → `progress(idle, 100)`** | 无 | 必补（characterization。`_run_comments` 无取消检查，爬虫返回部分数据后照常走完；此处的 `finished` **合法**，不是陈旧帧） |
-| **分析取消：`cancelled` → `log` → `progress(idle, 100)`，且此后不得出现 `finished` 或 `error`** | `test_run_analysis_cancel_after_result_does_not_emit_finished`（部分） | 必补完整帧序列 |
-| **桌面端页数不被夹到 50** | 无 | 必补 |
-| **桌面端 chart_keys 含词云** | 无 | 必补 |
-| **凭据来自 params 而非环境** | 无 | 必补 |
-| **API Key 不进 manifest / 不进策略对象** | 部分（agent 侧有） | 必补（桌面路径） |
-| **`dynamics` 与 `all` 仍走旧路径** | 无 | 必补 |
-| **`analysis.progress` 仍是 0–100** | `test_analysis_progress_reaches_the_listener_unremapped`（服务侧） | 接线后仍必补（sidecar 侧） |
-| **`task.stop` 精确转发到 `AgentService.stop(task_id)`** | 无 | 必补（Sidecar 需保存当前 task_id；现有测试只覆盖旧路径的取消位隔离） |
-| **内部 `_last_analysis` 保留原始结果** | `test_the_analysis_outcome_is_the_processors_untouched_return`（服务侧） | 接线后仍必补（`analysis.export` 的 markdown 依赖它） |
-| **`analysis.latest` 返回值与当前 compact display payload 完全一致** | 无 | 必补（含 `word_cloud_image` / `word_cloud_image_path`，且 `report_markdown` 仍为空串） |
-| **复用注入的 api / factory / processor** | `test_comment_task_reuses_logged_in_api_session` | 必补（迁移后保持） |
-| **事件序列逐帧一致：名称、顺序与 payload** | 部分 | 必补（录制迁移前后 `CaptureSidecar.messages` 比对，不只比事件名） |
-| **`stats` 事件携带完整 comments stats 字段** | 无 | 必补（逐字段断言，非仅 `total`） |
-| **`_last_comment_context` 保持** | 无 | 必补（词云 asset 目录命名依赖它） |
-| **评论成功：`stats` + `finished(count, stats)` 完整 payload + 收尾 `idle` 帧** | 无 | 必补（characterization） |
-| **评论异常：`error(mode, message)` 完整 payload，不发 `finished`，收尾 `idle` 帧仍发出** | 无 | 必补（characterization） |
-| **`auto` / 缺失 / 非法 source 走旧路径** | 无 | 必补 |
-| `batch_size` 透传 | 无 | 补 |
-| `export.csv` 在迁移后仍可用 | 无 | 补 |
+| **空结果：`stats` + `finished(count=0)` 完整 payload，不发 `error`，收尾 `progress(status="idle", percent=100)`** | `test_empty_result_is_a_success_not_an_error` | 已补（阶段 4） |
+| **评论爬取停止：`stats` → `finished(count, stats)` → `progress(idle, 100)`** | `test_stopping_a_crawl_still_finishes_with_the_partial_data` | 已补（阶段 4） |
+| **分析取消：`cancelled` → `log` → `progress(idle, 100)`，且此后不得出现 `finished` 或 `error`** | `test_comment_analysis_stop_forwards_the_exact_task_and_keeps_terminal_frames` | 已补（阶段 5） |
+| **桌面端页数不被夹到 50** | `test_request_params_reach_the_crawler_verbatim` | 已补（阶段 4） |
+| **桌面端 chart_keys 含词云** | `test_comment_analysis_reuses_the_persisted_comment_run` | 已补（阶段 5） |
+| **凭据来自 params 而非环境** | `test_comment_analysis_reuses_the_persisted_comment_run` | 已补（阶段 5） |
+| **API Key 不进 manifest / 不进策略对象 / 不进分析文件** | `test_comment_analysis_reuses_the_persisted_comment_run`、`test_api_key_echoed_in_analysis_result_is_scrubbed_from_json` | 已补（阶段 5） |
+| **`dynamics` 与 `all` 仍走旧路径** | `test_nonexact_sources_stay_legacy_even_after_a_comment_run_exists` | 已补（阶段 5） |
+| **`analysis.progress` 仍是 0–100** | `test_progress_percentages_are_forwarded_unscaled` | 已补（阶段 5） |
+| **`task.stop` 精确转发到 `AgentService.stop(task_id)`，含 task id 交接窗口** | `test_comment_analysis_stop_forwards_the_exact_task_and_keeps_terminal_frames`、`test_comment_analysis_stop_before_task_id_handoff_is_forwarded` | 已补（阶段 5） |
+| **分析 `idle` 只在 AgentService 释放活动槽后发出** | `test_comment_analysis_idle_waits_until_agent_service_is_ready` | 已补（阶段 5） |
+| **内部 `_last_analysis` 保留原始结果** | `test_analysis_latest_returns_the_compact_display_shape` | 已补（阶段 5） |
+| **`analysis.latest` 返回值与当前 compact display payload 完全一致** | `test_analysis_latest_returns_the_compact_display_shape` | 已补（阶段 5） |
+| **复用注入的 api / factory / processor** | `test_comment_task_reuses_logged_in_api_session`、`test_comment_analysis_reuses_the_persisted_comment_run` | 已补（阶段 4–5） |
+| **事件序列逐帧一致：名称、顺序与 payload** | characterization 测试已逐项覆盖；完整 SidecarClient 链路 | 阶段 6 补 |
+| **`stats` 事件携带完整 comments stats 字段** | `test_stats_payload_carries_every_data_processor_field` | 已补（阶段 4） |
+| **`_last_comment_context` 保持** | `test_comment_context_is_recorded_for_asset_naming` | 已补（阶段 4） |
+| **评论成功：`stats` + `finished(count, stats)` 完整 payload + 收尾 `idle` 帧** | `test_success_emits_stats_then_finished_then_idle` | 已补（阶段 4） |
+| **评论异常：`error(mode, message)` 完整 payload，不发 `finished`，收尾 `idle` 帧仍发出** | `test_failure_emits_error_without_finished_but_still_goes_idle` | 已补（阶段 4） |
+| **`auto` / 缺失 / 非法 source 走旧路径** | `test_nonexact_sources_stay_legacy_even_after_a_comment_run_exists` | 已补（阶段 5） |
+| `batch_size` 透传 | `test_comment_analysis_reuses_the_persisted_comment_run` | 已补（阶段 5） |
+| `export.csv` 在迁移后仍可用 | 无 | 阶段 6 补 |
 | 真机桌面端完整链路 | 无 | 发版前必做，不以自动化测试代替 |
 
 ---
