@@ -21,6 +21,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -115,12 +116,14 @@ class StubCrawler:
         self.error = error
         self.gate = gate
         self.entered = threading.Event()
+        self.stop_called = threading.Event()
         self.stopped = False
         self.calls: list[dict] = []
         self.fetched: list[dict] = []
 
     def stop(self):
         self.stopped = True
+        self.stop_called.set()
         # CommentCrawler.stop() calls _log("正在停止爬取..."), which reaches the
         # sidecar's progress callback and becomes a log frame. A silent stub
         # would let the migration drop that frame unnoticed, so the stub is as
@@ -224,10 +227,13 @@ WORD_CLOUD_BYTES = b"characterization-word-cloud-bytes"
 WORD_CLOUD_DATA_URL = "data:image/png;base64,Y2hhcmFjdGVyaXphdGlvbi13b3JkLWNsb3VkLWJ5dGVz"
 
 
-def make(comments=None, error=None, gate=None, processor=None):
-    holder: dict = {"created": threading.Event()}
+def make(comments=None, error=None, gate=None, processor=None, factory_gate=None):
+    holder: dict = {"created": threading.Event(), "factory_entered": threading.Event()}
 
     def factory(progress):
+        holder["factory_entered"].set()
+        if factory_gate is not None and not factory_gate.wait(timeout=5):
+            raise TimeoutError("crawler factory was never released")
         # DataProcessor.clean_comments fills defaults in place, so the crawler
         # hands over copies: the fixtures above stay as written no matter which
         # tests ran first.
@@ -432,6 +438,130 @@ class CommentCrawlBaseline(unittest.TestCase):
 
 
 class CommentStopBaseline(unittest.TestCase):
+    def test_stop_before_the_worker_builds_a_crawler_finishes_empty(self) -> None:
+        run_root = tempfile.TemporaryDirectory()
+        self.addCleanup(run_root.cleanup)
+        env_patch = patch.dict(os.environ, {"BILIBILI_AGENT_RUNS_DIR": run_root.name})
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        worker_started = threading.Event()
+        release_worker = threading.Event()
+        sidecar, _ = make(comments=[COMMENT_A])
+        self.addCleanup(drain, sidecar)
+        self.addCleanup(release_worker.set)
+        original_persist = sidecar._agent_service._persist
+        first_persist = True
+
+        def blocking_first_persist(task):
+            nonlocal first_persist
+            if first_persist:
+                first_persist = False
+                worker_started.set()
+                if not release_worker.wait(timeout=5):
+                    raise TimeoutError("comment worker was never released")
+            return original_persist(task)
+
+        sidecar._agent_service._persist = blocking_first_persist
+        sidecar.handle({"id": "req-1", "method": "comments.start",
+                        "params": {"input": "BV1xx411c7mD", "max_pages": 5}})
+        self.assertTrue(worker_started.wait(timeout=5))
+
+        deadline = time.monotonic() + 5
+        while not sidecar._active_agent_task_id and time.monotonic() < deadline:
+            threading.Event().wait(0.01)
+        self.assertTrue(sidecar._active_agent_task_id)
+
+        sidecar.handle({"id": "req-2", "method": "task.stop", "params": {}})
+        release_worker.set()
+        drain(sidecar)
+
+        self.assertFalse(sidecar.has("error", "comments"))
+        self.assertEqual(sidecar.event("finished", "comments")["count"], 0)
+        self.assertEqual(sidecar.event("stats", "comments")["stats"], EMPTY_STATS)
+
+    def test_stop_before_the_sidecar_receives_the_task_id_is_forwarded(self) -> None:
+        crawl_gate = threading.Event()
+        return_gate = threading.Event()
+        start_returned = threading.Event()
+        sidecar, holder = make(comments=[COMMENT_A, COMMENT_B], gate=crawl_gate)
+        self.addCleanup(drain, sidecar)
+        self.addCleanup(crawl_gate.set)
+        self.addCleanup(return_gate.set)
+        original_start = sidecar._agent_service.start_crawl
+
+        def delayed_start(*args, **kwargs):
+            started = original_start(*args, **kwargs)
+            start_returned.set()
+            if not return_gate.wait(timeout=5):
+                raise TimeoutError("AgentService.start_crawl was never released")
+            return started
+
+        sidecar._agent_service.start_crawl = delayed_start
+        sidecar.handle({"id": "req-1", "method": "comments.start",
+                        "params": {"input": "BV1xx411c7mD", "max_pages": 5}})
+        self.assertTrue(start_returned.wait(timeout=5))
+        crawler = crawler_of(holder)
+
+        sidecar.handle({"id": "req-2", "method": "task.stop", "params": {}})
+        return_gate.set()
+        self.assertTrue(crawler.stop_called.wait(timeout=1), "pending stop was never forwarded")
+        crawl_gate.set()
+        drain(sidecar)
+
+        self.assertFalse(sidecar.has("error", "comments"))
+        self.assertEqual(sidecar.event("finished", "comments")["count"], 1)
+
+    def test_stop_after_task_id_but_before_crawler_attachment_finishes_empty(self) -> None:
+        factory_gate = threading.Event()
+        sidecar, holder = make(comments=[COMMENT_A], factory_gate=factory_gate)
+        self.addCleanup(drain, sidecar)
+        self.addCleanup(factory_gate.set)
+        sidecar.handle({"id": "req-1", "method": "comments.start",
+                        "params": {"input": "BV1xx411c7mD", "max_pages": 5}})
+        self.assertTrue(holder["factory_entered"].wait(timeout=5))
+
+        deadline = time.monotonic() + 5
+        while not sidecar._active_agent_task_id and time.monotonic() < deadline:
+            threading.Event().wait(0.01)
+        self.assertTrue(sidecar._active_agent_task_id)
+
+        sidecar.handle({"id": "req-2", "method": "task.stop", "params": {}})
+        factory_gate.set()
+        drain(sidecar)
+
+        self.assertFalse(sidecar.has("error", "comments"))
+        self.assertEqual(sidecar.event("finished", "comments")["count"], 0)
+        self.assertEqual(sidecar.event("stats", "comments")["stats"], EMPTY_STATS)
+
+    def test_idle_waits_until_agent_service_is_ready_for_the_next_task(self) -> None:
+        terminal_persist_started = threading.Event()
+        release_terminal_persist = threading.Event()
+        sidecar, _ = make(comments=[COMMENT_A])
+        self.addCleanup(drain, sidecar)
+        self.addCleanup(release_terminal_persist.set)
+        original_persist = sidecar._agent_service._persist
+
+        def blocking_persist(task):
+            if task.snapshot().done:
+                terminal_persist_started.set()
+                if not release_terminal_persist.wait(timeout=5):
+                    raise TimeoutError("terminal persist was never released")
+            return original_persist(task)
+
+        sidecar._agent_service._persist = blocking_persist
+        sidecar.handle({"id": "req-1", "method": "comments.start",
+                        "params": {"input": "BV1xx411c7mD", "max_pages": 1}})
+        self.assertTrue(terminal_persist_started.wait(timeout=5))
+
+        sidecar._active_thread.join(timeout=0.3)
+        self.assertTrue(sidecar._active_thread.is_alive(), "sidecar announced idle too early")
+        self.assertFalse(sidecar.has("progress", "comments") and any(
+            frame.get("status") == "idle" for frame in sidecar.frames
+        ))
+
+        release_terminal_persist.set()
+        drain(sidecar)
+
     def test_stopping_a_crawl_still_finishes_with_the_partial_data(self) -> None:
         # _run_comments has no cancellation check: crawler.stop() only makes the
         # crawler return early, and the handler carries on to finished(). This

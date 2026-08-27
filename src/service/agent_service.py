@@ -311,10 +311,12 @@ class AgentService:
                 )
                 self._fail(task, fallback, str(exc))
             finally:
-                task.done_event.set()
                 with self._lock:
                     if self._active is task:
                         self._active = None
+                # Signals both worker completion and readiness for the next
+                # task, so publish it only after releasing the active slot.
+                task.done_event.set()
 
         thread = threading.Thread(target=runner, name=task.kind, daemon=True)
         task.thread = thread
@@ -468,6 +470,13 @@ class AgentService:
         task.done_event.wait(timeout=max(0.0, timeout))
         return task.snapshot()
 
+    def wait_until_finished(self, task_id: str, timeout: float) -> bool:
+        """Wait until the worker has exited and the service can start another task."""
+        task = self._tasks.get(task_id)
+        if task is None:
+            raise ServiceError(ErrorCode.NOT_FOUND, f"找不到 task_id: {task_id}")
+        return task.done_event.wait(timeout=max(0.0, timeout))
+
     def take_outcome(self, task_id: str) -> TaskOutcome | None:
         """Hand the adapter the heavy results of a finished task, once.
 
@@ -486,7 +495,7 @@ class AgentService:
         or when the outcome was already taken.
         """
         task = self._tasks.get(task_id)
-        if task is None or task.alive:
+        if task is None or not task.snapshot().done:
             return None
         with self._lock:
             outcome = self._outcome
@@ -539,9 +548,11 @@ class AgentService:
         max_pages = int(params["max_pages"])
 
         # A cancel that arrived before the crawl started must not fire off
-        # requests anyway.
+        # requests anyway. Desktop callers still need the same explicit empty
+        # outcome they receive when cancellation lands after crawler creation.
         if task.cancel_event.is_set():
-            self._settle(task, "评论爬取完成")
+            changes = self._crawl_results(task, []) if self._policy.empty_crawl_is_success else {}
+            self._settle(task, "评论爬取完成", **changes)
             return
 
         def progress(message: str) -> None:
@@ -568,7 +579,8 @@ class AgentService:
         # request -- before its first stop check, so a cancel that arrived in
         # the meantime can only be honoured by not calling it at all.
         if task.cancel_event.is_set():
-            self._settle(task, "评论爬取完成")
+            changes = self._crawl_results(task, []) if self._policy.empty_crawl_is_success else {}
+            self._settle(task, "评论爬取完成", **changes)
             return
 
         comments = crawler.crawl_comments(

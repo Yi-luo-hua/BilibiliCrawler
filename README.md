@@ -1,6 +1,25 @@
+<div align="center">
+
+<img src="./assets/app_logo.png" alt="BilibiliCrawler Logo" width="250" />
+
+</div>
+
+<div align="center">
+
+[![GitHub Downloads](https://img.shields.io/github/downloads/Yi-luo-hua/BilibiliCrawler/total)](https://github.com/Yi-luo-hua/BilibiliCrawler/releases)
+[![GitHub Repo stars](https://img.shields.io/github/stars/Yi-luo-hua/BilibiliCrawler?style=social)](https://github.com/Yi-luo-hua/BilibiliCrawler/stargazers)
+[![GitHub Code License](https://img.shields.io/github/license/Yi-luo-hua/BilibiliCrawler)](LICENSE)
+[![GitHub last commit](https://img.shields.io/github/last-commit/Yi-luo-hua/BilibiliCrawler)](https://github.com/Yi-luo-hua/BilibiliCrawler/commits/main)
+[![GitHub pull request](https://img.shields.io/badge/PRs-welcome-blue)](https://github.com/Yi-luo-hua/BilibiliCrawler/pulls)
+[![Release](https://img.shields.io/github/v/release/Yi-luo-hua/BilibiliCrawler)](https://github.com/Yi-luo-hua/BilibiliCrawler/releases)
+
+</div>
+
 # BilibiliCrawler
 
 BilibiliCrawler 是一个 B 站评论 / 动态爬取与舆论分析桌面工具。v2.00 起项目迁移为 **Tauri 2 + React + TypeScript** 桌面应用，Python 爬虫和分析逻辑作为本地 sidecar 后端运行，通过本地进程通信完成爬取、扫码登录、LLM 分析和导出。
+
+现已支持MCP调用，请阅读docs/MCP.md。
 
 > 旧版 Python GUI / 单 exe 代码保留在 `legacy-python-gui` 分支。主分支以后以 Windows 安装包桌面应用为主。
 
@@ -22,7 +41,7 @@ BilibiliCrawler 是一个 B 站评论 / 动态爬取与舆论分析桌面工具�
 - 扫码登录：关注页动态流可通过 B 站 App 扫码登录。
 - 筛选与导出：支持关键词、时间范围、最大页数，导出 CSV。
 - 舆论分析：调用 LLM API 分析评论 / 动态主题、风险点、洞察和代表性内容。
-- 可视化图表：支持主题排行、时间趋势、等级分布、地域地图、词云图和深度分析模块。
+- 可视化图表：支持情绪分布、主题排行、时间趋势、等级分布、地域地图、词云图和深度分析模块。
 - 词云图：由 Python `wordcloud` 生成 PNG。
 - 自定义界面：支持浅色 / 暗色主题、本地背景图、背景透明度和模糊效果。
 - MCP 接入：agent 可越过桌面客户端，直接完成爬取与分析，详见 [docs/MCP.md](docs/MCP.md)。
@@ -64,6 +83,7 @@ BilibiliCrawler 是一个 B 站评论 / 动态爬取与舆论分析桌面工具�
 
 当前分析模块：
 
+- 情绪分布
 - 主题排行
 - 时间趋势
 - 等级分布
@@ -92,6 +112,22 @@ YYYYMMDD-HHMMSS-来源标签[-BV号]
 20260606-134500-动态评论
 ```
 
+### 评论运行数据
+
+桌面端的评论爬取会为每次任务创建一个独立的 `run_id` 目录，保存 `manifest.json` 和
+`comments.json`；有评论数据时还会生成 `comments.csv`。开发环境优先写入：
+
+```text
+<仓库>\analysis-runs\<run_id>\
+```
+
+仓库目录不可写时回落到 `%LOCALAPPDATA%\BilibiliCrawler\analysis-runs\`；也可以用
+`BILIBILI_AGENT_RUNS_DIR` 指定位置。运行数据不会自动删除，长时间大量爬取会持续占用磁盘，
+可在确认不再需要导出或分析后手动清理旧的 `run_id` 目录。
+
+当前桌面界面仍只使用本次 sidecar 会话中的任务，不提供重启后的任务恢复入口。评论爬取本身
+不需要 LLM API Key，运行目录不会写入 LLM 凭据。
+
 ### 界面设置
 
 1. 进入“界面设置”页面。
@@ -105,6 +141,7 @@ YYYYMMDD-HHMMSS-来源标签[-BV号]
 
 - 评论 ID
 - 根评论 ID
+- 是否为回复
 - 用户名
 - 用户等级
 - 评论内容
@@ -225,10 +262,10 @@ BilibiliCrawler/
 │  │  │  ├─ analysisCharts.ts      分析图表、地图和导出资产工具
 │  │  │  ├─ dynamicTarget.ts       动态 UID / 空间链接校验
 │  │  │  ├─ sidecarClient.ts       带请求关联与超时的 sidecar 客户端
-│  │  │  └─ tauri.ts               Tauri invoke 封装
+│  │  │  ├─ tauri.ts               Tauri invoke 封装
+│  │  │  └─ titleBarInteraction.ts 标题栏拖动与双击最大化交互
 │  │  ├─ state/
 │  │  │  └─ taskState.ts           爬取 / 分析任务状态机
-│  │  ├─ tests/                     桌面状态机与通信单元测试
 │  │  ├─ App.tsx
 │  │  ├─ main.tsx
 │  │  ├─ styles.css
@@ -240,8 +277,9 @@ BilibiliCrawler/
 │  │  ├─ icons/
 │  │  ├─ Cargo.toml
 │  │  └─ tauri.conf.json
+│  ├─ tests/                       桌面状态机与通信单元测试
 │  ├─ package.json
-│  ├─ pnpm-workspace.yaml            pnpm 依赖脚本审核配置
+│  ├─ pnpm-workspace.yaml          pnpm 依赖脚本审核配置
 │  └─ vite.config.ts
 ├─ scripts/
 │  ├─ build_backend.ps1            安装 Python 依赖并用 PyInstaller 构建 sidecar
@@ -262,11 +300,14 @@ BilibiliCrawler/
 │     └─ run_store.py             run 目录读写与路径收敛
 ├─ tests/
 │  ├─ fixtures/
+│  ├─ test_adapter_channel.py       sidecar RPC 通道回归测试
 │  ├─ test_agent_service.py         headless 服务层回归测试
 │  ├─ test_analysis_cancellation.py 分析停止与阻塞请求回归测试
+│  ├─ test_caller_policy.py         调用者策略回归测试
 │  ├─ test_dynamic_crawler.py       动态分页、异常与停止回归测试
 │  ├─ test_mcp_server.py            MCP 工具契约与不可信内容测试
-│  └─ test_sidecar_analysis.py      sidecar 与分析回归测试
+│  ├─ test_sidecar_analysis.py      sidecar 与分析回归测试
+│  └─ test_sidecar_characterization.py sidecar 端到端特征基准测试
 ├─ utils/
 │  └─ helpers.py                   链接解析等工具函数
 ├─ requirements.txt
@@ -293,7 +334,7 @@ BilibiliCrawler/
 - 取消任务时的提示按是否真的落盘了数据区分，不再无条件声称保留了部分结果。
 - 取消发生在爬虫构造期间时直接短路，不再发出 BV/动态元数据请求；此前虽不会抓取评论分页，但仍会调用一次视频信息接口。
 - 修复词云取消测试在冷启动首次运行时因字体缓存构建而偶发超时的问题。
-- 桌面端 `backend/sidecar.py` 本版未作改动。
+- 桌面评论爬取接入共享 `AgentService`，保留现有 RPC、空结果和停止语义，并将评论运行数据按 `run_id` 落盘。
 
 ### v3.1.1 (2026.07.27)
 - 修复自定义标题栏双击无法最大化或还原窗口的问题，并补充标题栏单击拖动、双击切换最大化的回归测试。
