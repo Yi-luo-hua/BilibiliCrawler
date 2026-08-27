@@ -548,9 +548,11 @@ class AgentService:
         max_pages = int(params["max_pages"])
 
         # A cancel that arrived before the crawl started must not fire off
-        # requests anyway.
+        # requests anyway. Desktop callers still need the same explicit empty
+        # outcome they receive when cancellation lands after crawler creation.
         if task.cancel_event.is_set():
-            self._settle(task, "评论爬取完成")
+            changes = self._crawl_results(task, []) if self._policy.empty_crawl_is_success else {}
+            self._settle(task, "评论爬取完成", **changes)
             return
 
         def progress(message: str) -> None:
