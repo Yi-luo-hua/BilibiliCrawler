@@ -417,6 +417,48 @@ class SafetyTests(AgentServiceTestCase):
         # so the assertion above is not vacuous.
         self.assertEqual(self.processor.params[0]["llm_config"]["api_key"], SECRET_KEY)
 
+    def test_api_key_echoed_in_analysis_result_is_scrubbed_from_json(self) -> None:
+        class EchoingAnalysisProcessor(FakeAnalysisProcessor):
+            def analyze(self, comments, dynamics, params, progress=None, cancel_event=None):
+                result = super().analyze(comments, dynamics, params, progress, cancel_event)
+                result["meta"]["config"] = dict(params)
+                return result
+
+        service = self.make_service(processor=EchoingAnalysisProcessor())
+        crawled = self.run_to_completion(service, service.start_crawl("BV1xx411c7mD"))
+        analysed = self.run_to_completion(service, service.start_analyze(crawled.run_id))
+
+        self.assertEqual(analysed.status, RunStatus.COMPLETED)
+        run_dir = self.store.run_dir(crawled.run_id)
+        for path in run_dir.rglob("*"):
+            if path.is_file():
+                self.assertNotIn(SECRET_KEY.encode("utf-8"), path.read_bytes(), f"key leaked into {path.name}")
+
+        analysis_path = run_dir / "analysis.json"
+        raw = analysis_path.read_text(encoding="utf-8")
+        self.assertEqual(json.loads(raw)["meta"]["config"]["llm_config"]["api_key"], "***")
+
+    def test_api_key_echoed_in_analysis_report_is_scrubbed_from_markdown(self) -> None:
+        class EchoingReportProcessor(FakeAnalysisProcessor):
+            def analyze(self, comments, dynamics, params, progress=None, cancel_event=None):
+                result = super().analyze(comments, dynamics, params, progress, cancel_event)
+                result["report_markdown"] = f"# 报告\n\nkey: {params['llm_config']['api_key']}"
+                return result
+
+        service = self.make_service(processor=EchoingReportProcessor())
+        crawled = self.run_to_completion(service, service.start_crawl("BV1xx411c7mD"))
+        analysed = self.run_to_completion(service, service.start_analyze(crawled.run_id))
+
+        self.assertEqual(analysed.status, RunStatus.COMPLETED)
+        run_dir = self.store.run_dir(crawled.run_id)
+        for path in run_dir.rglob("*"):
+            if path.is_file():
+                self.assertNotIn(SECRET_KEY.encode("utf-8"), path.read_bytes(), f"key leaked into {path.name}")
+
+        report_path = run_dir / "report.md"
+        raw = report_path.read_text(encoding="utf-8")
+        self.assertIn("key: ***", raw)
+
     def test_api_key_echoed_by_the_provider_is_scrubbed_everywhere(self) -> None:
         # A 401 body that quotes the key back at us is the realistic leak path:
         # the text flows into the snapshot, the manifest and the tool result.
