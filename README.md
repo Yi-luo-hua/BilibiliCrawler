@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./assets/app_logo.png" alt="BilibiliCrawler Logo" width="160" />
+<img src="./assets/app_logo.png" alt="BilibiliCrawler Logo" width="250" />
 
 </div>
 
@@ -41,7 +41,7 @@ BilibiliCrawler 是一个 B 站评论 / 动态爬取与舆论分析桌面工具�
 - 扫码登录：关注页动态流可通过 B 站 App 扫码登录。
 - 筛选与导出：支持关键词、时间范围、最大页数，导出 CSV。
 - 舆论分析：调用 LLM API 分析评论 / 动态主题、风险点、洞察和代表性内容。
-- 可视化图表：支持主题排行、时间趋势、等级分布、地域地图、词云图和深度分析模块。
+- 可视化图表：支持情绪分布、主题排行、时间趋势、等级分布、地域地图、词云图和深度分析模块。
 - 词云图：由 Python `wordcloud` 生成 PNG。
 - 自定义界面：支持浅色 / 暗色主题、本地背景图、背景透明度和模糊效果。
 - MCP 接入：agent 可越过桌面客户端，直接完成爬取与分析，详见 [docs/MCP.md](docs/MCP.md)。
@@ -83,6 +83,7 @@ BilibiliCrawler 是一个 B 站评论 / 动态爬取与舆论分析桌面工具�
 
 当前分析模块：
 
+- 情绪分布
 - 主题排行
 - 时间趋势
 - 等级分布
@@ -140,6 +141,7 @@ YYYYMMDD-HHMMSS-来源标签[-BV号]
 
 - 评论 ID
 - 根评论 ID
+- 是否为回复
 - 用户名
 - 用户等级
 - 评论内容
@@ -260,10 +262,10 @@ BilibiliCrawler/
 │  │  │  ├─ analysisCharts.ts      分析图表、地图和导出资产工具
 │  │  │  ├─ dynamicTarget.ts       动态 UID / 空间链接校验
 │  │  │  ├─ sidecarClient.ts       带请求关联与超时的 sidecar 客户端
-│  │  │  └─ tauri.ts               Tauri invoke 封装
+│  │  │  ├─ tauri.ts               Tauri invoke 封装
+│  │  │  └─ titleBarInteraction.ts 标题栏拖动与双击最大化交互
 │  │  ├─ state/
 │  │  │  └─ taskState.ts           爬取 / 分析任务状态机
-│  │  ├─ tests/                     桌面状态机与通信单元测试
 │  │  ├─ App.tsx
 │  │  ├─ main.tsx
 │  │  ├─ styles.css
@@ -275,8 +277,9 @@ BilibiliCrawler/
 │  │  ├─ icons/
 │  │  ├─ Cargo.toml
 │  │  └─ tauri.conf.json
+│  ├─ tests/                       桌面状态机与通信单元测试
 │  ├─ package.json
-│  ├─ pnpm-workspace.yaml            pnpm 依赖脚本审核配置
+│  ├─ pnpm-workspace.yaml          pnpm 依赖脚本审核配置
 │  └─ vite.config.ts
 ├─ scripts/
 │  ├─ build_backend.ps1            安装 Python 依赖并用 PyInstaller 构建 sidecar
@@ -297,11 +300,14 @@ BilibiliCrawler/
 │     └─ run_store.py             run 目录读写与路径收敛
 ├─ tests/
 │  ├─ fixtures/
+│  ├─ test_adapter_channel.py       sidecar RPC 通道回归测试
 │  ├─ test_agent_service.py         headless 服务层回归测试
 │  ├─ test_analysis_cancellation.py 分析停止与阻塞请求回归测试
+│  ├─ test_caller_policy.py         调用者策略回归测试
 │  ├─ test_dynamic_crawler.py       动态分页、异常与停止回归测试
 │  ├─ test_mcp_server.py            MCP 工具契约与不可信内容测试
-│  └─ test_sidecar_analysis.py      sidecar 与分析回归测试
+│  ├─ test_sidecar_analysis.py      sidecar 与分析回归测试
+│  └─ test_sidecar_characterization.py sidecar 端到端特征基准测试
 ├─ utils/
 │  └─ helpers.py                   链接解析等工具函数
 ├─ requirements.txt
