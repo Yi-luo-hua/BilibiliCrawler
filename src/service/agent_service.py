@@ -486,7 +486,7 @@ class AgentService:
         or when the outcome was already taken.
         """
         task = self._tasks.get(task_id)
-        if task is None or task.alive:
+        if task is None or not task.snapshot().done:
             return None
         with self._lock:
             outcome = self._outcome
