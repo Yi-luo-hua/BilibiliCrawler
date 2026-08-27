@@ -1,3 +1,20 @@
+<div align="center">
+
+<img src="./assets/app_logo.png" alt="BilibiliCrawler Logo" width="160" />
+
+</div>
+
+<div align="center">
+
+[![GitHub Downloads](https://img.shields.io/github/downloads/Yi-luo-hua/BilibiliCrawler/total)](https://github.com/Yi-luo-hua/BilibiliCrawler/releases)
+[![GitHub Repo stars](https://img.shields.io/github/stars/Yi-luo-hua/BilibiliCrawler?style=social)](https://github.com/Yi-luo-hua/BilibiliCrawler/stargazers)
+[![GitHub Code License](https://img.shields.io/github/license/Yi-luo-hua/BilibiliCrawler)](LICENSE)
+[![GitHub last commit](https://img.shields.io/github/last-commit/Yi-luo-hua/BilibiliCrawler)](https://github.com/Yi-luo-hua/BilibiliCrawler/commits/main)
+[![GitHub pull request](https://img.shields.io/badge/PRs-welcome-blue)](https://github.com/Yi-luo-hua/BilibiliCrawler/pulls)
+[![Release](https://img.shields.io/github/v/release/Yi-luo-hua/BilibiliCrawler)](https://github.com/Yi-luo-hua/BilibiliCrawler/releases)
+
+</div>
+
 # BilibiliCrawler
 
 BilibiliCrawler 是一个 B 站评论 / 动态爬取与舆论分析桌面工具。v2.00 起项目迁移为 **Tauri 2 + React + TypeScript** 桌面应用，Python 爬虫和分析逻辑作为本地 sidecar 后端运行，通过本地进程通信完成爬取、扫码登录、LLM 分析和导出。
