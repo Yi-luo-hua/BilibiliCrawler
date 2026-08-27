@@ -416,6 +416,42 @@ class CommentCrawlBaseline(unittest.TestCase):
 
 
 class CommentStopBaseline(unittest.TestCase):
+    def test_stop_before_the_worker_builds_a_crawler_finishes_empty(self) -> None:
+        worker_started = threading.Event()
+        release_worker = threading.Event()
+        sidecar, _ = make(comments=[COMMENT_A])
+        self.addCleanup(drain, sidecar)
+        self.addCleanup(release_worker.set)
+        original_persist = sidecar._agent_service._persist
+        first_persist = True
+
+        def blocking_first_persist(task):
+            nonlocal first_persist
+            if first_persist:
+                first_persist = False
+                worker_started.set()
+                if not release_worker.wait(timeout=5):
+                    raise TimeoutError("comment worker was never released")
+            return original_persist(task)
+
+        sidecar._agent_service._persist = blocking_first_persist
+        sidecar.handle({"id": "req-1", "method": "comments.start",
+                        "params": {"input": "BV1xx411c7mD", "max_pages": 5}})
+        self.assertTrue(worker_started.wait(timeout=5))
+
+        deadline = time.monotonic() + 5
+        while not sidecar._active_agent_task_id and time.monotonic() < deadline:
+            threading.Event().wait(0.01)
+        self.assertTrue(sidecar._active_agent_task_id)
+
+        sidecar.handle({"id": "req-2", "method": "task.stop", "params": {}})
+        release_worker.set()
+        drain(sidecar)
+
+        self.assertFalse(sidecar.has("error", "comments"))
+        self.assertEqual(sidecar.event("finished", "comments")["count"], 0)
+        self.assertEqual(sidecar.event("stats", "comments")["stats"], EMPTY_STATS)
+
     def test_stop_before_the_sidecar_receives_the_task_id_is_forwarded(self) -> None:
         crawl_gate = threading.Event()
         return_gate = threading.Event()

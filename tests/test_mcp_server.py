@@ -126,14 +126,22 @@ class McpServerTestCase(unittest.IsolatedAsyncioTestCase):
 
 
 class ToolSurfaceTests(McpServerTestCase):
-    async def test_server_exposes_exactly_the_five_documented_tools(self) -> None:
+    async def test_server_exposes_exactly_the_documented_tools(self) -> None:
         self.install_service()
         async with self.client() as client:
             tools = await client.list_tools()
         names = sorted(tool.name for tool in tools.tools)
         self.assertEqual(
             names,
-            ["analyze_run", "crawl_and_analyze", "crawl_comments", "get_task_status", "stop_task"],
+            [
+                "analyze_run",
+                "crawl_and_analyze",
+                "crawl_comments",
+                "delete_run",
+                "get_task_status",
+                "list_runs",
+                "stop_task",
+            ],
         )
 
     async def test_every_tool_documents_its_arguments(self) -> None:
@@ -253,6 +261,93 @@ class StatusAndStopTests(McpServerTestCase):
         self.assertIn("BUSY", text)
         self.assertIn(first.structured_content["task_id"], text)
         release.set()
+
+
+class RunManagementTests(McpServerTestCase):
+    async def test_list_runs_reports_the_persisted_runs_newest_first(self) -> None:
+        service = self.install_service()
+        async with self.client() as client:
+            first = await client.call_tool("crawl_comments", {"url": "BV1xx411c7mD"})
+            second = await client.call_tool("crawl_comments", {"url": "BV1xx411c7mD"})
+            listing = await client.call_tool("list_runs", {})
+
+        payload = listing.structured_content["result"]
+        ids = [item["run_id"] for item in payload]
+        # Run ids sort on a whole-second timestamp; two runs created within
+        # the same second order by their random hex suffix, so only set
+        # membership is stable here.
+        self.assertEqual(set(ids[:2]), {first.structured_content["run_id"], second.structured_content["run_id"]})
+        self.assertTrue(all(item["status"] == RunStatus.COMPLETED for item in payload[:2]))
+
+    async def test_delete_run_removes_the_directory(self) -> None:
+        service = self.install_service()
+        async with self.client() as client:
+            crawled = await client.call_tool("crawl_comments", {"url": "BV1xx411c7mD"})
+            run_id = crawled.structured_content["run_id"]
+
+            deleted = await client.call_tool("delete_run", {"run_id": run_id})
+
+        self.assertFalse(deleted.is_error, deleted.content)
+        # A dict return passes through unwrapped; only list returns get
+        # wrapped by the SDK's "result" envelope.
+        self.assertEqual(deleted.structured_content["deleted"], [run_id])
+        self.assertNotIn(run_id, service.store.list_runs())
+        self.assertFalse((Path(self._tmp.name) / run_id).exists())
+
+    async def test_delete_run_prunes_all_but_the_newest(self) -> None:
+        service = self.install_service()
+        async with self.client() as client:
+            await client.call_tool("crawl_comments", {"url": "BV1xx411c7mD"})
+            await client.call_tool("crawl_comments", {"url": "BV1xx411c7mD"})
+            await client.call_tool("crawl_comments", {"url": "BV1xx411c7mD"})
+
+            pruned = await client.call_tool("delete_run", {"run_id": "", "prune_to": 1})
+
+        self.assertEqual(len(pruned.structured_content["deleted"]), 2)
+        # Run ids sort on a whole-second timestamp, so which of the three
+        # survives is not deterministic -- only that exactly one does.
+        self.assertEqual(len(service.store.list_runs()), 1)
+
+    async def test_delete_run_without_an_explicit_prune_to_is_rejected(self) -> None:
+        # An LLM host resolving a template variable to an empty string is a
+        # routine failure; the omitted prune_to must not default to "keep
+        # nothing" and wipe the whole history.
+        self.install_service()
+        async with self.client() as client:
+            result = await client.call_tool("delete_run", {"run_id": ""})
+
+        self.assertTrue(result.is_error)
+        text = " ".join(getattr(item, "text", "") for item in result.content)
+        self.assertIn("prune_to", text)
+
+    async def test_delete_run_refuses_a_task_that_is_still_running(self) -> None:
+        # Deleting a run mid-task leaves a manifest-less zombie directory:
+        # the worker re-creates it via run_dir(create=True) after the rmtree.
+        release = threading.Event()
+        service = self.install_service(release=release)
+        async with self.client() as client:
+            started = await client.call_tool(
+                "crawl_comments", {"url": "BV1xx411c7mD", "wait_seconds": 0}
+            )
+            run_id = started.structured_content["run_id"]
+
+            rejected = await client.call_tool("delete_run", {"run_id": run_id})
+
+        self.assertTrue(rejected.is_error)
+        text = " ".join(getattr(item, "text", "") for item in rejected.content)
+        self.assertIn("stop_task", text)
+        # And the run directory is still there.
+        self.assertIn(run_id, service.store.list_runs())
+        release.set()
+
+    async def test_delete_run_rejects_a_foreign_run_id(self) -> None:
+        self.install_service()
+        async with self.client() as client:
+            result = await client.call_tool("delete_run", {"run_id": "../../etc"})
+
+        self.assertTrue(result.is_error)
+        text = " ".join(getattr(item, "text", "") for item in result.content)
+        self.assertIn("INVALID_INPUT", text)
 
 
 class ErrorHandlingTests(McpServerTestCase):

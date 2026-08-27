@@ -323,6 +323,84 @@ async def stop_task(task_id: str) -> ToolResult:
     return _to_result(snapshot)
 
 
+@mcp.tool(annotations={"read_only_hint": True})
+async def list_runs(limit: int = 20) -> list[dict[str, str]]:
+    """列出持久化的运行记录（run 目录），最新在前。
+
+    每条记录包含 run_id、类型、状态与创建时间；需要产物文件路径时
+    用 get_task_status(run_id=...) 查询。
+
+    Args:
+        limit: 最多返回条数，默认 20。
+    """
+    service = get_service()
+    store = service.store
+    runs: list[dict[str, str]] = []
+    for run_id in store.list_runs(limit=max(1, min(100, limit))):
+        try:
+            manifest = store.read_manifest(run_id)
+        except ServiceError:
+            continue  # a half-deleted run is not worth failing the listing for
+        runs.append(
+            {
+                "run_id": run_id,
+                "kind": str(manifest.get("kind") or ""),
+                "status": str(manifest.get("status") or ""),
+                "created_at": str(manifest.get("created_at") or ""),
+            }
+        )
+    return runs
+
+
+@mcp.tool(annotations={"read_only_hint": False, "idempotent_hint": True, "destructive_hint": True})
+async def delete_run(run_id: str, prune_to: int | None = None) -> dict[str, object]:
+    """删除运行记录及其全部产物文件（不可恢复）。
+
+    两种用法：传 run_id 删除单个运行；传 prune_to=N 保留最新 N 个运行、
+    删除其余（不传 run_id 或传空串时生效，N 至少为 1 且必须显式传入）。
+    正在运行的任务不会被删除。运行数据会持续占用磁盘，确认不再需要
+    导出或分析后可用此工具清理。
+
+    Args:
+        run_id: 要删除的运行标识；为空时按 prune_to 批量清理。
+        prune_to: 批量模式下保留的最新运行数量，必须显式传入且 >= 1。
+    """
+    service = get_service()
+    store = service.store
+    try:
+        target = str(run_id or "").strip()
+        if target:
+            _reject_if_running(service, target)
+            store.delete_run(target)
+            return {"ok": True, "deleted": [target]}
+        if prune_to is None:
+            # An omitted prune_to must not default to "keep nothing": an LLM
+            # host resolving a template variable to an empty string is a
+            # routine failure mode, and this tool rmtree's real directories.
+            raise ToolError("批量清理需显式传入 prune_to（保留的最新运行数量，例如 prune_to=10），单删请直接传 run_id。")
+        removed = store.prune_runs(max(1, prune_to), skip_run_ids={service.active_run_id} - {""})
+    except ServiceError as exc:
+        raise _fail(exc) from exc
+    except OSError as exc:
+        raise ToolError(f"删除失败：文件系统错误 {exc}") from exc
+    return {"ok": True, "deleted": removed}
+
+
+def _reject_if_running(service: AgentService, run_id: str) -> None:
+    """Refuse to delete a run whose task is still executing.
+
+    The worker would otherwise re-create the directory via
+    run_dir(create=True) after the rmtree, leaving a manifest-less zombie
+    that list_runs skips and nothing but manual filesystem work can find.
+    """
+    try:
+        snapshot = service.get_status(run_id=run_id)
+    except ServiceError:
+        return  # no task for this run in this process; safe to delete
+    if not snapshot.done:
+        raise ToolError(f"run {run_id} 正在执行（{snapshot.status}），请先 stop_task 再删除。")
+
+
 def main() -> None:
     logger.info("starting bilibili-crawler MCP server on stdio")
     mcp.run()

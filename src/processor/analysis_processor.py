@@ -138,6 +138,7 @@ class LLMAnalysisProcessor:
         progress: ProgressCallback | None = None,
         cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
+        started_at = time.time()
         source = cls._normalize_source(comments, dynamics, params.get("source"))
         strategy = params.get("strategy") or "sample"
         sample_size = cls._clamp_int(params.get("sample_size"), 300, 20, 2000)
@@ -211,6 +212,7 @@ class LLMAnalysisProcessor:
             **merged,
             **local_layers,
             "meta": {
+                "schema_version": 1,
                 "source": source,
                 "strategy": strategy,
                 "model": model,
@@ -218,6 +220,7 @@ class LLMAnalysisProcessor:
                 "analyzed_records": len(selected),
                 "batch_count": len(batches),
                 "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "elapsed_seconds": round(time.time() - started_at, 1),
                 "chart_keys": chart_keys,
                 **location_stats,
             },
@@ -847,6 +850,12 @@ class LLMAnalysisProcessor:
         result: dict[str, Any],
         chart_assets: list[dict[str, Any]] | None = None,
         asset_dir_name: str = "",
+        source_url: str = "",
+        source_title: str = "",
+        source_owner: str = "",
+        source_pubdate: str = "",
+        run_id: str = "",
+        records: list[dict[str, Any]] | None = None,
     ) -> str:
         meta = result.get("meta") or {}
         chart_keys = cls._normalize_chart_keys(meta.get("chart_keys"), meta.get("source"))
@@ -855,8 +864,12 @@ class LLMAnalysisProcessor:
             for item in chart_assets or []
             if isinstance(item, dict) and item.get("key") and item.get("filename")
         }
+        # The title names the analysed target when the crawler learned it:
+        # a report is copied out of its run directory, and "Bilibili 舆论分析报告"
+        # alone cannot tell two exported reports apart.
+        title = f"舆论分析报告：{source_title}" if source_title else "Bilibili 舆论分析报告"
         lines = [
-            "# Bilibili 舆论分析报告",
+            f"# {title}",
             "",
             f"- 生成时间：{meta.get('generated_at', '')}",
             f"- 数据源：{meta.get('source', '')}",
@@ -865,10 +878,26 @@ class LLMAnalysisProcessor:
             f"- 分析样本：{meta.get('analyzed_records', 0)} / {meta.get('total_records', 0)}",
             f"- IP 属地覆盖：{meta.get('ip_locations', 0)} / {int(meta.get('ip_locations', 0) or 0) + int(meta.get('missing_ip_locations', 0) or 0)}",
             f"- 分析模块：{'、'.join(chart_keys)}",
-            "",
-            "## 总结",
-            str(result.get("summary") or ""),
         ]
+        # Provenance: a report travels outside its run directory (that is the
+        # point of Markdown), so it must say which video it came from and which
+        # run holds the raw data.
+        if run_id:
+            lines.append(f"- Run ID：{run_id}")
+        if source_url or source_title:
+            suffix = f"（{source_title}）" if source_url and source_title else ""
+            lines.append(f"- 数据来源：{source_url or source_title}{suffix}")
+        if source_owner:
+            lines.append(f"- UP 主：{source_owner}")
+        if source_pubdate:
+            lines.append(f"- 发布时间：{source_pubdate}")
+        lines.extend(
+            [
+                "",
+                "## 总结",
+                str(result.get("summary") or ""),
+            ]
+        )
         summary_points = cls._strings(result.get("summary_points"))
         if summary_points:
             lines.extend([""])
@@ -877,17 +906,13 @@ class LLMAnalysisProcessor:
         for key in chart_keys:
             if key == "sentiment_distribution":
                 cls._append_chart_section(lines, "情绪分布", key, assets_by_key, asset_dir_name)
-                lines.extend(cls._items_lines(result.get("sentiment_counts", [])))
+                lines.extend(cls._sentiment_lines(result.get("sentiment_counts", [])))
             elif key == "topic_ranking":
                 cls._append_chart_section(lines, "主题排行", key, assets_by_key, asset_dir_name)
                 lines.extend(cls._items_lines(result.get("topic_counts", [])))
             elif key == "time_trend":
                 cls._append_chart_section(lines, "时间趋势", key, assets_by_key, asset_dir_name)
-                lines.extend(
-                    f"- {item.get('name', '')}：数量 {item.get('count', 0)}，点赞 {item.get('likes', 0)}"
-                    for item in result.get("time_series", [])
-                    if isinstance(item, dict)
-                )
+                lines.extend(cls._time_trend_lines(result.get("time_series", [])))
             elif key == "level_distribution":
                 cls._append_chart_section(lines, "等级分布", key, assets_by_key, asset_dir_name)
                 lines.extend(cls._items_lines(result.get("user_level_counts", [])))
@@ -924,7 +949,12 @@ class LLMAnalysisProcessor:
         risks = result.get("risk_points", [])
         lines.extend((f"- {item}" for item in risks) if risks else ["- 暂无明显风险点"])
         lines.extend(["", "## 代表性评论"])
-        lines.extend(f"- {item}" for item in result.get("notable_quotes", []))
+        # Attributed where the source record can be found: who said it and how
+        # much agreement it drew is itself public-opinion information.
+        for quote in cls._strings(result.get("notable_quotes")):
+            line = cls._quote_line(quote, records)
+            if line:
+                lines.append(line)
         return "\n".join(lines).strip() + "\n"
 
     @staticmethod
@@ -1224,6 +1254,65 @@ class LLMAnalysisProcessor:
             for item in value
             if isinstance(item, dict)
         )
+
+    @staticmethod
+    def _sentiment_lines(value: Any) -> list[str]:
+        """Counts with their share of the total; absolute counts alone force
+        the reader to do the division in their head."""
+        items = [item for item in value if isinstance(item, dict)]
+        total = sum(int(item.get("value") or 0) for item in items)
+        lines: list[str] = []
+        for item in items:
+            count = int(item.get("value") or 0)
+            share = f"（{count / total:.1%}）" if total > 0 else ""
+            lines.append(f"- {item.get('name', '')}：{count}{share}")
+        return lines
+
+    @staticmethod
+    def _time_trend_lines(value: Any) -> list[str]:
+        """A table, not prose: the per-bucket numbers line up and compare at a
+        glance even where no chart asset was rendered."""
+        items = [item for item in value if isinstance(item, dict)]
+        if not items:
+            return []
+        lines = ["", "| 时间 | 数量 | 点赞 |", "| --- | --- | --- |"]
+        lines.extend(
+            f"| {item.get('name', '')} | {item.get('count', 0)} | {item.get('likes', 0)} |"
+            for item in items
+        )
+        return lines
+
+    @classmethod
+    def _quote_line(cls, quote: str, records: list[dict[str, Any]] | None) -> str:
+        """Render one notable quote, attributed when its source record matches.
+
+        The LLM may trim or lightly reword a quote, so matching is by
+        containment in either direction; anything unmatched keeps the plain
+        form rather than being decorated with a wrong attribution.
+        """
+        text = str(quote).strip()
+        if not text:
+            return ""
+        for record in records or []:
+            content = str(record.get("content") or "").strip()
+            if not content:
+                continue
+            # Only "quote is contained in the original comment" is trusted
+            # unconditionally. The reverse direction (the LLM shortened a long
+            # comment into a longer quote) is only meaningful for substantial
+            # originals: a short comment like "支持" is a substring of almost
+            # any quote that mentions it, and first-match-wins would hand the
+            # attribution to whoever typed the shortest reply.
+            if not (text in content or (content in text and len(content) >= 8)):
+                continue
+            username = str(record.get("username") or "").strip()
+            likes = record.get("like_count")
+            attribution = [part for part in (username, f"点赞 {likes}" if isinstance(likes, int) and likes > 0 else "") if part]
+            if attribution:
+                return f"- 「{text}」—— {'，'.join(attribution)}"
+            # This match cannot be attributed; keep looking for the real
+            # source record instead of giving up on the first bare hit.
+        return f"- {text}"
 
     @staticmethod
     def _list_of_dicts(value: Any) -> list[dict[str, Any]]:

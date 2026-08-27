@@ -18,6 +18,7 @@ import logging
 import queue
 import threading
 import traceback
+from datetime import datetime
 from typing import Any, Callable
 
 from src.api.bilibili_api import BilibiliAPI
@@ -44,6 +45,11 @@ logger = logging.getLogger(__name__)
 
 ProgressEvent = tuple[int, str]
 
+# Artifacts produced by (and owned by) the analysis half: a re-analysis
+# replaces them wholesale instead of merging, so a stale word cloud cannot
+# survive a re-analysis that produced none.
+_ANALYSIS_ARTIFACT_KEYS = ("analysis_json", "report_markdown", "word_cloud_image")
+
 
 class _Task:
     """Mutable task state. All mutation goes through the instance lock."""
@@ -65,6 +71,9 @@ class _Task:
         self.counts: dict[str, int] = {}
         self.summary = ""
         self.artifacts: dict[str, str] = {}
+        # What the crawler learned about the target (title/owner/pubdate),
+        # persisted into the manifest next to the comments it describes.
+        self.target: dict = {}
         self.warnings: list[str] = []
         self.error: str | None = None
         self.error_code: str | None = None
@@ -89,6 +98,17 @@ class _Task:
 
     def update(self, **changes: Any) -> None:
         with self._lock:
+            # A pending cancel must not be rolled back by a phase transition
+            # racing it (e.g. update(EXPORTING) landing just after
+            # request_cancel set CANCELLING); the user would see "writing
+            # files" instead of "stopping" until settle. Terminal states are
+            # committed by settle()/mark_failed() directly, not via update().
+            if (
+                "status" in changes
+                and self.status == RunStatus.CANCELLING
+                and not self.terminal
+            ):
+                changes = {k: v for k, v in changes.items() if k != "status"}
             for key, value in changes.items():
                 setattr(self, key, value)
 
@@ -254,6 +274,17 @@ class AgentService:
     def policy(self) -> CallerPolicy:
         return self._policy
 
+    @property
+    def active_run_id(self) -> str:
+        """The run the currently executing task writes to, "" when idle.
+
+        Consumers that delete run directories (e.g. prune) must hold this one
+        back: the worker would otherwise re-create the directory mid-delete
+        and leave a manifest-less zombie on disk.
+        """
+        with self._lock:
+            return self._active.run_id if self._active is not None else ""
+
     # -- task lifecycle ----------------------------------------------------
     def _begin(self, kind: str, run_id: str) -> _Task:
         with self._lock:
@@ -354,18 +385,33 @@ class AgentService:
             # of how many comments exist and where the CSV went.
             counts = {**(existing.get("counts") or {}), **task.counts}
             artifacts = {**(existing.get("artifacts") or {}), **task.artifacts}
+            if task.phase == TaskKind.ANALYZE and task.terminal:
+                # The analysis owns these keys; a re-analysis replaces them.
+                # Merge-only would keep announcing an archived word cloud
+                # after a re-analysis that produced none.
+                for key in _ANALYSIS_ARTIFACT_KEYS:
+                    if key not in task.artifacts:
+                        artifacts.pop(key, None)
+            target = {**(existing.get("target") or {}), **task.target}
             self._store.update_manifest(
                 task.run_id,
                 status=task.status,
                 stage=task.stage,
                 counts=counts,
                 artifacts=artifacts,
+                target=target,
                 warnings=task.warnings,
                 error=task.error,
                 error_code=task.error_code,
             )
         except ServiceError:
             logger.warning("could not persist manifest for run %s", task.run_id)
+        except OSError as exc:
+            # A settle()'d terminal status must not be rewritten to FAILED by
+            # a transient write failure (antivirus/indexer holding the file,
+            # disk full). The data files are already on disk; only this
+            # manifest refresh is lost.
+            logger.warning("could not persist manifest for run %s: %s", task.run_id, exc)
 
     # -- public API --------------------------------------------------------
     def start_crawl(
@@ -548,9 +594,12 @@ class AgentService:
         max_pages = int(params["max_pages"])
 
         # A cancel that arrived before the crawl started must not fire off
-        # requests anyway.
+        # requests anyway. Mirror the post-crawler check below: on the desktop
+        # policy an empty crawl is a success, so the outcome must be recorded
+        # and the consumer sees finished(0) rather than "result unavailable".
         if task.cancel_event.is_set():
-            self._settle(task, "评论爬取完成")
+            changes = self._crawl_results(task, []) if self._policy.empty_crawl_is_success else {}
+            self._settle(task, "评论爬取完成", **changes)
             return
 
         def progress(message: str) -> None:
@@ -587,6 +636,11 @@ class AgentService:
             max_pages=max_pages,
             mode=int(params["sort_mode"]),
         )
+        # Captured while the crawler still exists: the title/owner it learned
+        # resolving the target belongs in the manifest next to the comments.
+        target_info = getattr(crawler, "target_info", None)
+        if isinstance(target_info, dict) and target_info:
+            task.update(target=dict(target_info))
         task.attach_crawler(None)
 
         cleaned = self._data_processor.clean_comments(comments)
@@ -628,15 +682,18 @@ class AgentService:
         # weaker of the two.
         self._record_outcome(task, comments=cleaned)
         artifacts = self._store.save_comments(task.run_id, cleaned)
-        if "comments_csv" not in artifacts:
-            # The CSV is a convenience export; losing it must not look like success.
+        if cleaned and "comments_csv" not in artifacts:
+            # The CSV is a convenience export; losing it must not look like
+            # success. An empty list is "no data", not "export failed" -- the
+            # desktop policy treats an empty crawl as success, and warning
+            # here would record a failure that never happened.
             task.add_warning("CSV 导出失败，评论数据仍完整保存在 comments.json 中。")
         stats = self._data_processor.get_statistics(cleaned)
         # counts keeps three integers; the rest of this dict is what the desktop
         # renders. Recomputing it from reloaded JSON would give the same numbers
         # only for as long as nothing drifts, and no way to notice when it does.
         self._record_outcome(task, stats=stats)
-        return {
+        changes: dict[str, Any] = {
             "counts": {
                 **task.counts,
                 "comments": len(cleaned),
@@ -646,6 +703,9 @@ class AgentService:
             "artifacts": {**task.artifacts, **artifacts},
             "percent": 70,
         }
+        if task.target:
+            changes["target"] = dict(task.target)
+        return changes
 
     def _do_analyze(self, task: _Task, params: dict[str, Any]) -> None:
         task.update(phase=TaskKind.ANALYZE, status=RunStatus.ANALYZING, stage="正在分析评论")
@@ -675,9 +735,10 @@ class AgentService:
         except AnalysisError as exc:
             raise ServiceError(ErrorCode.ANALYSIS_FAILED, str(exc)) from exc
 
-        if task.cancel_event.is_set():
-            self._settle(task, "分析完成", cancelled_stage="分析已取消")
-            return
+        # A cancel landing here must not discard an already-complete result:
+        # the full LLM cost has been paid, and the crawl half keeps partial
+        # data on the same race ("partial data is kept"). Persisting first and
+        # letting settle() pick `cancelled` afterwards matches that contract.
 
         # Recorded before the store sees it. save_analysis lifts
         # report_markdown into its own file and rewrites word_cloud_image from a
@@ -687,11 +748,50 @@ class AgentService:
         self._record_outcome(task, analysis=result)
 
         task.update(status=RunStatus.EXPORTING, stage="正在导出分析结果", percent=95)
-        artifacts = self._store.save_analysis(task.run_id, result)
+        # The on-disk report gets run context the processor cannot know: the
+        # source URL from the crawl's manifest, this run's id, and the word
+        # cloud that save_analysis is about to write next to the report. Built
+        # on a shallow copy so the already-recorded outcome keeps the
+        # processor's original report (the desktop re-renders its own with
+        # chart assets anyway). Processors without a _build_markdown_report
+        # (custom/test doubles) keep their own report verbatim.
+        payload = dict(result)
+        build_report = getattr(self._analysis_processor, "_build_markdown_report", None)
+        if callable(build_report):
+            word_cloud = str(result.get("word_cloud_image") or "")
+            chart_assets = (
+                [{"key": "word_cloud", "filename": "word_cloud.png"}]
+                if word_cloud.startswith("data:image/")
+                else []
+            )
+            source_url, target = self._report_context(task.run_id)
+            payload["report_markdown"] = build_report(
+                result,
+                chart_assets=chart_assets,
+                asset_dir_name="assets" if chart_assets else "",
+                source_url=source_url,
+                source_title=str(target.get("title") or ""),
+                source_owner=str(target.get("owner") or ""),
+                source_pubdate=_format_pubdate(target.get("pubdate")),
+                run_id=task.run_id,
+                records=comments,
+            )
+        store_warnings: list[str] = []
+        artifacts = self._store.save_analysis(task.run_id, payload, warnings=store_warnings)
+        for message in store_warnings:
+            task.add_warning(message)
         meta = result.get("meta") or {}
+        # The seeded artifacts may carry a previous analysis's keys (this run
+        # was re-analysed); the store archived those files, so they must not
+        # survive into the final set alongside the fresh ones.
+        final_artifacts = {
+            key: value for key, value in task.artifacts.items() if key not in _ANALYSIS_ARTIFACT_KEYS
+        }
+        final_artifacts.update(artifacts)
         self._settle(
             task,
             "分析完成",
+            cancelled_stage="分析已取消",
             percent=100,
             summary=str(result.get("summary") or ""),
             counts={
@@ -699,10 +799,25 @@ class AgentService:
                 "analyzed": int(meta.get("analyzed_records", 0) or 0),
                 "total_records": int(meta.get("total_records", 0) or 0),
             },
-            artifacts={**task.artifacts, **artifacts},
+            artifacts=final_artifacts,
         )
 
     # -- helpers -----------------------------------------------------------
+    def _report_context(self, run_id: str) -> tuple[str, dict[str, Any]]:
+        """The crawl's source URL and target metadata, for the report header.
+
+        Best effort: the manifest is known to exist here (load_comments
+        already succeeded), but a corrupted one must not turn the export into
+        a failure.
+        """
+        try:
+            manifest = self._store.read_manifest(run_id)
+        except ServiceError:
+            return "", {}
+        url = str((manifest.get("params") or {}).get("url") or "")
+        target = manifest.get("target") or {}
+        return url, target if isinstance(target, dict) else {}
+
     def _crawl_params(self, url: str, max_pages: Any, include_replies: Any, sort_mode: Any) -> dict[str, Any]:
         target = str(url or "").strip()
         if not target:
@@ -811,3 +926,14 @@ def _require_credentials(value: Any, origin: str) -> LLMCredentials:
 def _public(params: dict[str, Any]) -> dict[str, Any]:
     """Strip the credential blob before params go anywhere near a manifest."""
     return {key: value for key, value in params.items() if key != "llm_config"}
+
+
+def _format_pubdate(value: Any) -> str:
+    """A Unix timestamp from target metadata as YYYY-MM-DD, "" if unusable."""
+    try:
+        stamp = int(value)
+    except (TypeError, ValueError):
+        return ""
+    if stamp <= 0:
+        return ""
+    return datetime.fromtimestamp(stamp).strftime("%Y-%m-%d")

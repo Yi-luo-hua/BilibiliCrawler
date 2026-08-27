@@ -28,6 +28,12 @@ class CSVExporter:
         "ip_location": "IP归属地",
     }
 
+    # A convenience human-readable view of comments.json; the JSON keeps
+    # every field. parent_id is here despite the redundancy with root_id/
+    # is_reply because rebuilding a reply thread from the CSV alone needs the
+    # direct parent, and user_id lets the data be joined back against the API.
+    # New columns append at the tail: existing consumers that parse by column
+    # position (row[N]) keep their indices stable across schema growth.
     DEFAULT_COLUMNS = [
         "comment_id",
         "root_id",
@@ -39,6 +45,8 @@ class CSVExporter:
         "reply_count",
         "ctime_text",
         "ip_location",
+        "parent_id",
+        "user_id",
     ]
 
     COLUMN_MAPPING_DYNAMICS = {
@@ -92,8 +100,21 @@ class CSVExporter:
         columns = columns or cls.DEFAULT_COLUMNS_DYNAMICS
         return cls._write_csv(dynamics, filepath, columns, cls.COLUMN_MAPPING_DYNAMICS, index)
 
-    @staticmethod
+    # Cell values starting with these characters are interpreted as
+    # formulas by Excel/LibreOffice when the CSV is opened directly, so they
+    # get a leading apostrophe (CWE-1236). Comment text and usernames are
+    # public, attacker-controllable input.
+    _UNSAFE_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+    @classmethod
+    def _sanitize_cell(cls, value):
+        if isinstance(value, str) and value[:1] in cls._UNSAFE_PREFIXES:
+            return "'" + value
+        return value
+
+    @classmethod
     def _write_csv(
+        cls,
         rows: List[Dict],
         filepath: str,
         columns: Optional[List[str]],
@@ -119,12 +140,12 @@ class CSVExporter:
                 writer = csv.writer(fh)
                 writer.writerow(headers)
                 for idx, row in enumerate(rows):
-                    values = [row.get(col, "") for col in available]
+                    values = [cls._sanitize_cell(row.get(col, "")) for col in available]
                     if index:
                         values = [idx] + values
                     writer.writerow(values)
             logger.info("成功导出 %s 条数据到: %s", len(rows), filepath)
             return True
         except Exception as exc:
-            logger.error("导出 CSV 时出错: %s", exc)
+            logger.error("导出 CSV 时出错: %s", exc, exc_info=True)
             return False
