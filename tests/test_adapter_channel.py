@@ -23,12 +23,13 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from src.processor.analysis_processor import AnalysisCancelled
 from src.processor.data_processor import DataProcessor
 from src.service.agent_service import AgentService
 from src.service.credentials import LLMCredentials
-from src.service.models import EventKind, TaskEvent
+from src.service.models import EventKind, RunStatus, TaskEvent
 from src.service.run_store import RunStore
 
 SECRET_KEY = "sk-CHANNEL-CANARY-abcdef"
@@ -294,6 +295,22 @@ class RewritingStore(RunStore):
         return super().save_comments(run_id, comments)
 
 
+class BlockingTerminalStore(RunStore):
+    """Hold the worker after its snapshot becomes terminal."""
+
+    def __init__(self, root):
+        super().__init__(root)
+        self.terminal_persist_started = threading.Event()
+        self.release_terminal_persist = threading.Event()
+
+    def update_manifest(self, run_id, **changes):
+        if changes.get("status") in RunStatus.TERMINAL:
+            self.terminal_persist_started.set()
+            if not self.release_terminal_persist.wait(timeout=5):
+                raise TimeoutError("terminal manifest write was never released")
+        return super().update_manifest(run_id, **changes)
+
+
 class ChannelTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -527,6 +544,24 @@ class OwnershipTests(ChannelTestCase):
         self.assertIsNotNone(outcome.analysis)
         self.assertIsNone(service.take_outcome(final.task_id))
 
+    def test_terminal_snapshot_makes_the_outcome_available_before_worker_exit(self) -> None:
+        store = BlockingTerminalStore(Path(self._tmp.name))
+        self.addCleanup(store.release_terminal_persist.set)
+        service = self.make(store=store)
+        started = service.start_crawl_and_analyze("BV1xx411c7mD")
+
+        self.assertTrue(store.terminal_persist_started.wait(timeout=5))
+        terminal = service.get_status(task_id=started.task_id)
+        self.assertTrue(terminal.done)
+
+        outcome = service.take_outcome(started.task_id)
+        self.assertIsNotNone(outcome)
+        self.assertIsNotNone(outcome.analysis)
+
+        store.release_terminal_persist.set()
+        self.finish(service, started)
+        self.assertIsNone(service.take_outcome(started.task_id))
+
     def test_an_unknown_task_id_yields_nothing(self) -> None:
         service = self.make()
         self.finish(service, service.start_crawl("BV1xx411c7mD"))
@@ -577,6 +612,27 @@ class OwnershipTests(ChannelTestCase):
         final = self.finish(service, service.start_crawl("BV1xx411c7mD"))
 
         self.assertIsNone(service.take_outcome(final.task_id))
+
+    def test_retention_off_does_not_deepcopy_results(self) -> None:
+        service = self.make(retain_outcome=False)
+        poisoned_copy = mock.Mock()
+        poisoned_copy.deepcopy.side_effect = AssertionError("retention-off path copied an outcome")
+
+        with mock.patch("src.service.agent_service.copy", poisoned_copy):
+            final = self.finish(service, service.start_crawl_and_analyze("BV1xx411c7mD"))
+
+        self.assertEqual(final.status, RunStatus.COMPLETED)
+
+    def test_no_listener_does_not_construct_typed_events(self) -> None:
+        service = self.make(events=None)
+
+        with mock.patch(
+            "src.service.agent_service.TaskEvent",
+            side_effect=AssertionError("listener-free path constructed an event"),
+        ):
+            final = self.finish(service, service.start_crawl_and_analyze("BV1xx411c7mD"))
+
+        self.assertEqual(final.status, RunStatus.COMPLETED)
 
 
 class TheEmptyPathIsUnchangedTests(ChannelTestCase):
