@@ -37,7 +37,7 @@ from src.exporter.csv_exporter import CSVExporter
 from src.processor.analysis_processor import AnalysisCancelled, AnalysisError, LLMAnalysisProcessor
 from src.processor.data_processor import DataProcessor
 from src.service.agent_service import AgentService
-from src.service.credentials import LLMCredentials
+from src.service.credentials import LLMCredentials, scrub
 from src.service.models import DESKTOP_POLICY, EventKind, RunStatus, TaskEvent
 from src.service.paths import analysis_assets_root
 from utils.helpers import ContentType, extract_uid, parse_input
@@ -632,7 +632,8 @@ class Sidecar:
         export_format = params.get("format") or "markdown"
         target = Path(path)
         if export_format == "json":
-            target.write_text(json.dumps(self._last_analysis, ensure_ascii=False, indent=2), encoding="utf-8")
+            payload = json.dumps(self._last_analysis, ensure_ascii=False, indent=2)
+            target.write_text(scrub(payload), encoding="utf-8")
         elif export_format == "markdown":
             chart_assets = self._chart_assets(params.get("chart_assets"))
             asset_dir_name = f"{target.stem}_assets"
@@ -649,7 +650,7 @@ class Sidecar:
                 chart_assets=chart_assets,
                 asset_dir_name=asset_dir_name if chart_assets else "",
             )
-            target.write_text(report, encoding="utf-8")
+            target.write_text(scrub(report), encoding="utf-8")
         else:
             raise ValueError("未知分析导出格式")
         self.respond(request_id, path=str(target))

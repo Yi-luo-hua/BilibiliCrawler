@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import {
+  spawn,
+  spawnSync,
+  type ChildProcessWithoutNullStreams,
+} from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
@@ -30,17 +34,22 @@ const fixturePath = path.join(
 );
 
 function pythonExecutable(): string {
-  if (process.env.BILIBILI_E2E_PYTHON) return process.env.BILIBILI_E2E_PYTHON;
-  const candidates =
-    process.platform === "win32"
+  const configured = process.env.BILIBILI_E2E_PYTHON;
+  const candidates = configured
+    ? [configured]
+    : process.platform === "win32"
       ? [path.join(repoRoot, ".venv", "Scripts", "python.exe"), "python"]
       : [path.join(repoRoot, ".venv", "bin", "python"), "python3", "python"];
-  return candidates.find(
-    (candidate) =>
-      candidate === "python" ||
-      candidate === "python3" ||
-      existsSync(candidate),
-  )!;
+  for (const candidate of candidates) {
+    const probe = spawnSync(candidate, ["--version"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    if (!probe.error && probe.status === 0) return candidate;
+  }
+  throw new Error(
+    `no usable Python interpreter found: ${candidates.join(", ")}`,
+  );
 }
 
 function filesUnder(directory: string): string[] {
@@ -54,12 +63,17 @@ class SidecarHarness {
   readonly child: ChildProcessWithoutNullStreams;
   readonly client: SidecarClient;
   readonly events: SidecarBroadcastEvent[] = [];
-  readonly runRoot = mkdtempSync(path.join(tmpdir(), "bilibili-sidecar-e2e-"));
+  readonly runRoot: string;
+  private readonly closed: Promise<void>;
+  private didClose = false;
   private stderr = "";
   private nextId = 1;
+  private spawnError: Error | null = null;
 
   constructor() {
-    this.child = spawn(pythonExecutable(), [fixturePath], {
+    const executable = pythonExecutable();
+    this.runRoot = mkdtempSync(path.join(tmpdir(), "bilibili-sidecar-e2e-"));
+    this.child = spawn(executable, [fixturePath], {
       cwd: repoRoot,
       env: { ...process.env, BILIBILI_AGENT_RUNS_DIR: this.runRoot },
       stdio: ["pipe", "pipe", "pipe"],
@@ -68,6 +82,9 @@ class SidecarHarness {
       (request) => this.send(request),
       () => `e2e-${this.nextId++}`,
     );
+    this.closed = new Promise((resolve) => {
+      this.child.once("close", () => resolve());
+    });
     readline
       .createInterface({ input: this.child.stdout })
       .on("line", (line) => {
@@ -79,15 +96,24 @@ class SidecarHarness {
     this.child.stderr.on("data", (chunk) => {
       this.stderr += chunk.toString();
     });
-    this.child.on("exit", (code) => {
-      this.client.dispose(`sidecar exited with ${code}: ${this.stderr}`);
+    this.child.on("error", (error) => {
+      this.spawnError = error;
+      this.stderr += `${error.message}\n`;
+      this.client.dispose(`sidecar failed to start: ${error.message}`);
+    });
+    this.child.on("close", (code, signal) => {
+      this.didClose = true;
+      this.client.dispose(
+        `sidecar closed with code=${code} signal=${signal}: ${this.stderr}`,
+      );
     });
   }
 
   async send(request: SidecarRequest): Promise<void> {
-    if (this.child.exitCode !== null) {
+    if (this.spawnError) throw this.spawnError;
+    if (this.child.exitCode !== null || this.child.signalCode !== null) {
       throw new Error(
-        `sidecar already exited with ${this.child.exitCode}: ${this.stderr}`,
+        `sidecar already closed with code=${this.child.exitCode} signal=${this.child.signalCode}: ${this.stderr}`,
       );
     }
     await new Promise<void>((resolve, reject) => {
@@ -115,7 +141,12 @@ class SidecarHarness {
             (status === undefined || item.status === status),
         );
       if (found) return found;
-      if (this.child.exitCode !== null) break;
+      if (
+        this.spawnError ||
+        this.child.exitCode !== null ||
+        this.child.signalCode !== null
+      )
+        break;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     throw new Error(
@@ -123,26 +154,32 @@ class SidecarHarness {
     );
   }
 
+  private async waitForClose(timeoutMs: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(false), timeoutMs);
+      this.closed.then(() => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
+  }
+
   async close(): Promise<void> {
     this.client.dispose();
-    if (this.child.exitCode === null) {
-      this.child.stdin.end();
-      await Promise.race([
-        new Promise<void>((resolve) =>
-          this.child.once("exit", () => resolve()),
-        ),
-        new Promise<void>((resolve) => setTimeout(resolve, 1_000)),
-      ]);
+    let closed = this.didClose;
+    if (
+      !closed &&
+      this.child.exitCode === null &&
+      this.child.signalCode === null
+    ) {
+      if (!this.child.stdin.destroyed) this.child.stdin.end();
     }
-    if (this.child.exitCode === null) {
+    if (!closed) closed = await this.waitForClose(1_000);
+    if (!closed) {
       this.child.kill();
-      await Promise.race([
-        new Promise<void>((resolve) =>
-          this.child.once("exit", () => resolve()),
-        ),
-        new Promise<void>((resolve) => setTimeout(resolve, 1_000)),
-      ]);
+      closed = await this.waitForClose(1_000);
     }
+    if (!closed) throw new Error(`sidecar did not close: ${this.stderr}`);
     rmSync(this.runRoot, { recursive: true, force: true });
   }
 }
@@ -151,12 +188,14 @@ test("SidecarClient completes a persisted comment-to-analysis run over JSON line
   const harness = new SidecarHarness();
   t.after(() => harness.close());
 
+  const crawlStart = harness.events.length;
   const crawl = await harness.client.request("comments.start", {
     input: "BV1xx411c7mD",
     max_pages: 1,
   });
   assert.equal(crawl.id, "e2e-1");
-  await harness.waitForEvent("finished", "comments");
+  await harness.waitForEvent("finished", "comments", crawlStart);
+  await harness.waitForEvent("progress", "comments", crawlStart, "idle");
 
   const canary = "sk-sidecar-e2e-canary";
   const analysisStart = harness.events.length;
@@ -169,11 +208,17 @@ test("SidecarClient completes a persisted comment-to-analysis run over JSON line
   });
   assert.equal(analysis.id, "e2e-2");
   await harness.waitForEvent("finished", "analysis", analysisStart);
+  await harness.waitForEvent("progress", "analysis", analysisStart, "idle");
 
   const latest = await harness.client.request("analysis.latest");
   assert.equal(latest.id, "e2e-3");
   assert.equal(latest.result?.summary, "端到端分析完成");
   assert.equal(latest.result?.report_markdown, "");
+  assert.match(
+    latest.result?.word_cloud_image ?? "",
+    /^data:image\/png;base64,/,
+  );
+  assert.equal(existsSync(latest.result?.word_cloud_image_path ?? ""), true);
   assert.deepEqual(
     harness.events
       .slice(analysisStart)
@@ -182,8 +227,65 @@ test("SidecarClient completes a persisted comment-to-analysis run over JSON line
     [50],
   );
 
+  const resolutionOrder: string[] = [];
+  const delayedLatest = harness.client
+    .request("analysis.latest", { _fixture_response_delay_ms: 150 })
+    .then((response) => {
+      resolutionOrder.push("latest");
+      return response;
+    });
+  const statusRequest = harness.client
+    .request("session.status")
+    .then((response) => {
+      resolutionOrder.push("status");
+      return response;
+    });
+  const status = await statusRequest;
+  assert.equal(status.id, "e2e-5");
+  assert.deepEqual(resolutionOrder, ["status"]);
+  const correlatedLatest = await delayedLatest;
+  assert.equal(correlatedLatest.id, "e2e-4");
+  assert.equal(correlatedLatest.result?.summary, "端到端分析完成");
+  assert.deepEqual(resolutionOrder, ["status", "latest"]);
+
+  const csvPath = path.join(harness.runRoot, "exported-comments.csv");
+  const csvExport = await harness.client.request("export.csv", {
+    kind: "comments",
+    path: csvPath,
+  });
+  assert.equal(csvExport.id, "e2e-6");
+  assert.equal(csvExport.path, csvPath);
+  assert.match(readFileSync(csvPath, "utf8"), /端到端用户/);
+
+  const analysisPath = path.join(harness.runRoot, "exported-analysis.json");
+  const analysisExport = await harness.client.request("analysis.export", {
+    format: "json",
+    path: analysisPath,
+  });
+  assert.equal(analysisExport.id, "e2e-7");
+  assert.equal(analysisExport.path, analysisPath);
+  const exportedAnalysis = readFileSync(analysisPath, "utf8");
+
+  const markdownPath = path.join(harness.runRoot, "exported-analysis.md");
+  const markdownExport = await harness.client.request("analysis.export", {
+    format: "markdown",
+    path: markdownPath,
+  });
+  assert.equal(markdownExport.id, "e2e-8");
+  assert.equal(markdownExport.path, markdownPath);
+  const exportedMarkdown = readFileSync(markdownPath, "utf8");
+
+  assert.equal(exportedAnalysis.includes(canary), false);
+  assert.equal(
+    JSON.parse(exportedAnalysis).meta.config.llm_config.api_key,
+    "***",
+  );
+  assert.equal(exportedMarkdown.includes(canary), false);
+  assert.match(exportedMarkdown, /# 端到端报告/);
+
   const runDirs = readdirSync(harness.runRoot, { withFileTypes: true }).filter(
-    (entry) => entry.isDirectory(),
+    (entry) =>
+      entry.isDirectory() && /^\d{8}-\d{6}-[0-9a-f]{8}$/.test(entry.name),
   );
   assert.equal(runDirs.length, 1);
   const runDir = path.join(harness.runRoot, runDirs[0].name);
@@ -193,6 +295,7 @@ test("SidecarClient completes a persisted comment-to-analysis run over JSON line
     "analysis.json",
     "report.md",
     "manifest.json",
+    path.join("assets", "word_cloud.png"),
   ];
   for (const filename of required) {
     assert.equal(
@@ -215,11 +318,13 @@ test("SidecarClient cancellation produces no stale finished and permits a clean 
   const harness = new SidecarHarness();
   t.after(() => harness.close());
 
+  const crawlStart = harness.events.length;
   await harness.client.request("comments.start", {
     input: "BV1xx411c7mD",
     max_pages: 1,
   });
-  await harness.waitForEvent("finished", "comments");
+  await harness.waitForEvent("finished", "comments", crawlStart);
+  await harness.waitForEvent("progress", "comments", crawlStart, "idle");
   const cancelledStart = harness.events.length;
   await harness.client.request("analysis.start", {
     source: "comments",
@@ -231,10 +336,38 @@ test("SidecarClient cancellation produces no stale finished and permits a clean 
   assert.equal(stop.id, "e2e-3");
   await harness.waitForEvent("cancelled", "analysis", cancelledStart);
   await harness.waitForEvent("progress", "analysis", cancelledStart, "idle");
+  const cancelledEvents = harness.events.slice(cancelledStart);
+  const cancelledIndex = cancelledEvents.findIndex(
+    (item) => item.event === "cancelled" && item.mode === "analysis",
+  );
+  const idleIndex = cancelledEvents.findIndex(
+    (item) =>
+      item.event === "progress" &&
+      item.mode === "analysis" &&
+      item.status === "idle",
+  );
+  assert.deepEqual(cancelledEvents.slice(cancelledIndex, idleIndex + 1), [
+    {
+      kind: "event",
+      event: "cancelled",
+      mode: "analysis",
+      message: "分析已被取消",
+    },
+    { kind: "event", event: "log", message: "分析任务已取消" },
+    {
+      kind: "event",
+      event: "progress",
+      status: "idle",
+      mode: "analysis",
+      percent: 100,
+    },
+  ]);
   assert.equal(
-    harness.events
-      .slice(cancelledStart)
-      .some((item) => item.event === "finished" && item.mode === "analysis"),
+    cancelledEvents.some(
+      (item) =>
+        (item.event === "finished" || item.event === "error") &&
+        (item.mode === undefined || item.mode === "analysis"),
+    ),
     false,
   );
 

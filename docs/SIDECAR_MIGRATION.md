@@ -194,14 +194,15 @@ characterization 测试把当前行为钉住，迁移后保持一致；如果之
 | **内部 `_last_analysis` 保留原始结果** | `test_analysis_latest_returns_the_compact_display_shape` | 已补（阶段 5） |
 | **`analysis.latest` 返回值与当前 compact display payload 完全一致** | `test_analysis_latest_returns_the_compact_display_shape` | 已补（阶段 5） |
 | **复用注入的 api / factory / processor** | `test_comment_task_reuses_logged_in_api_session`、`test_comment_analysis_reuses_the_persisted_comment_run` | 已补（阶段 4–5） |
-| **事件序列逐帧一致：名称、顺序与 payload** | characterization 测试已逐项覆盖；完整 SidecarClient 链路 | 阶段 6 补 |
+| **事件序列逐帧一致：名称、顺序与 payload** | characterization 测试 + `desktop/tests/sidecarE2E.test.ts` | 已补（阶段 6） |
 | **`stats` 事件携带完整 comments stats 字段** | `test_stats_payload_carries_every_data_processor_field` | 已补（阶段 4） |
 | **`_last_comment_context` 保持** | `test_comment_context_is_recorded_for_asset_naming` | 已补（阶段 4） |
 | **评论成功：`stats` + `finished(count, stats)` 完整 payload + 收尾 `idle` 帧** | `test_success_emits_stats_then_finished_then_idle` | 已补（阶段 4） |
 | **评论异常：`error(mode, message)` 完整 payload，不发 `finished`，收尾 `idle` 帧仍发出** | `test_failure_emits_error_without_finished_but_still_goes_idle` | 已补（阶段 4） |
 | **`auto` / 缺失 / 非法 source 走旧路径** | `test_nonexact_sources_stay_legacy_even_after_a_comment_run_exists` | 已补（阶段 5） |
 | `batch_size` 透传 | `test_comment_analysis_reuses_the_persisted_comment_run` | 已补（阶段 5） |
-| `export.csv` 在迁移后仍可用 | 无 | 阶段 6 补 |
+| `export.csv` 在迁移后仍可用 | `SidecarClient completes a persisted comment-to-analysis run over JSON lines` | 已补（阶段 6） |
+| `analysis.export` 保留完整结果且导出文件不含 API Key | 同上（JSON + Markdown） | 已补（阶段 6） |
 | 真机桌面端完整链路 | 无 | 发版前必做，不以自动化测试代替 |
 
 ---

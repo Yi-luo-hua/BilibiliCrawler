@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -28,6 +30,34 @@ COMMENT = {
     "ip_location": "广东",
 }
 
+WORD_CLOUD_DATA_URL = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
+
+
+class FixtureSidecar(Sidecar):
+    def __init__(self, services: SidecarServices) -> None:
+        super().__init__(services=services)
+        self._delayed_responses: dict[str, float] = {}
+
+    @staticmethod
+    def _analysis_asset_root() -> Path:
+        return Path(os.environ["BILIBILI_AGENT_RUNS_DIR"]) / "display-assets"
+
+    def delay_response(self, request_id: str, delay_ms: int) -> None:
+        self._delayed_responses[request_id] = max(0, delay_ms) / 1000
+
+    def _send(self, payload: dict[str, Any]) -> None:
+        request_id = str(payload.get("id") or "") if payload.get("kind") == "response" else ""
+        delay = self._delayed_responses.pop(request_id, 0)
+        if delay:
+            timer = threading.Timer(delay, lambda: super(FixtureSidecar, self)._send(payload))
+            timer.daemon = True
+            timer.start()
+            return
+        super()._send(payload)
+
 
 class FixtureCrawler:
     def __init__(self, progress: Callable[[str], None]) -> None:
@@ -50,6 +80,16 @@ class FixtureCrawler:
 
 
 class FixtureAnalysisProcessor:
+    @staticmethod
+    def _build_markdown_report(
+        result: dict[str, Any],
+        chart_assets: list[dict[str, Any]] | None = None,
+        asset_dir_name: str = "",
+    ) -> str:
+        del chart_assets, asset_dir_name
+        key = result["meta"]["config"]["llm_config"]["api_key"]
+        return f"{result['report_markdown']}\n\nkey: {key}"
+
     def analyze(
         self,
         comments: list[dict[str, Any]],
@@ -75,6 +115,7 @@ class FixtureAnalysisProcessor:
                 "missing_ip_locations": 0,
             },
             "report_markdown": "# 端到端报告",
+            "word_cloud_image": WORD_CLOUD_DATA_URL,
             "meta": {
                 "source": "comments",
                 "strategy": params.get("strategy", "sample"),
@@ -95,7 +136,7 @@ def main() -> None:
         comment_crawler_factory=FixtureCrawler,
         analysis_processor=FixtureAnalysisProcessor(),
     )
-    sidecar = Sidecar(services=services)
+    sidecar = FixtureSidecar(services=services)
     sidecar.emit("ready")
     for raw_line in sys.stdin.buffer:
         line = raw_line.decode("utf-8-sig", errors="replace").replace("\x00", "").strip()
@@ -106,6 +147,11 @@ def main() -> None:
         except json.JSONDecodeError as exc:
             sidecar.emit("error", message=f"请求 JSON 无效: {exc}")
             continue
+        params = request.get("params")
+        if isinstance(params, dict):
+            delay_ms = int(params.pop("_fixture_response_delay_ms", 0) or 0)
+            if delay_ms:
+                sidecar.delay_response(str(request.get("id") or ""), delay_ms)
         sidecar.handle(request)
 
 
