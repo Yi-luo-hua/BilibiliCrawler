@@ -104,12 +104,12 @@ class _Task:
             # request_cancel set CANCELLING); the user would see "writing
             # files" instead of "stopping" until settle. Terminal states are
             # committed by settle()/mark_failed() directly, not via update().
-            if (
-                "status" in changes
-                and self.status == RunStatus.CANCELLING
-                and not self.terminal
-            ):
-                changes = {k: v for k, v in changes.items() if k != "status"}
+            if self.status == RunStatus.CANCELLING and not self.terminal:
+                changes = {
+                    key: value
+                    for key, value in changes.items()
+                    if key not in {"status", "stage", "percent"}
+                }
             for key, value in changes.items():
                 setattr(self, key, value)
 
@@ -778,18 +778,48 @@ class AgentService:
             try:
                 parameters = inspect.signature(build_report).parameters
             except (TypeError, ValueError):
+                report_args = [result]
                 report_kwargs = report_context
             else:
+                report_args = [result]
+                consumed_result = False
+                positional_context: set[str] = set()
+                for parameter in parameters.values():
+                    if parameter.kind in {
+                        inspect.Parameter.POSITIONAL_ONLY,
+                        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    } and not consumed_result:
+                        consumed_result = True
+                        continue
+                    if (
+                        parameter.kind is inspect.Parameter.POSITIONAL_ONLY
+                        and parameter.name in report_context
+                    ):
+                        report_args.append(report_context[parameter.name])
+                        positional_context.add(parameter.name)
                 accepts_kwargs = any(
                     parameter.kind is inspect.Parameter.VAR_KEYWORD
                     for parameter in parameters.values()
                 )
                 report_kwargs = (
-                    report_context
+                    {
+                        key: value
+                        for key, value in report_context.items()
+                        if key not in positional_context
+                    }
                     if accepts_kwargs
-                    else {key: value for key, value in report_context.items() if key in parameters}
+                    else {
+                        key: value
+                        for key, value in report_context.items()
+                        if key in parameters
+                        and parameters[key].kind
+                        in {
+                            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                            inspect.Parameter.KEYWORD_ONLY,
+                        }
+                    }
                 )
-            payload["report_markdown"] = build_report(result, **report_kwargs)
+            payload["report_markdown"] = build_report(*report_args, **report_kwargs)
         store_warnings: list[str] = []
         artifacts = self._store.save_analysis(task.run_id, payload, warnings=store_warnings)
         for message in store_warnings:

@@ -157,6 +157,15 @@ class EmptyWordCloudProcessor(FakeAnalysisProcessor):
         return result
 
 
+class TruncatedPngProcessor(FakeAnalysisProcessor):
+    """Returns only the PNG signature, not a decodable image."""
+
+    def analyze(self, comments, dynamics, params, progress=None, cancel_event=None):
+        result = super().analyze(comments, dynamics, params, progress=progress, cancel_event=cancel_event)
+        result["word_cloud_image"] = "data:image/png;base64,iVBORw0KGgo="
+        return result
+
+
 # A 1x1 transparent PNG: the smallest payload that decodes and writes cleanly.
 _TINY_PNG_DATA_URL = (
     "data:image/png;base64,"
@@ -178,6 +187,13 @@ class LegacyReportProcessor(FakeAnalysisProcessor):
 
     def _build_markdown_report(self, result, chart_assets=None, asset_dir_name=""):
         return f"# legacy renderer\n\nasset dir: {asset_dir_name or 'none'}"
+
+
+class PositionalOnlyReportProcessor(FakeAnalysisProcessor):
+    """Uses a legal legacy signature whose context cannot be passed by name."""
+
+    def _build_markdown_report(self, result, chart_assets, /):
+        return f"# positional renderer\n\ncharts: {len(chart_assets)}"
 
 
 class StopAfterAnalysisProcessor(FakeAnalysisProcessor):
@@ -499,6 +515,17 @@ class AnalysisTests(AgentServiceTestCase):
         run_dir = self.store.run_dir(run_id)
         self.assertFalse((run_dir / "assets" / "word_cloud.png").exists())
 
+    def test_a_truncated_png_warns_instead_of_writing_a_broken_image(self) -> None:
+        run_id = self.seed_run()
+        service = self.make_service(processor=TruncatedPngProcessor())
+        snapshot = self.run_to_completion(service, service.start_analyze(run_id))
+
+        self.assertEqual(snapshot.status, RunStatus.COMPLETED)
+        self.assertNotIn("word_cloud_image", snapshot.artifacts)
+        self.assertTrue(any("词云" in warning for warning in snapshot.warnings), snapshot.warnings)
+        run_dir = self.store.run_dir(run_id)
+        self.assertFalse((run_dir / "assets" / "word_cloud.png").exists())
+
     def test_the_run_report_embeds_the_word_cloud_written_next_to_it(self) -> None:
         run_id = self.seed_run()
         service = self.make_service(processor=WordCloudProcessor())
@@ -520,6 +547,15 @@ class AnalysisTests(AgentServiceTestCase):
         self.assertEqual(snapshot.status, RunStatus.COMPLETED)
         report = (self.store.run_dir(run_id) / "report.md").read_text(encoding="utf-8")
         self.assertIn("# legacy renderer", report)
+
+    def test_a_positional_only_injected_report_renderer_remains_callable(self) -> None:
+        run_id = self.seed_run()
+        service = self.make_service(processor=PositionalOnlyReportProcessor())
+        snapshot = self.run_to_completion(service, service.start_analyze(run_id))
+
+        self.assertEqual(snapshot.status, RunStatus.COMPLETED)
+        report = (self.store.run_dir(run_id) / "report.md").read_text(encoding="utf-8")
+        self.assertIn("# positional renderer", report)
 
     def test_reanalysis_archives_the_previous_result_and_drops_stale_artifacts(self) -> None:
         run_id = self.seed_run()
@@ -1238,7 +1274,7 @@ class ReviewHardeningTests(AgentServiceTestCase):
         self.assertEqual([item["content"] for item in on_disk], malicious)
 
     def test_a_phase_transition_cannot_roll_back_a_pending_cancel(self) -> None:
-        observed: dict[str, str] = {}
+        observed: dict[str, object] = {}
 
         class ObservingStore(RunStore):
             # Records the task status at the moment the analysis export
@@ -1250,7 +1286,10 @@ class ReviewHardeningTests(AgentServiceTestCase):
 
             def save_analysis(self, run_id, result, warnings=None):
                 if self.service is not None:
-                    observed["status"] = self.service.get_status(run_id=run_id).status
+                    snapshot = self.service.get_status(run_id=run_id)
+                    observed["status"] = snapshot.status
+                    observed["stage"] = snapshot.stage
+                    observed["percent"] = snapshot.percent
                 return super().save_analysis(run_id, result, warnings=warnings)
 
         store = ObservingStore(self.root)
@@ -1267,6 +1306,8 @@ class ReviewHardeningTests(AgentServiceTestCase):
         self.assertEqual(final.status, RunStatus.CANCELLED)
         self.assertEqual(observed.get("status"), RunStatus.CANCELLING,
                          "update(EXPORTING) rolled back a pending cancel")
+        self.assertEqual(observed.get("stage"), "正在停止任务")
+        self.assertNotEqual(observed.get("percent"), 95)
 
     def test_desktop_pre_cancel_settles_with_empty_data_not_an_error(self) -> None:
         class FirstCrawlPersistGateStore(RunStore):

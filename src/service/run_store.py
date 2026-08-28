@@ -23,8 +23,11 @@ import secrets
 import shutil
 import tempfile
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from typing import Any
+
+from PIL import Image
 
 from src.exporter.csv_exporter import CSVExporter
 from src.service.credentials import scrub
@@ -363,7 +366,12 @@ class RunStore:
         except (IndexError, ValueError):
             payload.pop("word_cloud_image", None)
             return "", True
-        if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        try:
+            with Image.open(BytesIO(raw)) as image:
+                if image.format != "PNG":
+                    raise ValueError("word cloud payload is not PNG")
+                image.verify()
+        except (OSError, SyntaxError, ValueError):
             payload.pop("word_cloud_image", None)
             return "", True
         assets = run_path / ASSETS_DIR
@@ -394,25 +402,27 @@ class RunStore:
         }
         return {key: str(value) for key, value in known.items() if value.is_file()}
 
+    def _run_created_at(self, run_id: str) -> datetime:
+        try:
+            value = str(self.read_manifest(run_id).get("created_at") or "")
+            return datetime.fromisoformat(value).replace(tzinfo=None)
+        except (ServiceError, TypeError, ValueError):
+            try:
+                return datetime.strptime(run_id[:15], "%Y%m%d-%H%M%S")
+            except ValueError:
+                return datetime.min
+
     def list_runs(self, limit: int = 20) -> list[str]:
         entries = [
             item.name
             for item in self._root.iterdir()
             if item.is_dir() and RUN_ID_RE.match(item.name)
         ]
-
-        def created_at(run_id: str) -> tuple[datetime, str]:
-            try:
-                value = str(self.read_manifest(run_id).get("created_at") or "")
-                timestamp = datetime.fromisoformat(value).replace(tzinfo=None)
-            except (ServiceError, TypeError, ValueError):
-                try:
-                    timestamp = datetime.strptime(run_id[:15], "%Y%m%d-%H%M%S")
-                except ValueError:
-                    timestamp = datetime.min
-            return timestamp, run_id
-
-        return sorted(entries, key=created_at, reverse=True)[:limit]
+        return sorted(
+            entries,
+            key=lambda run_id: (self._run_created_at(run_id), run_id),
+            reverse=True,
+        )[:limit]
 
     def delete_run(self, run_id: str) -> None:
         """Remove a run directory entirely.
@@ -440,6 +450,13 @@ class RunStore:
         # to that quota. An old active run must not evict newer completed
         # history merely because it cannot safely be deleted yet.
         retained = set(candidates[:keep]) | skip
+        if keep and len(candidates) >= keep:
+            cutoff = self._run_created_at(candidates[keep - 1])
+            retained.update(
+                run_id
+                for run_id in candidates[keep:]
+                if self._run_created_at(run_id) == cutoff
+            )
         for run_id in candidates:
             if run_id in retained:
                 continue

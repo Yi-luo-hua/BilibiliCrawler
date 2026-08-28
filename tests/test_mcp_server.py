@@ -292,6 +292,27 @@ class RunManagementTests(McpServerTestCase):
 
         self.assertEqual(service.store.list_runs(), [newer, older])
 
+    async def test_prune_preserves_all_legacy_runs_tied_at_the_keep_cutoff(self) -> None:
+        service = self.install_service()
+        tied = (
+            "20260101-000001-aaaaaaaa",
+            "20260101-000001-bbbbbbbb",
+            "20260101-000001-cccccccc",
+        )
+        for run_id in tied:
+            service.store.write_manifest(
+                run_id,
+                {
+                    "run_id": run_id,
+                    "created_at": "2026-01-01 00:00:01",
+                    "params": {},
+                    "artifacts": {},
+                },
+            )
+
+        self.assertEqual(service.store.prune_runs(1), [])
+        self.assertEqual(set(service.store.list_runs()), set(tied))
+
     async def test_list_runs_reports_the_persisted_runs_newest_first(self) -> None:
         service = self.install_service()
         async with self.client() as client:
