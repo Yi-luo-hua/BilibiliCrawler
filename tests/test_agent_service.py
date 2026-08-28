@@ -166,6 +166,18 @@ class TruncatedPngProcessor(FakeAnalysisProcessor):
         return result
 
 
+class OversizedPngHeaderProcessor(FakeAnalysisProcessor):
+    """Declares a huge image without carrying huge pixel data."""
+
+    def analyze(self, comments, dynamics, params, progress=None, cancel_event=None):
+        result = super().analyze(comments, dynamics, params, progress=progress, cancel_event=cancel_event)
+        result["word_cloud_image"] = (
+            "data:image/png;base64,"
+            "iVBORw0KGgoAAAANSUhEUgABhqAAAYagCAIAAAAnMJyfAAAAAElFTkSuQmCC"
+        )
+        return result
+
+
 # A 1x1 transparent PNG: the smallest payload that decodes and writes cleanly.
 _TINY_PNG_DATA_URL = (
     "data:image/png;base64,"
@@ -518,6 +530,17 @@ class AnalysisTests(AgentServiceTestCase):
     def test_a_truncated_png_warns_instead_of_writing_a_broken_image(self) -> None:
         run_id = self.seed_run()
         service = self.make_service(processor=TruncatedPngProcessor())
+        snapshot = self.run_to_completion(service, service.start_analyze(run_id))
+
+        self.assertEqual(snapshot.status, RunStatus.COMPLETED)
+        self.assertNotIn("word_cloud_image", snapshot.artifacts)
+        self.assertTrue(any("词云" in warning for warning in snapshot.warnings), snapshot.warnings)
+        run_dir = self.store.run_dir(run_id)
+        self.assertFalse((run_dir / "assets" / "word_cloud.png").exists())
+
+    def test_an_oversized_png_header_warns_instead_of_failing_the_analysis(self) -> None:
+        run_id = self.seed_run()
+        service = self.make_service(processor=OversizedPngHeaderProcessor())
         snapshot = self.run_to_completion(service, service.start_analyze(run_id))
 
         self.assertEqual(snapshot.status, RunStatus.COMPLETED)

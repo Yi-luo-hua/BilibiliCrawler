@@ -371,7 +371,7 @@ class RunStore:
                 if image.format != "PNG":
                     raise ValueError("word cloud payload is not PNG")
                 image.verify()
-        except (OSError, SyntaxError, ValueError):
+        except (Image.DecompressionBombError, OSError, SyntaxError, ValueError):
             payload.pop("word_cloud_image", None)
             return "", True
         assets = run_path / ASSETS_DIR
