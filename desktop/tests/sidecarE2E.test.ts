@@ -377,10 +377,20 @@ test("SidecarClient cancellation produces no stale finished and permits a clean 
     llm_config: { api_key: "test-key", model: "normal" },
   });
   await harness.waitForEvent("finished", "analysis", retryStart);
+  await harness.waitForEvent("progress", "analysis", retryStart, "idle");
+  const eventsAfterCancellation = harness.events.slice(cancelledStart);
   assert.equal(
-    harness.events.filter(
+    eventsAfterCancellation.filter(
       (item) => item.event === "finished" && item.mode === "analysis",
     ).length,
     1,
+  );
+  assert.equal(
+    eventsAfterCancellation.some(
+      (item) =>
+        item.event === "error" &&
+        (item.mode === undefined || item.mode === "analysis"),
+    ),
+    false,
   );
 });
