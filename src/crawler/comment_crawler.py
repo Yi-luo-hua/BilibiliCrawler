@@ -38,6 +38,11 @@ class CommentCrawler:
         self.api = api or BilibiliAPI()
         self.progress_callback = progress_callback or (lambda x: None)
         self._stop_flag = False
+        # Target metadata (title/owner/pubdate) captured while resolving the
+        # oid; the caller can persist it next to the comments. Best effort:
+        # only the video resolver fills it, dynamics/articles resolve their
+        # oid through differently-shaped responses.
+        self.target_info: Dict = {}
 
     def _log(self, message: str):
         """统一日志输出（同时写 logging 和回调）"""
@@ -86,22 +91,37 @@ class CommentCrawler:
     def _resolve_video(self, parsed: ParsedInput) -> Optional[ParsedInput]:
         """解析视频，获取 aid 作为 oid"""
         if parsed.oid:
-            # 已经有 avid
             self._log(f"识别为视频，AV号: {parsed.oid}")
+            video_info = self.api.get_video_info(aid=parsed.oid)
+            if video_info and video_info.get('data'):
+                self._remember_video_target(parsed, video_info['data'])
             return parsed
 
         if parsed.bvid and validate_bvid(parsed.bvid):
             self._log(f"识别为视频，正在获取信息: {parsed.bvid}")
             video_info = self.api.get_video_info(parsed.bvid)
             if video_info and video_info.get('data'):
-                aid = video_info['data'].get('aid')
+                data = video_info['data']
+                aid = data.get('aid')
                 if aid:
                     parsed.oid = aid
+                    self._remember_video_target(parsed, data)
                     self._log(f"成功获取视频OID: {aid}")
                     return parsed
 
         self._log("无法获取视频OID，请检查输入的视频ID或URL")
         return None
+
+    def _remember_video_target(self, parsed: ParsedInput, data: Dict) -> None:
+        owner = data.get('owner') or {}
+        pubdate = data.get('pubdate')
+        self.target_info = {
+            "bvid": str(data.get('bvid') or parsed.bvid or ""),
+            "aid": int(data.get('aid') or parsed.oid),
+            "title": str(data.get('title') or ""),
+            "owner": str(owner.get('name') or ""),
+            "pubdate": int(pubdate) if pubdate else None,
+        }
 
     def _resolve_dynamic(self, parsed: ParsedInput) -> Optional[ParsedInput]:
         """

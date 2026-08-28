@@ -105,6 +105,51 @@ class SidecarAnalysisTests(unittest.TestCase):
         self.assertIn("w_rid", signed)
         self.assertEqual(len(signed["w_rid"]), 32)
 
+    def test_video_info_api_uses_aid_for_av_input(self) -> None:
+        api = BilibiliAPI()
+        with unittest.mock.patch.object(api, "_request", return_value={"data": {"aid": 12345}}) as request:
+            api.get_video_info(aid=12345)
+
+        request.assert_called_once_with(
+            "https://api.bilibili.com/x/web-interface/view",
+            {"aid": 12345},
+        )
+
+    def test_av_input_fetches_video_metadata_for_report_provenance(self) -> None:
+        class VideoAPI:
+            def __init__(self) -> None:
+                self.calls: list[dict] = []
+
+            def get_video_info(self, bvid="", aid=None):
+                self.calls.append({"bvid": bvid, "aid": aid})
+                return {
+                    "data": {
+                        "aid": 12345,
+                        "bvid": "BV1xx411c7mD",
+                        "title": "AV 输入视频",
+                        "owner": {"name": "测试UP"},
+                        "pubdate": 1735660800,
+                    }
+                }
+
+        api = VideoAPI()
+        crawler = CommentCrawler(api=api)
+
+        parsed = crawler.resolve_target("av12345")
+
+        self.assertIsNotNone(parsed)
+        self.assertEqual(api.calls, [{"bvid": "", "aid": 12345}])
+        self.assertEqual(
+            crawler.target_info,
+            {
+                "bvid": "BV1xx411c7mD",
+                "aid": 12345,
+                "title": "AV 输入视频",
+                "owner": "测试UP",
+                "pubdate": 1735660800,
+            },
+        )
+
     def test_comment_ip_location_is_normalized_from_reply_control(self) -> None:
         comment = CommentCrawler()._process_comment(
             {

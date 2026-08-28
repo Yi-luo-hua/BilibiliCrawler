@@ -176,18 +176,19 @@ class BilibiliAPI:
     # ============================================================
     #  视频相关
     # ============================================================
-    def get_video_info(self, bvid: str) -> Optional[Dict]:
+    def get_video_info(self, bvid: str = "", aid: Optional[int] = None) -> Optional[Dict]:
         """
-        获取视频基本信息（用于获取真实的AV号）
+        获取视频基本信息（BV 输入解析 aid，AV 输入补齐报告元数据）
 
         Args:
             bvid: BV号
+            aid: AV号
 
         Returns:
             视频信息字典
         """
         url = "https://api.bilibili.com/x/web-interface/view"
-        params = {"bvid": bvid}
+        params = {"aid": aid} if aid is not None else {"bvid": bvid}
         return self._request(url, params)
 
     # ============================================================

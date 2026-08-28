@@ -7,9 +7,17 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
+from src.processor.analysis_processor import LLMAnalysisProcessor
 from src.service.agent_service import AgentService
 from src.service.credentials import LLMCredentials
-from src.service.models import MAX_PAGES_CEILING, ErrorCode, RunStatus, ServiceError, TaskKind
+from src.service.models import (
+    DESKTOP_POLICY,
+    MAX_PAGES_CEILING,
+    ErrorCode,
+    RunStatus,
+    ServiceError,
+    TaskKind,
+)
 from src.service.run_store import RunStore
 
 SAMPLE_COMMENTS = [
@@ -54,6 +62,14 @@ class FakeCrawler:
         self.started = threading.Event()
         self.stopped = False
         self.calls: list[dict] = []
+        # What the real crawler learns resolving the target.
+        self.target_info = {
+            "bvid": "BV1xx411c7mD",
+            "aid": 12345,
+            "title": "测试视频",
+            "owner": "测试UP主",
+            "pubdate": 1735660800,
+        }
 
     def stop(self) -> None:
         self.stopped = True
@@ -77,6 +93,10 @@ class FakeCrawler:
 class FakeAnalysisProcessor:
     """Stands in for LLMAnalysisProcessor; captures the params it received."""
 
+    # The service re-renders the on-disk report with run context through this
+    # method, so the fake borrows the real renderer to exercise that path.
+    _build_markdown_report = LLMAnalysisProcessor._build_markdown_report
+
     def __init__(self, summary="整体情绪偏正面。", fail=None):
         self.summary = summary
         self.fail = fail
@@ -90,10 +110,87 @@ class FakeAnalysisProcessor:
             raise self.fail
         return {
             "summary": self.summary,
-            "notable_quotes": ["原样引用的评论"],
+            # Enough of the real result's data layers for the borrowed
+            # _build_markdown_report to render every enriched section.
+            "sentiment_counts": [
+                {"name": "正向", "value": 2},
+                {"name": "中性", "value": 1},
+                {"name": "负向", "value": 0},
+            ],
+            "time_series": [{"name": "01-01", "count": 2, "likes": 3}],
+            "notable_quotes": ["原样引用的评论", "第一条评论"],
             "report_markdown": "# 报告\n\n正文",
             "meta": {"analyzed_records": len(comments), "total_records": len(comments)},
         }
+
+
+class CancelOnReturnProcessor(FakeAnalysisProcessor):
+    """Simulates a stop landing after the analysis returned but before export.
+
+    The full LLM cost is already paid at that point, so the result must be
+    persisted and settled as cancelled -- exactly like the crawl half keeps
+    partial data on the same race.
+    """
+
+    def analyze(self, comments, dynamics, params, progress=None, cancel_event=None):
+        result = super().analyze(comments, dynamics, params, progress=progress, cancel_event=cancel_event)
+        if cancel_event is not None:
+            cancel_event.set()
+        return result
+
+
+class BadWordCloudProcessor(FakeAnalysisProcessor):
+    """Returns a word cloud data URL whose payload is not valid base64."""
+
+    def analyze(self, comments, dynamics, params, progress=None, cancel_event=None):
+        result = super().analyze(comments, dynamics, params, progress=progress, cancel_event=cancel_event)
+        result["word_cloud_image"] = "data:image/png;base64,!!!!"
+        return result
+
+
+# A 1x1 transparent PNG: the smallest payload that decodes and writes cleanly.
+_TINY_PNG_DATA_URL = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+
+
+class WordCloudProcessor(FakeAnalysisProcessor):
+    """Returns a valid word-cloud data URL, as the real renderer would."""
+
+    def analyze(self, comments, dynamics, params, progress=None, cancel_event=None):
+        result = super().analyze(comments, dynamics, params, progress=progress, cancel_event=cancel_event)
+        result["word_cloud_image"] = _TINY_PNG_DATA_URL
+        return result
+
+
+class StopAfterAnalysisProcessor(FakeAnalysisProcessor):
+    """Issues service.stop() after analyze() returned, before the export.
+
+    The stop therefore provably lands between the analysis result and the
+    update(status=EXPORTING) that follows it -- the exact race the CANCELLING
+    guard in _Task.update exists for.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._armed = threading.Event()
+        self._service: AgentService | None = None
+        self._task_id = ""
+
+    def arm(self, service: AgentService, task_id: str) -> None:
+        self._service = service
+        self._task_id = task_id
+        self._armed.set()
+
+    def analyze(self, comments, dynamics, params, progress=None, cancel_event=None):
+        result = super().analyze(comments, dynamics, params, progress=progress, cancel_event=cancel_event)
+        # Wait for the test to hand us the task id: the worker may reach here
+        # before start_analyze() has returned to the main thread.
+        self._armed.wait(timeout=5)
+        assert self._service is not None
+        self._service.stop(self._task_id)
+        return result
 
 
 def fake_credentials() -> LLMCredentials:
@@ -195,7 +292,7 @@ class AgentServiceTestCase(unittest.TestCase):
                 if task.thread is not None:
                     task.thread.join(timeout=5)
 
-    def make_service(self, comments=None, release=None, processor=None) -> AgentService:
+    def make_service(self, comments=None, release=None, processor=None, policy=None, retain_outcome=False) -> AgentService:
         if release is not None:
             self._releases.append(release)
 
@@ -210,6 +307,8 @@ class AgentServiceTestCase(unittest.TestCase):
             crawler_factory=factory,
             analysis_processor=processor or self.processor,
             credentials_resolver=fake_credentials,
+            policy=policy,
+            retain_outcome=retain_outcome,
         )
         self.services.append(service)
         return service
@@ -232,6 +331,12 @@ class AgentServiceTestCase(unittest.TestCase):
         self.assertTrue(final.done, f"task did not finish: {final.status} {final.error}")
         return final
 
+    def seed_run(self) -> str:
+        """A finished crawl whose run directory is ready for analysis."""
+        service = self.make_service()
+        snapshot = self.run_to_completion(service, service.start_crawl("BV1xx411c7mD"))
+        return snapshot.run_id
+
 
 class CrawlTests(AgentServiceTestCase):
     def test_crawl_writes_run_directory_with_manifest_and_artifacts(self) -> None:
@@ -252,6 +357,31 @@ class CrawlTests(AgentServiceTestCase):
         self.assertEqual(manifest["status"], RunStatus.COMPLETED)
         self.assertEqual(manifest["kind"], TaskKind.CRAWL)
 
+    def test_manifest_artifacts_are_portable_but_snapshots_stay_absolute(self) -> None:
+        # Copying a run directory to another machine breaks absolute paths;
+        # the manifest stores run-relative ones and consumers resolve them
+        # against run_dir() at read time.
+        service = self.make_service()
+        snapshot = self.run_to_completion(service, service.start_crawl("BV1xx411c7mD"))
+
+        manifest = self.store.read_manifest(snapshot.run_id)
+        self.assertEqual(manifest["artifacts"]["comments_json"], "comments.json")
+        self.assertEqual(manifest["artifacts"]["comments_csv"], "comments.csv")
+        self.assertEqual(
+            Path(snapshot.artifacts["comments_json"]).name, "comments.json"
+        )
+        self.assertTrue(Path(snapshot.artifacts["comments_json"]).is_absolute())
+        self.assertTrue(Path(snapshot.artifacts["comments_json"]).is_file())
+
+    def test_crawl_manifest_records_the_video_metadata_the_crawler_learned(self) -> None:
+        service = self.make_service()
+        snapshot = self.run_to_completion(service, service.start_crawl("BV1xx411c7mD"))
+
+        manifest = self.store.read_manifest(snapshot.run_id)
+        self.assertEqual(manifest["target"]["title"], "测试视频")
+        self.assertEqual(manifest["target"]["owner"], "测试UP主")
+        self.assertEqual(manifest["target"]["bvid"], "BV1xx411c7mD")
+
     def test_max_pages_ceiling_cannot_be_raised_by_caller(self) -> None:
         service = self.make_service()
         self.run_to_completion(service, service.start_crawl("BV1xx411c7mD", max_pages=99999))
@@ -264,6 +394,19 @@ class CrawlTests(AgentServiceTestCase):
         self.assertEqual(snapshot.error_code, ErrorCode.CRAWL_FAILED)
         self.assertIn("没有爬到任何评论", snapshot.error or "")
 
+    def test_desktop_policy_empty_crawl_is_success_without_a_csv_warning(self) -> None:
+        # No data is not an export failure: the desktop policy finishes an
+        # empty crawl as success, and warning about the missing CSV would
+        # record a failure that never happened.
+        service = self.make_service(comments=[], policy=DESKTOP_POLICY)
+        snapshot = self.run_to_completion(service, service.start_crawl("BV1xx411c7mD"))
+
+        self.assertEqual(snapshot.status, RunStatus.COMPLETED)
+        self.assertEqual(snapshot.counts["comments"], 0)
+        self.assertIn("comments_json", snapshot.artifacts)
+        self.assertNotIn("comments_csv", snapshot.artifacts)
+        self.assertEqual(snapshot.warnings, [], "no data must not be reported as a CSV export failure")
+
     def test_blank_url_is_rejected_before_a_run_is_created(self) -> None:
         service = self.make_service()
         with self.assertRaises(ServiceError) as ctx:
@@ -273,10 +416,6 @@ class CrawlTests(AgentServiceTestCase):
 
 
 class AnalysisTests(AgentServiceTestCase):
-    def seed_run(self) -> str:
-        service = self.make_service()
-        snapshot = self.run_to_completion(service, service.start_crawl("BV1xx411c7mD"))
-        return snapshot.run_id
 
     def test_analyze_run_recovers_a_run_started_by_another_process(self) -> None:
         run_id = self.seed_run()
@@ -291,7 +430,112 @@ class AnalysisTests(AgentServiceTestCase):
         self.assertEqual(snapshot.counts["analyzed"], 2)
         run_dir = self.store.run_dir(run_id)
         self.assertTrue((run_dir / "analysis.json").is_file())
-        self.assertEqual((run_dir / "report.md").read_text(encoding="utf-8"), "# 报告\n\n正文")
+        report = (run_dir / "report.md").read_text(encoding="utf-8")
+        self.assertIn("# 舆论分析报告：测试视频", report)
+        self.assertIn("整体情绪偏正面", report)
+        # Run context the processor cannot know: provenance for a report that
+        # travels outside its run directory.
+        self.assertIn(f"- Run ID：{run_id}", report)
+        self.assertIn("- 数据来源：BV1xx411c7mD（测试视频）", report)
+        self.assertIn("- UP 主：测试UP主", report)
+        self.assertIn("- 发布时间：2025-01-01", report)
+        # The enriched sections render from the result's own data layers.
+        self.assertIn("- 正向：2（66.7%）", report)
+        self.assertIn("| 01-01 | 2 | 3 |", report)
+        # "第一条评论" is SAMPLE_COMMENTS[0] verbatim, so it gets attributed
+        # to the user who wrote it and the likes it drew.
+        self.assertIn("「第一条评论」—— 用户A，点赞 3", report)
+
+    def test_a_stop_landing_after_the_analysis_keeps_the_completed_result(self) -> None:
+        run_id = self.seed_run()
+        service = self.make_service(processor=CancelOnReturnProcessor())
+        snapshot = self.run_to_completion(service, service.start_analyze(run_id))
+
+        self.assertEqual(snapshot.status, RunStatus.CANCELLED)
+        run_dir = self.store.run_dir(run_id)
+        self.assertTrue((run_dir / "analysis.json").is_file(), "paid-for analysis was discarded")
+        report = (run_dir / "report.md").read_text(encoding="utf-8")
+        self.assertIn("整体情绪偏正面", report)
+        self.assertIn(f"- Run ID：{run_id}", report)
+        manifest = self.store.read_manifest(run_id)
+        self.assertEqual(manifest["status"], RunStatus.CANCELLED)
+        self.assertIn("report_markdown", manifest["artifacts"])
+
+    def test_an_unparseable_word_cloud_warns_instead_of_vanishing(self) -> None:
+        run_id = self.seed_run()
+        service = self.make_service(processor=BadWordCloudProcessor())
+        snapshot = self.run_to_completion(service, service.start_analyze(run_id))
+
+        self.assertEqual(snapshot.status, RunStatus.COMPLETED)
+        self.assertNotIn("word_cloud_image", snapshot.artifacts)
+        self.assertTrue(any("词云" in w for w in snapshot.warnings), snapshot.warnings)
+        run_dir = self.store.run_dir(run_id)
+        self.assertFalse((run_dir / "assets" / "word_cloud.png").exists())
+
+    def test_the_run_report_embeds_the_word_cloud_written_next_to_it(self) -> None:
+        run_id = self.seed_run()
+        service = self.make_service(processor=WordCloudProcessor())
+        snapshot = self.run_to_completion(service, service.start_analyze(run_id))
+
+        self.assertEqual(snapshot.status, RunStatus.COMPLETED)
+        run_dir = self.store.run_dir(run_id)
+        self.assertTrue((run_dir / "assets" / "word_cloud.png").is_file())
+        # The PNG used to sit next to the report unnamed; the report's word
+        # cloud section was a plain word-frequency list that never linked it.
+        report = (run_dir / "report.md").read_text(encoding="utf-8")
+        self.assertIn("![词云图](assets/word_cloud.png)", report)
+
+    def test_reanalysis_archives_the_previous_result_and_drops_stale_artifacts(self) -> None:
+        run_id = self.seed_run()
+        first_service = self.make_service(processor=WordCloudProcessor())
+        first = self.run_to_completion(first_service, first_service.start_analyze(run_id))
+        self.assertIn("word_cloud_image", first.artifacts)
+
+        # A second analysis without a word cloud: the old files move to
+        # archive/, and neither the snapshot nor the manifest may keep
+        # announcing the archived word cloud as the current artifact.
+        second_service = self.make_service()
+        second = self.run_to_completion(second_service, second_service.start_analyze(run_id))
+
+        self.assertEqual(second.status, RunStatus.COMPLETED)
+        self.assertNotIn("word_cloud_image", second.artifacts)
+        self.assertIn("analysis_json", second.artifacts)
+        manifest = self.store.read_manifest(run_id)
+        self.assertNotIn("word_cloud_image", manifest["artifacts"])
+
+        run_dir = self.store.run_dir(run_id)
+        self.assertFalse((run_dir / "assets" / "word_cloud.png").exists())
+        archives = list((run_dir / "archive").iterdir())
+        self.assertEqual(len(archives), 1, "both analyses share one archive entry")
+        archived = {p.name for p in archives[0].iterdir()}
+        self.assertIn("analysis.json", archived)
+        self.assertIn("report.md", archived)
+        # The archived report references assets/word_cloud.png, so the image
+        # is archived under the same sub-path to keep the copy self-contained.
+        self.assertIn("assets", archived)
+        self.assertIn("word_cloud.png", {p.name for p in (archives[0] / "assets").iterdir()})
+        # The fresh result keeps the canonical names.
+        self.assertTrue((run_dir / "analysis.json").is_file())
+        self.assertTrue((run_dir / "report.md").is_file())
+
+    def test_failed_reanalysis_keeps_the_previous_canonical_result(self) -> None:
+        run_id = self.seed_run()
+        self.store.save_analysis(
+            run_id,
+            {"summary": "old", "report_markdown": "# old"},
+        )
+        run_dir = self.store.run_dir(run_id)
+        old_json = (run_dir / "analysis.json").read_bytes()
+        old_report = (run_dir / "report.md").read_bytes()
+
+        cyclic = {"summary": "new", "report_markdown": "# new"}
+        cyclic["cycle"] = cyclic
+        with self.assertRaises((RecursionError, ValueError)):
+            self.store.save_analysis(run_id, cyclic)
+
+        self.assertEqual((run_dir / "analysis.json").read_bytes(), old_json)
+        self.assertEqual((run_dir / "report.md").read_bytes(), old_report)
+        self.assertFalse((run_dir / "archive").exists())
 
     def test_status_for_a_foreign_run_id_is_rebuilt_from_the_manifest(self) -> None:
         run_id = self.seed_run()
@@ -440,6 +684,10 @@ class SafetyTests(AgentServiceTestCase):
 
     def test_api_key_echoed_in_analysis_report_is_scrubbed_from_markdown(self) -> None:
         class EchoingReportProcessor(FakeAnalysisProcessor):
+            # Custom processors without a renderer persist their returned
+            # report verbatim, which exercises RunStore's report scrub boundary.
+            _build_markdown_report = None
+
             def analyze(self, comments, dynamics, params, progress=None, cancel_event=None):
                 result = super().analyze(comments, dynamics, params, progress, cancel_event)
                 result["report_markdown"] = f"# 报告\n\nkey: {params['llm_config']['api_key']}"
@@ -885,6 +1133,176 @@ class ProgressTests(AgentServiceTestCase):
     def test_draining_an_unknown_task_returns_no_events(self) -> None:
         service = self.make_service()
         self.assertEqual(service.drain_progress("task-nope"), [])
+
+
+class ReviewHardeningTests(AgentServiceTestCase):
+    """Guards for behaviours whose implementations had no test coverage.
+
+    Each of these can be deleted alongside the code it protects and every
+    other test keeps passing -- which is exactly why they exist.
+    """
+
+    def test_csv_formula_prefixes_survive_to_the_exported_file(self) -> None:
+        # End-to-end through save_comments: the guard lives in _write_csv,
+        # so a refactor of the writer (not the sanitizer) must not lose it.
+        malicious = [
+            "=HYPERLINK(\"http://evil\", \"click\")",
+            "+cmd|' /C calc'!A0",
+            "-前排围观",
+            "@SUM(1+1)",
+        ]
+        comments = [
+            {
+                "comment_id": index + 1,
+                "root_id": 0,
+                "is_reply": False,
+                "username": f"用户{index}",
+                "user_level": 3,
+                "content": body,
+                "like_count": 0,
+                "reply_count": 0,
+                "ctime": 1735660800,
+                "ctime_text": "2025-01-01 00:00:00",
+                "ip_location": "广东",
+            }
+            for index, body in enumerate(malicious)
+        ]
+        service = self.make_service(comments=comments)
+        snapshot = self.run_to_completion(service, service.start_crawl("BV1xx411c7mD"))
+
+        import csv as csv_module
+
+        csv_path = Path(snapshot.artifacts["comments_csv"])
+        with csv_path.open(encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv_module.reader(handle))
+        content_idx = rows[0].index("评论内容")
+        exported = [row[content_idx] for row in rows[1:]]
+        self.assertEqual(exported, [f"'{body}" for body in malicious])
+        # The JSON twin is the fidelity reference: no apostrophes there.
+        on_disk = json.loads(
+            (self.store.run_dir(snapshot.run_id) / "comments.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual([item["content"] for item in on_disk], malicious)
+
+    def test_a_phase_transition_cannot_roll_back_a_pending_cancel(self) -> None:
+        observed: dict[str, str] = {}
+
+        class ObservingStore(RunStore):
+            # Records the task status at the moment the analysis export
+            # starts writing: with the guard it reads CANCELLING, without it
+            # the EXPORTING update would have overwritten the pending stop.
+            def __init__(self, root):
+                super().__init__(root)
+                self.service = None
+
+            def save_analysis(self, run_id, result, warnings=None):
+                if self.service is not None:
+                    observed["status"] = self.service.get_status(run_id=run_id).status
+                return super().save_analysis(run_id, result, warnings=warnings)
+
+        store = ObservingStore(self.root)
+        self.store = store
+        run_id = self.seed_run()
+
+        processor = StopAfterAnalysisProcessor()
+        service = self.make_service(processor=processor)
+        store.service = service
+        started = service.start_analyze(run_id)
+        processor.arm(service, started.task_id)
+        final = self.run_to_completion(service, started)
+
+        self.assertEqual(final.status, RunStatus.CANCELLED)
+        self.assertEqual(observed.get("status"), RunStatus.CANCELLING,
+                         "update(EXPORTING) rolled back a pending cancel")
+
+    def test_desktop_pre_cancel_settles_with_empty_data_not_an_error(self) -> None:
+        class FirstCrawlPersistGateStore(RunStore):
+            # Blocks the worker's first manifest update (status=crawling) so
+            # the test's stop() provably precedes the crawl's first
+            # cancel-check window, with no thread race to rely on.
+            def __init__(self, root):
+                super().__init__(root)
+                self.gate = threading.Event()
+                self.in_persist = threading.Event()
+
+            def write_manifest(self, run_id, manifest):
+                if str(manifest.get("status")) == "crawling" and not self.in_persist.is_set():
+                    self.in_persist.set()
+                    self.gate.wait(timeout=10)
+                return super().write_manifest(run_id, manifest)
+
+        store = FirstCrawlPersistGateStore(self.root)
+        self.store = store
+        service = self.make_service(policy=DESKTOP_POLICY, retain_outcome=True)
+        started = service.start_crawl("BV1xx411c7mD")
+
+        self.assertTrue(store.in_persist.wait(timeout=5))
+        service.stop(started.task_id)  # lands before the crawl started
+        store.gate.set()
+
+        final = self.run_to_completion(service, started)
+        self.assertEqual(final.status, RunStatus.CANCELLED)
+        self.assertEqual(final.counts.get("comments"), 0)
+        # The desktop contract: an empty-but-successful crawl records the
+        # outcome so the UI can finish(0) instead of "result unavailable".
+        outcome = service.take_outcome(started.task_id)
+        self.assertIsNotNone(outcome, "no outcome recorded for a pre-cancelled desktop crawl")
+        self.assertEqual(outcome.comments, [])
+        run_dir = self.store.run_dir(final.run_id)
+        self.assertEqual(json.loads((run_dir / "comments.json").read_text(encoding="utf-8")), [])
+        self.assertFalse(final.warnings, "an empty crawl is no data, not a CSV export failure")
+
+    def test_a_manifest_write_failure_does_not_fail_a_settled_task(self) -> None:
+        class FlakyManifestStore(RunStore):
+            def __init__(self, root):
+                super().__init__(root)
+                self.failing = False
+
+            def write_manifest(self, run_id, manifest):
+                if self.failing:
+                    raise OSError("antivirus lock")
+                return super().write_manifest(run_id, manifest)
+
+        store = FlakyManifestStore(self.root)
+        self.store = store
+        run_id = self.seed_run()
+
+        store.failing = True
+        service = self.make_service()
+        snapshot = self.run_to_completion(service, service.start_analyze(run_id))
+
+        # The terminal status was already committed in memory; losing the
+        # manifest refresh must not rewrite it to FAILED.
+        self.assertEqual(snapshot.status, RunStatus.COMPLETED)
+        run_dir = self.store.run_dir(run_id)
+        self.assertTrue((run_dir / "analysis.json").is_file(), "data files were not written")
+        self.assertTrue((run_dir / "report.md").is_file())
+
+    def test_quote_attribution_is_not_stolen_by_a_short_reply(self) -> None:
+        # "支持" is a substring of the quoted comment, but a two-character
+        # reply must not win the attribution race against the real author.
+        records = [
+            {"content": "支持", "username": "路人甲", "like_count": 3},
+            {"content": "这个视频做得真好，支持UP主继续更新", "username": "楼主", "like_count": 500},
+        ]
+        line = LLMAnalysisProcessor._quote_line("这个视频做得真好，支持UP主继续更新", records)
+        self.assertIn("楼主", line)
+        self.assertNotIn("路人甲", line)
+        # An unmatched-attribution match keeps searching instead of giving up
+        # on the first bare hit.
+        bare = [{"content": "这个视频做得真好，支持UP主继续更新", "username": "", "like_count": 0}] + records[1:]
+        line = LLMAnalysisProcessor._quote_line("这个视频做得真好，支持UP主继续更新", bare)
+        self.assertIn("楼主", line)
+
+    def test_prune_runs_skips_runs_that_are_still_running(self) -> None:
+        first = self.seed_run()
+        second = self.seed_run()
+
+        removed = self.store.prune_runs(1, skip_run_ids={first})
+
+        self.assertEqual(removed, [second])
+        self.assertTrue((self.root / first).exists())
+        self.assertFalse((self.root / second).exists())
 
 
 if __name__ == "__main__":

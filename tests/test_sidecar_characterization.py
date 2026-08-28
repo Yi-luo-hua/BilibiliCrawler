@@ -990,6 +990,11 @@ class AnalysisBaseline(unittest.TestCase):
             **ANALYSIS_RESULT,
             "word_counts": [{"name": "关键词", "value": 3}],
             "notable_quotes": ["一条代表性评论"],
+            "meta": {
+                **ANALYSIS_RESULT["meta"],
+                "schema_version": 1,
+                "elapsed_seconds": 2.5,
+            },
             "word_cloud_image": "data:image/png;base64," + base64.b64encode(raw_png).decode("ascii"),
         })
         sidecar, _ = make(processor=processor)
@@ -1047,7 +1052,15 @@ class AnalysisBaseline(unittest.TestCase):
         self.assertEqual(raw["summary"], "总体偏正面")
         self.assertEqual(raw["word_counts"], [{"name": "关键词", "value": 3}])
         self.assertEqual(raw["notable_quotes"], ["一条代表性评论"])
-        self.assertEqual(raw["meta"], {"analyzed_records": 7, "total_records": 9})
+        self.assertEqual(
+            raw["meta"],
+            {
+                "analyzed_records": 7,
+                "total_records": 9,
+                "schema_version": 1,
+                "elapsed_seconds": 2.5,
+            },
+        )
         self.assertTrue(raw["word_cloud_image"].startswith("data:image/png;base64,"))
 
     def test_analysis_latest_without_a_result_answers_not_ok(self) -> None:

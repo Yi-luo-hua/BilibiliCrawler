@@ -277,7 +277,7 @@ class RewritingStore(RunStore):
     a large result -- so the ordering gets a store that does exactly that.
     """
 
-    def save_analysis(self, run_id, result):
+    def save_analysis(self, run_id, result, **kwargs):
         result.pop("report_markdown", None)
         result["word_cloud_image"] = "already/rewritten/word_cloud.png"
         # Nested, where a shallow copy offers no protection at all.
@@ -285,7 +285,7 @@ class RewritingStore(RunStore):
             result["overview"]["keep_me"] = "store 改掉的值"
         if isinstance(result.get("topic_counts"), list):
             result["topic_counts"].clear()
-        return super().save_analysis(run_id, result)
+        return super().save_analysis(run_id, result, **kwargs)
 
     def save_comments(self, run_id, comments):
         # Same question for the crawl half: the outcome holds comment dicts that

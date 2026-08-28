@@ -434,6 +434,12 @@ class Sidecar:
         """Return a UI-sized analysis payload; keep full report only in sidecar memory."""
         image_path = cls._image_data_url_file(result, "word_cloud_image")
         image_data_url = cls._image_data_url(result.get("word_cloud_image"))
+        meta = dict(result.get("meta") or {})
+        # These persistence/report metadata fields were added after the desktop
+        # RPC contract was pinned. Keep them in the raw result and exports, but
+        # do not silently expand analysis.latest / finished payloads.
+        meta.pop("schema_version", None)
+        meta.pop("elapsed_seconds", None)
         payload: dict[str, Any] = {
             "summary": cls._truncate_text(result.get("summary"), 2000),
             "summary_points": cls._text_items(result.get("summary_points"), 7, 260),
@@ -452,7 +458,7 @@ class Sidecar:
             "engagement_items": cls._chart_items(result.get("engagement_items"), 10, 120),
             "deep_analysis": cls._deep_analysis(result.get("deep_analysis")),
             "report_markdown": "",
-            "meta": result.get("meta") or {},
+            "meta": meta,
         }
         if image_data_url:
             payload["word_cloud_image"] = image_data_url
