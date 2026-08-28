@@ -85,8 +85,23 @@ class FixtureAnalysisProcessor:
         result: dict[str, Any],
         chart_assets: list[dict[str, Any]] | None = None,
         asset_dir_name: str = "",
+        source_url: str = "",
+        source_title: str = "",
+        source_owner: str = "",
+        source_pubdate: str = "",
+        run_id: str = "",
+        records: list[dict[str, Any]] | None = None,
     ) -> str:
-        del chart_assets, asset_dir_name
+        del (
+            chart_assets,
+            asset_dir_name,
+            source_url,
+            source_title,
+            source_owner,
+            source_pubdate,
+            run_id,
+            records,
+        )
         key = result["meta"]["config"]["llm_config"]["api_key"]
         return f"{result['report_markdown']}\n\nkey: {key}"
 
