@@ -6,10 +6,10 @@
 
 ## 这是什么
 
-一个本地 stdio MCP 服务器，把「爬取评论 → LLM 舆情分析 → 导出报告」暴露成 5 个工具。
+一个本地 stdio MCP 服务器，把「爬取评论 → LLM 舆情分析 → 导出报告」暴露成 7 个工具。
 每次运行都会落盘成一个带 `run_id` 的目录，因此 MCP 进程重启后仍能按 `run_id` 继续分析。
 
-桌面客户端不受影响：它继续走 `backend/sidecar.py`，本次改动没有修改那个文件。
+桌面客户端继续走 `backend/sidecar.py`；本次仅在内部复用服务层，既有 RPC 返回与事件表面保持兼容。
 
 ---
 
@@ -101,12 +101,18 @@ API Key 不会写进 `manifest.json`、不会出现在日志（含异常堆栈�
 |---|---|---|
 | `crawl_and_analyze` | 主入口：爬取 + 分析 + 导出报告，一次完成 | 是 |
 | `crawl_comments` | 只爬取，落盘 JSON 和 CSV | 否 |
-| `analyze_run` | 对已有 `run_id` 重新分析 | 是 |
+| `analyze_run` | 对已有 `run_id` 重新分析（旧结果归档到 `archive/`） | 是 |
 | `get_task_status` | 查询状态、进度、计数、产物路径 | 否 |
 | `stop_task` | 停止正在跑的任务 | 否 |
+| `list_runs` | 列出持久化运行记录（最新在前） | 否 |
+| `delete_run` | 删除单个运行，或保留最新 N 个、清理其余（正在运行的任务不会被删除） | 否 |
 
-所有工具返回同一个精简结构：`ok` / `done` / `status` / `stage` / `task_id` / `run_id` /
+所有任务工具返回同一个精简结构：`ok` / `done` / `status` / `stage` / `task_id` / `run_id` /
 `counts` / `summary` / `artifacts` / `warnings` / `error` / `error_code` / `next_step`。
+`list_runs` 返回运行记录数组（run_id/kind/status/created_at），`delete_run` 返回
+`{"ok": true, "deleted": [run_id, ...]}`。批量清理必须显式传 `prune_to`（>= 1，不传
+run_id 时生效）；省略 `prune_to` 不会默认全删，正在执行的任务的 run 会被跳过并要求先
+`stop_task`。
 
 **不会**返回全量评论、完整报告正文或词云图 Base64，只返回文件路径。
 

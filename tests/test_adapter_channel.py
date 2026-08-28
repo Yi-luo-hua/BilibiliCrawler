@@ -16,7 +16,6 @@ without the new arguments retains nothing.
 
 No wiring yet -- backend/sidecar.py is untouched at this stage.
 """
-import base64
 import copy
 import json
 import tempfile
@@ -35,10 +34,12 @@ from src.service.run_store import RunStore
 SECRET_KEY = "sk-CHANNEL-CANARY-abcdef"
 
 # Plain ASCII rather than real PNG bytes: the store only checks the data URL
-# prefix and that the payload decodes, and a binary literal in a test file is
-# one bad round-trip away from being silently corrupted.
-WORD_CLOUD_BYTES = b"stage-three-word-cloud-bytes"
-WORD_CLOUD_DATA_URL = "data:image/png;base64," + base64.b64encode(WORD_CLOUD_BYTES).decode("ascii")
+# A 1x1 transparent PNG keeps the ownership test realistic now that RunStore
+# rejects base64 payloads that do not carry a PNG signature.
+WORD_CLOUD_DATA_URL = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
 
 # Long enough that nobody can mistake it for the summary field.
 REPORT_MARKDOWN = "# 分析报告\n\n" + ("这是报告正文，会被 RunStore 拆到单独文件里。\n" * 60)
@@ -277,7 +278,7 @@ class RewritingStore(RunStore):
     a large result -- so the ordering gets a store that does exactly that.
     """
 
-    def save_analysis(self, run_id, result):
+    def save_analysis(self, run_id, result, **kwargs):
         result.pop("report_markdown", None)
         result["word_cloud_image"] = "already/rewritten/word_cloud.png"
         # Nested, where a shallow copy offers no protection at all.
@@ -285,7 +286,7 @@ class RewritingStore(RunStore):
             result["overview"]["keep_me"] = "store 改掉的值"
         if isinstance(result.get("topic_counts"), list):
             result["topic_counts"].clear()
-        return super().save_analysis(run_id, result)
+        return super().save_analysis(run_id, result, **kwargs)
 
     def save_comments(self, run_id, comments):
         # Same question for the crawl half: the outcome holds comment dicts that
