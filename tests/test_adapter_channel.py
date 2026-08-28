@@ -16,7 +16,6 @@ without the new arguments retains nothing.
 
 No wiring yet -- backend/sidecar.py is untouched at this stage.
 """
-import base64
 import copy
 import json
 import tempfile
@@ -35,10 +34,12 @@ from src.service.run_store import RunStore
 SECRET_KEY = "sk-CHANNEL-CANARY-abcdef"
 
 # Plain ASCII rather than real PNG bytes: the store only checks the data URL
-# prefix and that the payload decodes, and a binary literal in a test file is
-# one bad round-trip away from being silently corrupted.
-WORD_CLOUD_BYTES = b"stage-three-word-cloud-bytes"
-WORD_CLOUD_DATA_URL = "data:image/png;base64," + base64.b64encode(WORD_CLOUD_BYTES).decode("ascii")
+# A 1x1 transparent PNG keeps the ownership test realistic now that RunStore
+# rejects base64 payloads that do not carry a PNG signature.
+WORD_CLOUD_DATA_URL = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
 
 # Long enough that nobody can mistake it for the summary field.
 REPORT_MARKDOWN = "# 分析报告\n\n" + ("这是报告正文，会被 RunStore 拆到单独文件里。\n" * 60)

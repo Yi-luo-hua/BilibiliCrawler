@@ -154,7 +154,7 @@ class RunStore:
     # -- manifest ----------------------------------------------------------
     def create_run(self, run_id: str, kind: str, params: dict[str, Any]) -> Path:
         path = self.run_dir(run_id, create=True)
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        now = datetime.now().isoformat(sep=" ", timespec="microseconds")
         self.write_manifest(
             run_id,
             {
@@ -318,6 +318,8 @@ class RunStore:
                         target.parent.mkdir(parents=True, exist_ok=True)
                         item.replace(target)
                         moved_old.append((target, item))
+                        if target.name in {ANALYSIS_JSON, REPORT_MD}:
+                            _atomic_write_text(target, scrub(target.read_text(encoding="utf-8")))
 
             for relative in (Path(REPORT_MD), Path(ASSETS_DIR) / "word_cloud.png", Path(ANALYSIS_JSON)):
                 source = stage / relative
@@ -361,6 +363,9 @@ class RunStore:
         except (IndexError, ValueError):
             payload.pop("word_cloud_image", None)
             return "", True
+        if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+            payload.pop("word_cloud_image", None)
+            return "", True
         assets = run_path / ASSETS_DIR
         assets.mkdir(parents=True, exist_ok=True)
         image_path = assets / "word_cloud.png"
@@ -395,7 +400,19 @@ class RunStore:
             for item in self._root.iterdir()
             if item.is_dir() and RUN_ID_RE.match(item.name)
         ]
-        return sorted(entries, reverse=True)[:limit]
+
+        def created_at(run_id: str) -> tuple[datetime, str]:
+            try:
+                value = str(self.read_manifest(run_id).get("created_at") or "")
+                timestamp = datetime.fromisoformat(value).replace(tzinfo=None)
+            except (ServiceError, TypeError, ValueError):
+                try:
+                    timestamp = datetime.strptime(run_id[:15], "%Y%m%d-%H%M%S")
+                except ValueError:
+                    timestamp = datetime.min
+            return timestamp, run_id
+
+        return sorted(entries, key=created_at, reverse=True)[:limit]
 
     def delete_run(self, run_id: str) -> None:
         """Remove a run directory entirely.
@@ -419,12 +436,13 @@ class RunStore:
         skip = set(skip_run_ids or ())
         removed: list[str] = []
         candidates = self.list_runs(limit=10**9)
-        # Skipped runs are held back before slicing, so they never occupy a
-        # "keep" slot either -- preserving a running run at the cost of
-        # deleting one more old run surprises the caller far less than a
-        # manifest-less zombie directory would.
-        rest = [run_id for run_id in candidates if run_id not in skip]
-        for run_id in rest[max(0, keep - len(skip)) :]:
+        # Keep the requested newest runs, then protect active runs in addition
+        # to that quota. An old active run must not evict newer completed
+        # history merely because it cannot safely be deleted yet.
+        retained = set(candidates[:keep]) | skip
+        for run_id in candidates:
+            if run_id in retained:
+                continue
             try:
                 self.delete_run(run_id)
                 removed.append(run_id)

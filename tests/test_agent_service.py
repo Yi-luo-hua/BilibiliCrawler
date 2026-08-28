@@ -148,6 +148,15 @@ class BadWordCloudProcessor(FakeAnalysisProcessor):
         return result
 
 
+class EmptyWordCloudProcessor(FakeAnalysisProcessor):
+    """Returns base64 that is syntactically valid but cannot be a PNG."""
+
+    def analyze(self, comments, dynamics, params, progress=None, cancel_event=None):
+        result = super().analyze(comments, dynamics, params, progress=progress, cancel_event=cancel_event)
+        result["word_cloud_image"] = "data:image/png;base64,"
+        return result
+
+
 # A 1x1 transparent PNG: the smallest payload that decodes and writes cleanly.
 _TINY_PNG_DATA_URL = (
     "data:image/png;base64,"
@@ -162,6 +171,13 @@ class WordCloudProcessor(FakeAnalysisProcessor):
         result = super().analyze(comments, dynamics, params, progress=progress, cancel_event=cancel_event)
         result["word_cloud_image"] = _TINY_PNG_DATA_URL
         return result
+
+
+class LegacyReportProcessor(FakeAnalysisProcessor):
+    """Keeps the pre-enrichment report renderer signature."""
+
+    def _build_markdown_report(self, result, chart_assets=None, asset_dir_name=""):
+        return f"# legacy renderer\n\nasset dir: {asset_dir_name or 'none'}"
 
 
 class StopAfterAnalysisProcessor(FakeAnalysisProcessor):
@@ -472,6 +488,17 @@ class AnalysisTests(AgentServiceTestCase):
         run_dir = self.store.run_dir(run_id)
         self.assertFalse((run_dir / "assets" / "word_cloud.png").exists())
 
+    def test_an_empty_word_cloud_warns_instead_of_writing_a_fake_png(self) -> None:
+        run_id = self.seed_run()
+        service = self.make_service(processor=EmptyWordCloudProcessor())
+        snapshot = self.run_to_completion(service, service.start_analyze(run_id))
+
+        self.assertEqual(snapshot.status, RunStatus.COMPLETED)
+        self.assertNotIn("word_cloud_image", snapshot.artifacts)
+        self.assertTrue(any("词云" in warning for warning in snapshot.warnings), snapshot.warnings)
+        run_dir = self.store.run_dir(run_id)
+        self.assertFalse((run_dir / "assets" / "word_cloud.png").exists())
+
     def test_the_run_report_embeds_the_word_cloud_written_next_to_it(self) -> None:
         run_id = self.seed_run()
         service = self.make_service(processor=WordCloudProcessor())
@@ -484,6 +511,15 @@ class AnalysisTests(AgentServiceTestCase):
         # cloud section was a plain word-frequency list that never linked it.
         report = (run_dir / "report.md").read_text(encoding="utf-8")
         self.assertIn("![词云图](assets/word_cloud.png)", report)
+
+    def test_a_legacy_injected_report_renderer_keeps_its_old_signature(self) -> None:
+        run_id = self.seed_run()
+        service = self.make_service(processor=LegacyReportProcessor())
+        snapshot = self.run_to_completion(service, service.start_analyze(run_id))
+
+        self.assertEqual(snapshot.status, RunStatus.COMPLETED)
+        report = (self.store.run_dir(run_id) / "report.md").read_text(encoding="utf-8")
+        self.assertIn("# legacy renderer", report)
 
     def test_reanalysis_archives_the_previous_result_and_drops_stale_artifacts(self) -> None:
         run_id = self.seed_run()
@@ -706,6 +742,23 @@ class SafetyTests(AgentServiceTestCase):
         report_path = run_dir / "report.md"
         raw = report_path.read_text(encoding="utf-8")
         self.assertIn("key: ***", raw)
+
+    def test_reanalysis_scrubs_a_registered_key_from_legacy_files_before_archiving(self) -> None:
+        from src.service.credentials import register_secret
+
+        register_secret(SECRET_KEY)
+        run_id = self.seed_run()
+        run_dir = self.store.run_dir(run_id)
+        (run_dir / "analysis.json").write_text(
+            json.dumps({"legacy_key": SECRET_KEY}), encoding="utf-8"
+        )
+        (run_dir / "report.md").write_text(f"# legacy\n\nkey: {SECRET_KEY}", encoding="utf-8")
+
+        self.store.save_analysis(run_id, {"summary": "fresh", "report_markdown": "# fresh"})
+
+        for path in run_dir.rglob("*"):
+            if path.is_file():
+                self.assertNotIn(SECRET_KEY.encode("utf-8"), path.read_bytes(), f"key leaked into {path}")
 
     def test_api_key_echoed_by_the_provider_is_scrubbed_everywhere(self) -> None:
         # A 401 body that quotes the key back at us is the realistic leak path:
@@ -1300,9 +1353,9 @@ class ReviewHardeningTests(AgentServiceTestCase):
 
         removed = self.store.prune_runs(1, skip_run_ids={first})
 
-        self.assertEqual(removed, [second])
+        self.assertEqual(removed, [])
         self.assertTrue((self.root / first).exists())
-        self.assertFalse((self.root / second).exists())
+        self.assertTrue((self.root / second).exists())
 
 
 if __name__ == "__main__":

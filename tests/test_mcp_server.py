@@ -264,6 +264,34 @@ class StatusAndStopTests(McpServerTestCase):
 
 
 class RunManagementTests(McpServerTestCase):
+    async def test_prune_keeps_the_newest_run_in_addition_to_an_old_active_run(self) -> None:
+        service = self.install_service()
+        old_active = "20260101-000001-aaaaaaaa"
+        middle = "20260101-000002-bbbbbbbb"
+        newest = "20260101-000003-cccccccc"
+        for run_id in (old_active, middle, newest):
+            service.store.run_dir(run_id, create=True)
+
+        removed = service.store.prune_runs(1, skip_run_ids={old_active})
+
+        self.assertEqual(removed, [middle])
+        self.assertEqual(set(service.store.list_runs()), {old_active, newest})
+
+    async def test_list_runs_uses_manifest_time_when_run_ids_share_a_second(self) -> None:
+        service = self.install_service()
+        older = "20260101-000001-ffffffff"
+        newer = "20260101-000001-00000000"
+        for run_id, created_at in (
+            (older, "2026-01-01 00:00:01.100000"),
+            (newer, "2026-01-01 00:00:01.900000"),
+        ):
+            service.store.write_manifest(
+                run_id,
+                {"run_id": run_id, "created_at": created_at, "params": {}, "artifacts": {}},
+            )
+
+        self.assertEqual(service.store.list_runs(), [newer, older])
+
     async def test_list_runs_reports_the_persisted_runs_newest_first(self) -> None:
         service = self.install_service()
         async with self.client() as client:

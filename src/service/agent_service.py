@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import inspect
 import logging
 import queue
 import threading
@@ -764,17 +765,31 @@ class AgentService:
                 else []
             )
             source_url, target = self._report_context(task.run_id)
-            payload["report_markdown"] = build_report(
-                result,
-                chart_assets=chart_assets,
-                asset_dir_name="assets" if chart_assets else "",
-                source_url=source_url,
-                source_title=str(target.get("title") or ""),
-                source_owner=str(target.get("owner") or ""),
-                source_pubdate=_format_pubdate(target.get("pubdate")),
-                run_id=task.run_id,
-                records=comments,
-            )
+            report_context = {
+                "chart_assets": chart_assets,
+                "asset_dir_name": "assets" if chart_assets else "",
+                "source_url": source_url,
+                "source_title": str(target.get("title") or ""),
+                "source_owner": str(target.get("owner") or ""),
+                "source_pubdate": _format_pubdate(target.get("pubdate")),
+                "run_id": task.run_id,
+                "records": comments,
+            }
+            try:
+                parameters = inspect.signature(build_report).parameters
+            except (TypeError, ValueError):
+                report_kwargs = report_context
+            else:
+                accepts_kwargs = any(
+                    parameter.kind is inspect.Parameter.VAR_KEYWORD
+                    for parameter in parameters.values()
+                )
+                report_kwargs = (
+                    report_context
+                    if accepts_kwargs
+                    else {key: value for key, value in report_context.items() if key in parameters}
+                )
+            payload["report_markdown"] = build_report(result, **report_kwargs)
         store_warnings: list[str] = []
         artifacts = self._store.save_analysis(task.run_id, payload, warnings=store_warnings)
         for message in store_warnings:
