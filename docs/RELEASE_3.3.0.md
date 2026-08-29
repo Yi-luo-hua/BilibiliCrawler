@@ -1,0 +1,117 @@
+# v3.3.0 发布准备与验收清单
+
+## 发布边界
+
+- 目标版本：`v3.3.0`。
+- 基线：`main` 的 `87a66f9`，叠加本发布准备提交。
+- 当前状态：Release Candidate 准备中；在所有“发布阻断项”完成前不得创建标签或公开 Release。
+- 版本模型：桌面客户端、CLI 与 MCP 服务器暂时共用同一仓库和版本号。
+- 本次正式产物：Windows x64 NSIS 安装包；CLI / MCP 继续通过源码环境安装。
+- Python wheel / sdist 与 PyPI / MCP Registry 发布属于 v3.3.0 之后的里程碑，不是本次发布阻断项。
+
+## 发布阻断项
+
+### 1. 仓库与版本预检
+
+- [ ] 发布分支基于最新 `origin/main`，且工作区干净。
+- [ ] `desktop/src-tauri/Cargo.toml` 与 `desktop/src-tauri/Cargo.lock` 中的根包版本均为 `3.3.0`。
+- [ ] 确认没有待合并 PR、阻断 Issue 或遗漏分支。
+- [ ] 处理并核对本机 `v1.0.1` 与远端同名标签的冲突；不得改写已有远端标签。
+- [ ] 在最终构建前记录候选提交 SHA，并确认它就是拟打标签的提交。
+
+### 2. 自动化门禁
+
+- [ ] 生成 `$GateId = [guid]::NewGuid().ToString('N')`，在 `Join-Path $env:TEMP "bcc-v330-no-mcp-$GateId"` 与 `Join-Path $env:TEMP "bcc-v330-mcp-$GateId"` 创建两个全新 venv；分别设置 `$NoMcpPython`、`$McpPython` 为其中的 `Scripts\python.exe`，并用 `assert sys.prefix != sys.base_prefix` 验证隔离环境。
+- [ ] 无 MCP 环境只安装 `requirements.txt`，运行 `& $NoMcpPython -c "import importlib.util; assert importlib.util.find_spec('mcp') is None"` 后再运行 `& $NoMcpPython -m unittest discover -s tests -q`。
+- [ ] MCP 环境安装 `requirements-agent.txt`，运行 `& $McpPython -c "import importlib.metadata as m; assert m.version('mcp') == '2.1.0'"` 后再运行 `& $McpPython -m unittest discover -s tests -q`；Python 套件必须覆盖嵌套凭据回显与损坏/超限词云降级。
+- [ ] 桌面契约：在 `desktop/` 运行 `node --experimental-strip-types --test tests/*.test.ts`；其中必须覆盖非 comments source 回退以及跨进程完成/取消。
+- [ ] 前端构建：在 `desktop/` 运行 `corepack pnpm@10.28.0 build`。
+- [ ] 依赖审计：在 `desktop/` 运行 `corepack pnpm@10.28.0 audit`。
+- [ ] sidecar 构建完成后运行 Rust 检查：`cargo check --locked --manifest-path desktop/src-tauri/Cargo.toml`。
+- [ ] PR 阶段基础卫生：`git diff --check origin/main...HEAD`；合并后设置 `$CandidateSha = git rev-parse HEAD`，运行 `git diff --check "$CandidateSha^1" $CandidateSha` 检查实际候选提交。
+
+以上门禁必须在版本号和发布文档落定后重跑；历史通过记录只能作为参考，不能代替候选提交验证。
+
+### 3. 安装包候选构建
+
+- [ ] 安装 CPython 3.13.15 x64，以它创建 GUID 命名的全新构建环境并设置 `$ReleasePython`；脚本必须 fail-fast 拒绝其他实现、版本或 32 位解释器。
+- [ ] 运行 `powershell -ExecutionPolicy Bypass -File scripts/build_installer.ps1 -Python $ReleasePython`；脚本会以 `pip --require-hashes` 安装锁定的运行时与构建工具。
+- [ ] 确认 `requirements-desktop.lock` 与 `requirements-build.txt` 已提交，并记录 `& $ReleasePython -m pip freeze`、Python 版本、Rust 版本和 `corepack pnpm@10.28.0 --version`。
+- [ ] 确认构建脚本对 NSIS 3.11 zip 与 `nsis_tauri_utils.dll` 的 SHA-256 校验通过。
+- [ ] 确认产物为 `desktop/src-tauri/target/release/bundle/nsis/BilibiliCrawler-Setup-3.3.0-x64.exe`。
+- [ ] 设置 `$Installer = Resolve-Path 'desktop/src-tauri/target/release/bundle/nsis/BilibiliCrawler-Setup-3.3.0-x64.exe'`，再用 `Get-FileHash -Algorithm SHA256 -LiteralPath $Installer` 记录 SHA-256。
+- [ ] 记录文件大小、构建时间、候选提交 SHA 和构建主机环境。
+- [ ] Release notes 明确说明安装包当前未进行代码签名，Windows 可能显示 SmartScreen 提示。
+
+### 4. Tauri 真机验收
+
+这是发布阻断项，不能用 Python 单元测试或 sidecar 子进程测试替代。
+
+- [ ] 在 Windows x64 上安装候选包，确认开始菜单 / 桌面入口及 currentUser 安装位置正常。
+- [ ] 启动桌面端，确认既有登录状态与凭据发现路径正常；全程不得在日志或 UI 中显示 API Key。
+- [ ] 完成一次普通评论爬取，核对进度事件、完成事件、评论数量、CSV 与 run 目录。
+- [ ] 触发空评论结果，确认依次收到 `stats`、`finished(count=0)`、`idle(100)`，不出现 `error` 或 `cancelled`。
+- [ ] 爬取中点击停止，确认保留部分结果、只发送一次终态并可立即重试。
+- [ ] 对评论运行执行分析，核对结构化结果、词云显示、`analysis.json` 与 Markdown 报告。
+- [ ] 分析中点击停止，确认不会迟到发送 `finished`，并能立即重新分析。
+- [ ] 导出 CSV 与分析报告，确认路径可打开、内容完整，表格公式前缀已被安全处理。
+- [ ] 用 canary API Key 完成一次分析，随后搜索该 run 目录下全部文件，确认 canary 零命中；嵌套配置回显由自动化测试负责，不用真机结果替代。
+- [ ] 在 v3.2.0 中创建可识别的凭据和 run 标记后覆盖升级，确认两者仍存在且可读。
+- [ ] 使用默认卸载选项卸载 v3.3.0，确认安装目录中的 `user-data` 与 `analysis-runs` 标记仍保留；记录结果后再由测试者手工清理这些测试数据。
+
+### 5. 发布
+
+- [ ] 合并发布准备 PR，重新核对 `main` 的最终提交和所有门禁结果。
+- [ ] 用 `git ls-remote origin refs/tags/v3.3.0 'refs/tags/v3.3.0^{}'` 确认远端没有同名标签。
+- [ ] 在最终提交创建 annotated tag：`git tag -a v3.3.0 -m "BilibiliCrawler v3.3.0"`，并确认 `git rev-parse 'v3.3.0^{}'` 等于候选提交 SHA。
+- [ ] 用 `git push origin refs/tags/v3.3.0` 推送标签，再用 `git ls-remote origin refs/tags/v3.3.0 'refs/tags/v3.3.0^{}'` 确认远端 peeled SHA 仍等于候选提交。
+- [ ] 生成校验文件：`$ChecksumFile = "$Installer.sha256"; $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Installer).Hash.ToLowerInvariant(); "$Hash  $([IO.Path]::GetFileName($Installer))" | Set-Content -Encoding ascii -LiteralPath $ChecksumFile`。
+- [ ] 使用 `gh release create v3.3.0 --draft --verify-tag --title "BilibiliCrawler v3.3.0" --notes-file docs/RELEASE_NOTES_3.3.0.md $Installer $ChecksumFile` 创建 Draft 并同时上传安装包与校验文件。
+- [ ] 在 Draft 中补充文件大小和构建提交 SHA，并核对安装包未签名提示。
+- [ ] 从 Draft 下载产物并复核 SHA-256 后再公开 Release。
+- [ ] 发布后验证 Release 页面、下载链接、安装启动和版本显示。
+
+## 回滚方案
+
+- 远端标签推送前发现问题：停止发布，修复后重新生成候选，不复用旧 SHA 或旧安装包。
+- 远端标签一旦推送就不移动或删除；若在 Draft 公开前发现问题，删除 Draft、保留原标签并以修复提交发布下一个补丁版本（例如 `v3.3.1`）。
+- Release 已公开但安装包有问题：立即将 Release 标记为 pre-release 或撤下问题资产，发布说明置顶影响范围，并从新提交生成新版本；不移动或覆盖既有标签。
+- 桌面迁移出现契约回归：优先恢复 v3.2.0 下载入口，同时保留失败候选和日志用于复盘。
+
+## Python 包计划（v3.3.0 之后）
+
+目标是让 CLI / MCP 可以脱离源码 checkout 安装，同时先维持与桌面端同仓库、同版本发布，避免过早引入两套版本治理。
+
+### P1：建立可打包边界
+
+- 新增 `pyproject.toml`，声明 Python `>=3.10`、项目元数据、许可证、README 与构建后端。
+- 将当前 `src`、`backend`、`config`、`utils` 等通用顶层模块收敛到唯一命名空间（建议 `src/bilibili_crawler/`），并为所有可分发子包建立明确的 `__init__.py` / package discovery；旧入口只保留薄兼容 shim。
+- 明确可分发包清单和运行时资源清单，排除桌面构建产物、测试 fixture、用户数据和凭据文件。
+- 消除 `src/service/paths.py` 等模块对源码 checkout 层级的假设：包内静态资源用 `importlib.resources`，run、凭据与缓存目录通过显式环境变量或平台数据目录解析。
+- 将核心爬取/分析依赖与 MCP 依赖分层；评估采用 `mcp` 可选 extra，避免只使用 CLI 的用户被迫安装 MCP SDK。
+- 提供稳定的 console scripts，例如 `bilibili-crawler` 与 `bilibili-crawler-mcp`，同时保留 `python -m backend.agent` 兼容入口。
+- 继续以 `desktop/src-tauri/Cargo.toml` 为发布版本唯一来源；构建前由版本生成脚本写入包内 `_version.py`，CI 必须断言 wheel 元数据、Cargo 与标签三者一致。
+
+### P2：验证 wheel / sdist
+
+- 构建 wheel 与 sdist，并运行 `twine check`。
+- 在全新 Python 3.10、3.11、3.12、3.13 虚拟环境中只从构建产物安装。
+- 验证 CLI help、run 列举、最小爬取流程和 stdio MCP 握手，不允许依赖源码 checkout 或当前工作目录。
+- 加入安装包内容审计，确认不携带 API Key、cookies、run 数据、缓存或本机绝对路径。
+
+### P3：接入发布流程
+
+- 初期随同一 GitHub Release 上传 wheel / sdist，并保持与桌面端 lockstep 版本。
+- 在 TestPyPI 完成安装验证后再启用正式 PyPI 发布；使用受保护环境或 Trusted Publishing，不保存长期上传 token。
+- 只有公共包安装路径稳定后，才增加 `server.json` 并评估 MCP Registry 发布。
+- CI 中加入构建可重复性、包安装 smoke test、版本一致性与发布资产校验。
+
+### P4：何时拆分版本
+
+只有在 CLI / MCP 的发布频率、兼容承诺或用户群已经明显独立于桌面端时，才考虑独立包名、标签和 changelog。在此之前统一版本更容易说明“同一业务核心、两个入口”的兼容关系。
+
+## 本次明确不做
+
+- 不在 v3.3.0 临时加入未经 clean-install 验证的 `pyproject.toml`。
+- 不发布 wheel / sdist，不上传 PyPI，不登记 MCP Registry。
+- 不因 Python 包规划延后已经完成的桌面 sidecar 迁移发布；两条工作流在 v3.3.0 后再汇合。

@@ -1,0 +1,3 @@
+# Direct inputs for the reproducible Windows sidecar build toolchain.
+PyInstaller==6.17.0
+pyinstaller-hooks-contrib==2026.7
