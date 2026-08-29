@@ -505,6 +505,45 @@ class SidecarAnalysisTests(unittest.TestCase):
             self.assertFalse(runs.is_relative_to(Path(bundle)))
             self.assertFalse(assets.is_relative_to(Path(bundle)))
 
+    def test_frozen_sidecar_migrates_legacy_runs_without_overwriting_stable_data(self) -> None:
+        import src.service.paths as paths
+
+        with tempfile.TemporaryDirectory() as bundle, tempfile.TemporaryDirectory() as local_app_data:
+            legacy = Path(bundle) / "_internal" / "analysis-runs"
+            legacy_only = legacy / "20260801-010203-deadbeef"
+            conflict = legacy / "20260802-010203-cafebabe"
+            legacy_only.mkdir(parents=True)
+            conflict.mkdir()
+            (legacy_only / "manifest.json").write_text("legacy-only", encoding="utf-8")
+            (conflict / "manifest.json").write_text("legacy-version", encoding="utf-8")
+
+            stable = Path(local_app_data) / "BilibiliCrawler" / "analysis-runs"
+            stable_conflict = stable / conflict.name
+            stable_conflict.mkdir(parents=True)
+            (stable_conflict / "manifest.json").write_text("stable-version", encoding="utf-8")
+
+            with unittest.mock.patch.object(paths, "ROOT", Path(bundle) / "_internal"), \
+                    unittest.mock.patch.object(sys, "frozen", True, create=True), \
+                    unittest.mock.patch.dict(
+                        os.environ, {"LOCALAPPDATA": local_app_data}, clear=False):
+                first = paths.agent_runs_root()
+                second = paths.agent_runs_root()
+
+            self.assertEqual(first, stable)
+            self.assertEqual(second, stable)
+            self.assertEqual(
+                (stable / legacy_only.name / "manifest.json").read_text(encoding="utf-8"),
+                "legacy-only",
+            )
+            self.assertEqual(
+                (stable_conflict / "manifest.json").read_text(encoding="utf-8"),
+                "stable-version",
+            )
+            self.assertEqual(
+                (legacy_only / "manifest.json").read_text(encoding="utf-8"),
+                "legacy-only",
+            )
+
     def test_analysis_asset_root_falls_back_when_the_target_dir_is_unwritable(self) -> None:
         # The regression that a parent-only probe introduced: on Windows an
         # existing subdirectory can carry an ACL its parent does not. Probing
