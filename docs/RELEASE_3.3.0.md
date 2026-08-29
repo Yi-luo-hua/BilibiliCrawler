@@ -56,10 +56,20 @@
 - [ ] 爬取中点击停止，确认保留部分结果、只发送一次终态并可立即重试。
 - [ ] 对评论运行执行分析，核对结构化结果、词云显示、`analysis.json` 与 Markdown 报告。
 - [ ] 分析中点击停止，确认不会迟到发送 `finished`，并能立即重新分析。
-- [ ] 导出 CSV 与分析报告，确认路径可打开、内容完整，表格公式前缀已被安全处理。
+- [ ] 从真实 UI 导出 CSV 与分析报告，确认路径可打开、内容完整；外部数据不保证包含公式前缀，因此另以端到端自动化用恶意单元格验证 CWE-1236 防护。
 - [ ] 用 canary API Key 完成一次分析，随后搜索该 run 目录下全部文件，确认 canary 零命中；嵌套配置回显由自动化测试负责，不用真机结果替代。
 - [ ] 在 v3.2.0 中创建可识别的凭据和 run 标记后覆盖升级，确认两者仍存在且可读。
 - [ ] 使用默认卸载选项卸载 v3.3.0，确认安装目录中的 `user-data` 与 `analysis-runs` 标记仍保留；记录结果后再由测试者手工清理这些测试数据。
+
+#### PR 候选 `cdf7268` 的真机证据（2026-08-29）
+
+以下记录用于证明发布准备 PR 可合并；正式 Release 仍必须对合并后的 `$CandidateSha` 产物复验安装、升级与产物哈希。
+
+- 以已核验的 v3.2.0 安装包恢复真实 currentUser 基线，在旧 `resources/backend/sidecar/_internal/analysis-runs` 中建立仅旧目录存在的运行副本，再覆盖安装候选。首次启动前旧副本仍存在、稳定目录中尚无副本；首次启动已安装 Tauri 应用后，稳定目录出现副本，3 个文件 SHA-256 逐一相同，旧源仍保留。验证用的两个副本随后移入回收站。
+- 真实 WebView2 监听 `sidecar-event`：空评论目标 `BV1WC426CEB7` 严格收到 `stats(total=0)`、`finished(count=0)`、`progress(idle,100)`，且没有 `error` / `cancelled`。
+- 对 `BV18UbY6SEH9` 爬取到第 13 页后点击停止，保留 1,328 条部分结果且只有一个 `finished` 终态；立即改为 1 页重试，得到 184 条并恢复可启动状态。
+- 从真实 UI 导出 CSV 至 `E:\Cache\11-temp\bcc-v330-ui-comments.csv`（50,360 字节），随后以 DeepSeek 对 80 / 184 条样本完成分析，并从 UI 导出 Markdown 至桌面（11,894 字节）及 6 个图表资源。`test_csv_formula_prefixes_survive_to_the_exported_file` 单独验证 `= + - @` 前缀均加安全单引号，而 JSON 保持原值。
+- 当前 run、导出 Markdown 与 6 个资源共扫描 13 个文件，已登记 API Key 零命中；分析只出现一个 `finished` 终态。预检安装包大小 53,593,705 字节，SHA-256 为 `5B23934DFB66D56C15B22EB54A277A231974024E49C003830AC3E3A06B19D59E`，不得作为正式发布哈希。
 
 ### 5. 发布
 
