@@ -87,6 +87,8 @@
 
 2026-08-29 使用独立 MCP 2.1.0 客户端经真实 stdio 子进程调用 `crawl_and_analyze`：5 页成功落盘 775 条评论，但只把桌面端 `credentials.json` 传给子进程时，服务端没有同时获得保存在 `ui.json` 中的 DeepSeek base URL 与 model，因而静默使用 OpenAI 默认端点并返回 401。补齐 `BILIBILI_LLM_BASE_URL=https://api.deepseek.com/v1` 与 `BILIBILI_LLM_MODEL=deepseek-v4-flash` 后，`analyze_run` 复用同一 run 成功生成报告。测试还观察到部分 Windows 控制台会把 MCP 返回的中文状态显示为乱码，但落盘 UTF-8 报告内容正常。
 
+同日使用已安装的 v3.3.0 Tauri 客户端完成真实桌面链路：目标视频 1 页共落盘 184 条评论，DeepSeek 对 80 条样本生成 `analysis.json`、`report.md` 与词云，run 目录扫描未发现已登记 API Key。实测单批 LLM 调用约 3 分钟且界面长时间停在 80%，缺少已用时和超时提示；随后在同一已完成 run 上重新开始分析并取消时，旧报告仍保留，但 `manifest.json` 的 run 级状态被改成 `cancelled`，形成“已有完成产物、run 显示已取消”的语义不一致。
+
 ### P0：配置解析与启动诊断
 
 - 将桌面端配置按一个 profile 解析：从桌面 `credentials.json` 命中 API Key 时，同时读取同目录 `ui.json` 的 `llm_base_url` / `llm_model`；显式 `BILIBILI_LLM_*` 环境变量仍逐字段拥有最高优先级。
@@ -99,6 +101,8 @@
 - 分析请求收到 401/403、模型不存在或端点不可达时，区分 provider 鉴权、模型配置与网络错误，不再全部折叠成泛化的 `ANALYSIS_FAILED`；错误可以包含非敏感 endpoint/model/source，但仍必须经过 `scrub()`。
 - `crawl_and_analyze` 已经成功落盘评论而分析失败时，返回值的 `next_step` 必须明确给出 `analyze_run(run_id=...)`，引导调用者复用已有数据，禁止默认重新爬取。
 - 保持 acquire 与 analyze 分阶段、run 可恢复的现有设计；配置修正后的重试只重跑 LLM、解析与报告渲染，不覆盖评论原始数据。
+- 为 provider 请求显示已用时、可配置超时和当前重试信息，避免单批调用长时间停在固定百分比而无法区分正常等待与连接挂起；超时后仍允许对同一 run 重试。
+- 明确“对已完成 run 再分析”的版本语义：分析尝试应拥有独立状态，取消新的尝试不得把已有完整 run 降级为 `cancelled`；旧报告是保留、归档还是原子替换必须在 manifest 中可判定。
 
 ### P1：真实 stdio 验收与 Windows 编码
 
