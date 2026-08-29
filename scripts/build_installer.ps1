@@ -3,6 +3,22 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+function Assert-ReleasePython {
+    param([string]$PythonCommand)
+
+    $Identity = & $PythonCommand -c "import struct, sys; print(f'{sys.implementation.name}|{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}|{struct.calcsize(chr(80)) * 8}')"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to inspect release Python: $PythonCommand"
+    }
+    $Actual = ($Identity | Out-String).Trim()
+    if ($Actual -ne "cpython|3.13.15|64") {
+        throw "Windows sidecar releases require CPython 3.13.15 x64; got $Actual"
+    }
+}
+
+Assert-ReleasePython -PythonCommand $Python
+
 $Root = Split-Path -Parent $PSScriptRoot
 $CargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
 if (Test-Path $CargoBin) {

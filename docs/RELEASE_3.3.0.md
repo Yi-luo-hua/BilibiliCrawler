@@ -32,15 +32,14 @@
 
 以上门禁必须在版本号和发布文档落定后重跑；历史通过记录只能作为参考，不能代替候选提交验证。
 
-### 3. 安装包候选构建
+### 3. 构建链路预检
 
 - [ ] 安装 CPython 3.13.15 x64，以它创建 GUID 命名的全新构建环境并设置 `$ReleasePython`；脚本必须 fail-fast 拒绝其他实现、版本或 32 位解释器。
 - [ ] 运行 `powershell -ExecutionPolicy Bypass -File scripts/build_installer.ps1 -Python $ReleasePython`；脚本会以 `pip --require-hashes` 安装锁定的运行时与构建工具。
 - [ ] 确认 `requirements-desktop.lock` 与 `requirements-build.txt` 已提交，并记录 `& $ReleasePython -m pip freeze`、Python 版本、Rust 版本和 `corepack pnpm@10.28.0 --version`。
 - [ ] 确认构建脚本对 NSIS 3.11 zip 与 `nsis_tauri_utils.dll` 的 SHA-256 校验通过。
-- [ ] 确认产物为 `desktop/src-tauri/target/release/bundle/nsis/BilibiliCrawler-Setup-3.3.0-x64.exe`。
-- [ ] 设置 `$Installer = Resolve-Path 'desktop/src-tauri/target/release/bundle/nsis/BilibiliCrawler-Setup-3.3.0-x64.exe'`，再用 `Get-FileHash -Algorithm SHA256 -LiteralPath $Installer` 记录 SHA-256。
-- [ ] 记录文件大小、构建时间、候选提交 SHA 和构建主机环境。
+- [ ] 确认预检产物为 `desktop/src-tauri/target/release/bundle/nsis/BilibiliCrawler-Setup-3.3.0-x64.exe`，并完成安装与真机验收；PR 分支上的产物只证明构建链路可用，不得直接作为 Release 资产。
+- [ ] 用 `Get-FileHash -Algorithm SHA256` 记录预检产物，供合并后的最终构建对比；不得把这个哈希写成正式发布哈希。
 - [ ] Release notes 明确说明安装包当前未进行代码签名，Windows 可能显示 SmartScreen 提示。
 
 ### 4. Tauri 真机验收
@@ -64,11 +63,14 @@
 
 ### 5. 发布
 
-- [ ] 合并发布准备 PR，重新核对 `main` 的最终提交和所有门禁结果。
+- [ ] 合并发布准备 PR，更新本地 `main` 到 `origin/main`，确认工作区干净且没有未合并发布提交；设置 `$CandidateSha = git rev-parse HEAD`。
+- [ ] 从 `$CandidateSha` 创建全新干净 worktree，断言其中 `git rev-parse HEAD` 等于 `$CandidateSha` 且 `git status --porcelain` 为空；在该 worktree 中重新运行第 2 节全部自动化门禁。
+- [ ] 在该 worktree 中使用全新 CPython 3.13.15 x64 构建环境重新运行 `scripts/build_installer.ps1`；只有这次构建生成的安装包才是最终 Release 资产。
+- [ ] 设置 `$Installer = Resolve-Path 'desktop/src-tauri/target/release/bundle/nsis/BilibiliCrawler-Setup-3.3.0-x64.exe'`，记录文件大小、构建时间、构建主机环境、SHA-256 与 `$CandidateSha`，并再次断言 worktree HEAD 未变化且工作区仍干净（忽略的构建产物除外）。
+- [ ] 生成校验文件：`$ChecksumFile = "$Installer.sha256"; $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Installer).Hash.ToLowerInvariant(); "$Hash  $([IO.Path]::GetFileName($Installer))" | Set-Content -Encoding ascii -LiteralPath $ChecksumFile`，并在本地反向解析校验文件确认文件名与哈希匹配。
 - [ ] 用 `git ls-remote origin refs/tags/v3.3.0 'refs/tags/v3.3.0^{}'` 确认远端没有同名标签。
 - [ ] 在最终提交创建 annotated tag：`git tag -a v3.3.0 -m "BilibiliCrawler v3.3.0"`，并确认 `git rev-parse 'v3.3.0^{}'` 等于候选提交 SHA。
 - [ ] 用 `git push origin refs/tags/v3.3.0` 推送标签，再用 `git ls-remote origin refs/tags/v3.3.0 'refs/tags/v3.3.0^{}'` 确认远端 peeled SHA 仍等于候选提交。
-- [ ] 生成校验文件：`$ChecksumFile = "$Installer.sha256"; $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Installer).Hash.ToLowerInvariant(); "$Hash  $([IO.Path]::GetFileName($Installer))" | Set-Content -Encoding ascii -LiteralPath $ChecksumFile`。
 - [ ] 使用 `gh release create v3.3.0 --draft --verify-tag --title "BilibiliCrawler v3.3.0" --notes-file docs/RELEASE_NOTES_3.3.0.md $Installer $ChecksumFile` 创建 Draft 并同时上传安装包与校验文件。
 - [ ] 在 Draft 中补充文件大小和构建提交 SHA，并核对安装包未签名提示。
 - [ ] 从 Draft 下载产物并复核 SHA-256 后再公开 Release。
