@@ -78,6 +78,36 @@
 - Release 已公开但安装包有问题：立即将 Release 标记为 pre-release 或撤下问题资产，发布说明置顶影响范围，并从新提交生成新版本；不移动或覆盖既有标签。
 - 桌面迁移出现契约回归：优先恢复 v3.2.0 下载入口，同时保留失败候选和日志用于复盘。
 
+## MCP 实际调用改进计划（v3.3.0 之后）
+
+2026-08-29 使用独立 MCP 2.1.0 客户端经真实 stdio 子进程调用 `crawl_and_analyze`：5 页成功落盘 775 条评论，但只把桌面端 `credentials.json` 传给子进程时，服务端没有同时获得保存在 `ui.json` 中的 DeepSeek base URL 与 model，因而静默使用 OpenAI 默认端点并返回 401。补齐 `BILIBILI_LLM_BASE_URL=https://api.deepseek.com/v1` 与 `BILIBILI_LLM_MODEL=deepseek-v4-flash` 后，`analyze_run` 复用同一 run 成功生成报告。测试还观察到部分 Windows 控制台会把 MCP 返回的中文状态显示为乱码，但落盘 UTF-8 报告内容正常。
+
+### P0：配置解析与启动诊断
+
+- 将桌面端配置按一个 profile 解析：从桌面 `credentials.json` 命中 API Key 时，同时读取同目录 `ui.json` 的 `llm_base_url` / `llm_model`；显式 `BILIBILI_LLM_*` 环境变量仍逐字段拥有最高优先级。
+- 保留 OpenAI 默认值的兼容行为，但不得在同目录已经存在非默认 provider 配置时忽略它并静默回落；配置损坏或字段冲突时返回不含密钥的可操作错误。
+- 增加 `python -m backend.agent doctor`（或等价只读诊断入口），只显示凭据来源类型、已解析的 base URL、model、MCP SDK 版本及运行目录可写性，不显示 API Key；提供可选 provider 连通性检查。
+- 在 MCP 宿主配置文档中明确：stdio 子进程是否继承调用者环境由宿主/客户端决定；示例必须把自定义环境显式放进启动参数，并覆盖“只有凭据文件、没有 base URL/model”的非 OpenAI 场景。
+
+### P1：失败恢复与错误语义
+
+- 分析请求收到 401/403、模型不存在或端点不可达时，区分 provider 鉴权、模型配置与网络错误，不再全部折叠成泛化的 `ANALYSIS_FAILED`；错误可以包含非敏感 endpoint/model/source，但仍必须经过 `scrub()`。
+- `crawl_and_analyze` 已经成功落盘评论而分析失败时，返回值的 `next_step` 必须明确给出 `analyze_run(run_id=...)`，引导调用者复用已有数据，禁止默认重新爬取。
+- 保持 acquire 与 analyze 分阶段、run 可恢复的现有设计；配置修正后的重试只重跑 LLM、解析与报告渲染，不覆盖评论原始数据。
+
+### P1：真实 stdio 验收与 Windows 编码
+
+- 增加启动真实 `python -m backend.agent mcp` 子进程的集成测试，而不只使用进程内 `Client(mcp)`；测试显式环境传递、7 个工具发现、调用终态和跨进程 run 恢复。
+- 用夹具覆盖“Key 在 `credentials.json`、provider/model 在相邻 `ui.json`”以及环境变量逐字段覆盖桌面配置的优先级，断言请求实际发往预期 endpoint，且任何输出与落盘文件均不出现 canary key。
+- 增加中文 progress、stage、summary 经 stdio 往返的 UTF-8 测试；Windows 手工说明补充 `PYTHONUTF8=1` / `PYTHONIOENCODING=utf-8` 的排障方式，区分终端显示问题与产物编码损坏。
+- 提供 opt-in 的 live smoke（视频 URL、页数与 sample size 均由环境变量传入），检查工具发现、爬取、分析、报告/JSON/CSV/manifest 完整性和凭据零命中；外网与第三方模型不稳定，因此 live smoke 记录结果但不作为普通 PR 的硬门禁。
+
+### 完成标准
+
+- 非 OpenAI 桌面配置无需重复手工填写 base URL/model，即可从源码 MCP 和未来 wheel 安装入口完成一次真实 `crawl_and_analyze`。
+- 故意配置错误 endpoint 或 model 时，在开始昂贵重试前得到不泄密、可定位的错误；修正配置后可对原 run 执行 `analyze_run` 并生成报告。
+- Windows stdio 客户端可正确显示中文状态，且 comments、analysis、report、manifest 中对真实/测试 API Key 的扫描结果均为 0。
+
 ## Python 包计划（v3.3.0 之后）
 
 目标是让 CLI / MCP 可以脱离源码 checkout 安装，同时先维持与桌面端同仓库、同版本发布，避免过早引入两套版本治理。
