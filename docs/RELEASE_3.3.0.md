@@ -48,8 +48,8 @@
 
 - [ ] 安装前读取 `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\BilibiliCrawler`；带日期的 `.install-test\\BilibiliCrawler-smoke-*` 目录视为历史验收样本，不得作为新候选的覆盖升级目标。
 - [ ] 在 Windows x64 上分别验证全新安装与从 v3.2.0 覆盖升级，确认 currentUser 安装位置正常；禁止用 `/UPDATE + /D=<新目录>` 模拟常规安装后直接判定通过，因为该组合可能保留指向旧目录的快捷方式。
-- [ ] 安装后解析开始菜单和桌面 `BilibiliCrawler.lnk`，确认 `TargetPath`、`WorkingDirectory` 与 `IconLocation` 都指向注册表 `InstallLocation` 下的 v3.3.0 主程序；必须从快捷方式启动验收，不能只直接运行 exe。
-- [ ] 在 Windows 任务栏缩放 100% / 125% / 150% 下检查运行中图标，保存截图并确认使用 ICO 的 16/24/32 像素层而非放大单一 16×16 图标；升级后还要验证 Explorer 图标缓存刷新。
+- [ ] 安装后解析开始菜单和桌面 `BilibiliCrawler.lnk`，确认 `TargetPath` 与 `WorkingDirectory` 指向注册表 `InstallLocation` 下的 v3.3.0 主程序；`IconLocation` 可以显式指向该程序，也可以是 Windows 表示“使用目标默认图标”的 `,0`，但不得指向旧安装。必须从快捷方式启动验收，不能只直接运行 exe。
+- [ ] 在当前 Windows 缩放下实机检查运行中任务栏图标并保存截图，同时解析 ICO/EXE 资源确认包含 16/24/32 像素层而非只有单一 16×16 图标；若验收环境可用，再补充 100% / 125% / 150% 矩阵。升级后还要验证快捷方式目标与 Explorer 图标缓存刷新。
 - [ ] 启动桌面端，确认既有登录状态与凭据发现路径正常；全程不得在日志或 UI 中显示 API Key。
 - [ ] 完成一次普通评论爬取，核对进度事件、完成事件、评论数量、CSV 与 run 目录。
 - [ ] 触发空评论结果，确认依次收到 `stats`、`finished(count=0)`、`idle(100)`，不出现 `error` 或 `cancelled`。
