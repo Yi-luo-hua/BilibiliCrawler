@@ -69,17 +69,22 @@ def _migrate_frozen_output(name: str, target: Path) -> None:
     if not getattr(sys, "frozen", False):
         return
     legacy = ROOT / name
-    if not legacy.is_dir() or legacy.resolve() == target.resolve():
+    try:
+        if not legacy.is_dir() or legacy.resolve() == target.resolve():
+            return
+        sources = list(legacy.iterdir())
+    except OSError:
         return
 
-    for source in legacy.iterdir():
-        if not source.is_dir():
-            continue
-        destination = target / source.name
-        if destination.exists():
-            continue
-        staging = Path(tempfile.mkdtemp(dir=target, prefix=f".migrate-{source.name}-"))
+    for source in sources:
+        staging = None
         try:
+            if not source.is_dir():
+                continue
+            destination = target / source.name
+            if destination.exists():
+                continue
+            staging = Path(tempfile.mkdtemp(dir=target, prefix=f".migrate-{source.name}-"))
             shutil.copytree(source, staging, dirs_exist_ok=True)
             if not destination.exists():
                 staging.rename(destination)
@@ -87,7 +92,7 @@ def _migrate_frozen_output(name: str, target: Path) -> None:
             # The legacy copy remains untouched and can be retried next start.
             pass
         finally:
-            if staging.exists():
+            if staging is not None:
                 shutil.rmtree(staging, ignore_errors=True)
 
 

@@ -544,6 +544,53 @@ class SidecarAnalysisTests(unittest.TestCase):
                 "legacy-only",
             )
 
+    def test_frozen_sidecar_ignores_an_unreadable_legacy_root(self) -> None:
+        import src.service.paths as paths
+
+        with tempfile.TemporaryDirectory() as bundle, tempfile.TemporaryDirectory() as local_app_data:
+            legacy = Path(bundle) / "_internal" / "analysis-runs"
+            legacy.mkdir(parents=True)
+            stable = Path(local_app_data) / "BilibiliCrawler" / "analysis-runs"
+            real_iterdir = Path.iterdir
+
+            def iterdir(path: Path):
+                if path == legacy:
+                    raise PermissionError("legacy output is unreadable")
+                return real_iterdir(path)
+
+            with unittest.mock.patch.object(paths, "ROOT", Path(bundle) / "_internal"), \
+                    unittest.mock.patch.object(sys, "frozen", True, create=True), \
+                    unittest.mock.patch.dict(
+                        os.environ, {"LOCALAPPDATA": local_app_data}, clear=False), \
+                    unittest.mock.patch.object(Path, "iterdir", iterdir):
+                resolved = paths.agent_runs_root()
+
+            self.assertEqual(resolved, stable)
+            self.assertTrue(stable.is_dir())
+
+    def test_frozen_sidecar_ignores_a_legacy_staging_failure(self) -> None:
+        import src.service.paths as paths
+
+        with tempfile.TemporaryDirectory() as bundle, tempfile.TemporaryDirectory() as local_app_data:
+            legacy = Path(bundle) / "_internal" / "analysis-runs"
+            legacy_run = legacy / "20260803-010203-acde1234"
+            legacy_run.mkdir(parents=True)
+            (legacy_run / "manifest.json").write_text("legacy", encoding="utf-8")
+            stable = Path(local_app_data) / "BilibiliCrawler" / "analysis-runs"
+
+            with unittest.mock.patch.object(paths, "ROOT", Path(bundle) / "_internal"), \
+                    unittest.mock.patch.object(sys, "frozen", True, create=True), \
+                    unittest.mock.patch.dict(
+                        os.environ, {"LOCALAPPDATA": local_app_data}, clear=False), \
+                    unittest.mock.patch.object(
+                        paths.tempfile, "mkdtemp", side_effect=OSError("staging unavailable")):
+                resolved = paths.agent_runs_root()
+
+            self.assertEqual(resolved, stable)
+            self.assertTrue(stable.is_dir())
+            self.assertFalse((stable / legacy_run.name).exists())
+            self.assertTrue((legacy_run / "manifest.json").exists())
+
     def test_analysis_asset_root_falls_back_when_the_target_dir_is_unwritable(self) -> None:
         # The regression that a parent-only probe introduced: on Windows an
         # existing subdirectory can carry an ACL its parent does not. Probing
