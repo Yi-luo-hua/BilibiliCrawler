@@ -9,6 +9,7 @@ and the agent's runs land side by side and the two cannot drift apart.
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 from pathlib import Path
 
@@ -51,7 +52,10 @@ def _is_writable(candidate: Path) -> bool:
 
 def candidate_bases() -> list[Path]:
     """Bases to try, most preferred first."""
-    bases = [ROOT]
+    # In a PyInstaller build ROOT points inside sidecar/_internal. That bundle
+    # is replaced during upgrades and removed during uninstall, so user output
+    # must never be created there even when it happens to be writable.
+    bases = [] if getattr(sys, "frozen", False) else [ROOT]
     local_app_data = os.environ.get("LOCALAPPDATA")
     if local_app_data:
         bases.append(Path(local_app_data) / PRODUCT_DIR_NAME)

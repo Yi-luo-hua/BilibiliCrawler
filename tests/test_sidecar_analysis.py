@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import logging
 import io
 import base64
@@ -486,6 +487,23 @@ class SidecarAnalysisTests(unittest.TestCase):
 
             self.assertEqual(resolved, Path(temp_dir) / "analysis-assets")
             self.assertTrue(resolved.is_dir())
+
+    def test_frozen_sidecar_keeps_outputs_outside_the_pyinstaller_bundle(self) -> None:
+        import src.service.paths as paths
+
+        with tempfile.TemporaryDirectory() as bundle, tempfile.TemporaryDirectory() as local_app_data:
+            expected_base = Path(local_app_data) / "BilibiliCrawler"
+            with unittest.mock.patch.object(paths, "ROOT", Path(bundle) / "_internal"), \
+                    unittest.mock.patch.object(sys, "frozen", True, create=True), \
+                    unittest.mock.patch.dict(
+                        os.environ, {"LOCALAPPDATA": local_app_data}, clear=False):
+                runs = paths.agent_runs_root()
+                assets = paths.analysis_assets_root()
+
+            self.assertEqual(runs, expected_base / "analysis-runs")
+            self.assertEqual(assets, expected_base / "analysis-assets")
+            self.assertFalse(runs.is_relative_to(Path(bundle)))
+            self.assertFalse(assets.is_relative_to(Path(bundle)))
 
     def test_analysis_asset_root_falls_back_when_the_target_dir_is_unwritable(self) -> None:
         # The regression that a parent-only probe introduced: on Windows an
