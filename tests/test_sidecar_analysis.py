@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import logging
 import io
 import base64
@@ -486,6 +487,109 @@ class SidecarAnalysisTests(unittest.TestCase):
 
             self.assertEqual(resolved, Path(temp_dir) / "analysis-assets")
             self.assertTrue(resolved.is_dir())
+
+    def test_frozen_sidecar_keeps_outputs_outside_the_pyinstaller_bundle(self) -> None:
+        import src.service.paths as paths
+
+        with tempfile.TemporaryDirectory() as bundle, tempfile.TemporaryDirectory() as local_app_data:
+            expected_base = Path(local_app_data) / "BilibiliCrawler"
+            with unittest.mock.patch.object(paths, "ROOT", Path(bundle) / "_internal"), \
+                    unittest.mock.patch.object(sys, "frozen", True, create=True), \
+                    unittest.mock.patch.dict(
+                        os.environ, {"LOCALAPPDATA": local_app_data}, clear=False):
+                runs = paths.agent_runs_root()
+                assets = paths.analysis_assets_root()
+
+            self.assertEqual(runs, expected_base / "analysis-runs")
+            self.assertEqual(assets, expected_base / "analysis-assets")
+            self.assertFalse(runs.is_relative_to(Path(bundle)))
+            self.assertFalse(assets.is_relative_to(Path(bundle)))
+
+    def test_frozen_sidecar_migrates_legacy_runs_without_overwriting_stable_data(self) -> None:
+        import src.service.paths as paths
+
+        with tempfile.TemporaryDirectory() as bundle, tempfile.TemporaryDirectory() as local_app_data:
+            legacy = Path(bundle) / "_internal" / "analysis-runs"
+            legacy_only = legacy / "20260801-010203-deadbeef"
+            conflict = legacy / "20260802-010203-cafebabe"
+            legacy_only.mkdir(parents=True)
+            conflict.mkdir()
+            (legacy_only / "manifest.json").write_text("legacy-only", encoding="utf-8")
+            (conflict / "manifest.json").write_text("legacy-version", encoding="utf-8")
+
+            stable = Path(local_app_data) / "BilibiliCrawler" / "analysis-runs"
+            stable_conflict = stable / conflict.name
+            stable_conflict.mkdir(parents=True)
+            (stable_conflict / "manifest.json").write_text("stable-version", encoding="utf-8")
+
+            with unittest.mock.patch.object(paths, "ROOT", Path(bundle) / "_internal"), \
+                    unittest.mock.patch.object(sys, "frozen", True, create=True), \
+                    unittest.mock.patch.dict(
+                        os.environ, {"LOCALAPPDATA": local_app_data}, clear=False):
+                first = paths.agent_runs_root()
+                second = paths.agent_runs_root()
+
+            self.assertEqual(first, stable)
+            self.assertEqual(second, stable)
+            self.assertEqual(
+                (stable / legacy_only.name / "manifest.json").read_text(encoding="utf-8"),
+                "legacy-only",
+            )
+            self.assertEqual(
+                (stable_conflict / "manifest.json").read_text(encoding="utf-8"),
+                "stable-version",
+            )
+            self.assertEqual(
+                (legacy_only / "manifest.json").read_text(encoding="utf-8"),
+                "legacy-only",
+            )
+
+    def test_frozen_sidecar_ignores_an_unreadable_legacy_root(self) -> None:
+        import src.service.paths as paths
+
+        with tempfile.TemporaryDirectory() as bundle, tempfile.TemporaryDirectory() as local_app_data:
+            legacy = Path(bundle) / "_internal" / "analysis-runs"
+            legacy.mkdir(parents=True)
+            stable = Path(local_app_data) / "BilibiliCrawler" / "analysis-runs"
+            real_iterdir = Path.iterdir
+
+            def iterdir(path: Path):
+                if path == legacy:
+                    raise PermissionError("legacy output is unreadable")
+                return real_iterdir(path)
+
+            with unittest.mock.patch.object(paths, "ROOT", Path(bundle) / "_internal"), \
+                    unittest.mock.patch.object(sys, "frozen", True, create=True), \
+                    unittest.mock.patch.dict(
+                        os.environ, {"LOCALAPPDATA": local_app_data}, clear=False), \
+                    unittest.mock.patch.object(Path, "iterdir", iterdir):
+                resolved = paths.agent_runs_root()
+
+            self.assertEqual(resolved, stable)
+            self.assertTrue(stable.is_dir())
+
+    def test_frozen_sidecar_ignores_a_legacy_staging_failure(self) -> None:
+        import src.service.paths as paths
+
+        with tempfile.TemporaryDirectory() as bundle, tempfile.TemporaryDirectory() as local_app_data:
+            legacy = Path(bundle) / "_internal" / "analysis-runs"
+            legacy_run = legacy / "20260803-010203-acde1234"
+            legacy_run.mkdir(parents=True)
+            (legacy_run / "manifest.json").write_text("legacy", encoding="utf-8")
+            stable = Path(local_app_data) / "BilibiliCrawler" / "analysis-runs"
+
+            with unittest.mock.patch.object(paths, "ROOT", Path(bundle) / "_internal"), \
+                    unittest.mock.patch.object(sys, "frozen", True, create=True), \
+                    unittest.mock.patch.dict(
+                        os.environ, {"LOCALAPPDATA": local_app_data}, clear=False), \
+                    unittest.mock.patch.object(
+                        paths.tempfile, "mkdtemp", side_effect=OSError("staging unavailable")):
+                resolved = paths.agent_runs_root()
+
+            self.assertEqual(resolved, stable)
+            self.assertTrue(stable.is_dir())
+            self.assertFalse((stable / legacy_run.name).exists())
+            self.assertTrue((legacy_run / "manifest.json").exists())
 
     def test_analysis_asset_root_falls_back_when_the_target_dir_is_unwritable(self) -> None:
         # The regression that a parent-only probe introduced: on Windows an

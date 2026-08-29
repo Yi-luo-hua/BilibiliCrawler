@@ -9,6 +9,8 @@ and the agent's runs land side by side and the two cannot drift apart.
 from __future__ import annotations
 
 import os
+import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -51,12 +53,47 @@ def _is_writable(candidate: Path) -> bool:
 
 def candidate_bases() -> list[Path]:
     """Bases to try, most preferred first."""
-    bases = [ROOT]
+    # In a PyInstaller build ROOT points inside sidecar/_internal. That bundle
+    # is replaced during upgrades and removed during uninstall, so user output
+    # must never be created there even when it happens to be writable.
+    bases = [] if getattr(sys, "frozen", False) else [ROOT]
     local_app_data = os.environ.get("LOCALAPPDATA")
     if local_app_data:
         bases.append(Path(local_app_data) / PRODUCT_DIR_NAME)
     bases.append(Path.home() / "AppData" / "Local" / PRODUCT_DIR_NAME)
     return bases
+
+
+def _migrate_frozen_output(name: str, target: Path) -> None:
+    """Copy legacy PyInstaller output into stable storage without overwrites."""
+    if not getattr(sys, "frozen", False):
+        return
+    legacy = ROOT / name
+    try:
+        if not legacy.is_dir() or legacy.resolve() == target.resolve():
+            return
+        sources = list(legacy.iterdir())
+    except OSError:
+        return
+
+    for source in sources:
+        staging = None
+        try:
+            if not source.is_dir():
+                continue
+            destination = target / source.name
+            if destination.exists():
+                continue
+            staging = Path(tempfile.mkdtemp(dir=target, prefix=f".migrate-{source.name}-"))
+            shutil.copytree(source, staging, dirs_exist_ok=True)
+            if not destination.exists():
+                staging.rename(destination)
+        except OSError:
+            # The legacy copy remains untouched and can be retried next start.
+            pass
+        finally:
+            if staging is not None:
+                shutil.rmtree(staging, ignore_errors=True)
 
 
 def output_dir(name: str) -> Path:
@@ -72,6 +109,7 @@ def output_dir(name: str) -> Path:
     for base in bases:
         target = base / name
         if _is_writable(target):
+            _migrate_frozen_output(name, target)
             return target
     # Nothing was writable; hand back the last resort so the caller surfaces a
     # real error at write time rather than a confusing empty path.

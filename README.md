@@ -204,8 +204,12 @@ corepack pnpm --dir desktop tauri dev
 
 ### 构建安装包
 
+正式 Windows 安装包固定使用 **CPython 3.13.15 x64**；这与源码功能支持 Python 3.10+ 是两个约束。
+构建脚本会拒绝其他 Python 版本，并用带 SHA-256 的锁文件安装 sidecar 运行时与 PyInstaller 工具链。
+
 ```powershell
-scripts\build_installer.ps1
+$ReleasePython = 'C:\path\to\cpython-3.13.15-venv\Scripts\python.exe'
+powershell -ExecutionPolicy Bypass -File scripts\build_installer.ps1 -Python $ReleasePython
 ```
 
 应用版本以 `desktop/src-tauri/Cargo.toml` 的 `[package].version` 为唯一来源；Tauri 和构建脚本会自动读取该版本，`Cargo.lock` 由 Cargo 同步更新。构建流程使用锁定的 pnpm 版本、冻结锁文件和审核后的依赖构建脚本。
@@ -251,7 +255,7 @@ BilibiliCrawler/
 ├─ assets/                         应用 logo 与图标资源
 ├─ backend/
 │  ├─ agent.py                    薄 CLI，也是 MCP 服务器启动入口
-│  ├─ mcp_server.py               MCP stdio 适配层（5 个工具）
+│  ├─ mcp_server.py               MCP stdio 适配层（7 个工具）
 │  └─ sidecar.py                   Python sidecar 入口，与 Tauri 进程通信
 ├─ config/
 │  └─ config.py                    全局配置
@@ -322,10 +326,23 @@ BilibiliCrawler/
 ├─ utils/
 │  └─ helpers.py                   链接解析等工具函数
 ├─ requirements.txt
-└─ requirements-agent.txt          MCP / CLI 额外依赖
+├─ requirements-agent.txt          MCP / CLI 额外依赖
+├─ requirements-desktop.lock       Windows sidecar 锁定运行时依赖
+├─ requirements-build.in           Windows sidecar 构建工具直接依赖
+└─ requirements-build.txt          Windows sidecar 带哈希构建锁
 ```
 
 ## 更新日志
+
+### v3.3.0（待发布）
+- 桌面评论爬取与 `source == "comments"` 的分析已迁入共享 `AgentService`，同时保留既有 RPC、事件、取消、空结果和 source 回退契约。
+- 新增适配器 outcome 通道与类型化事件，并补齐终态读取、深拷贝所有权、默认关闭零额外调用及取消竞态的回归覆盖。
+- 新增真实 `SidecarClient` 跨进程端到端测试，覆盖请求关联、进度事件、完成事件、取消与重试。
+- 强化 run 存储、报告与 CSV 导出：归一化相对产物路径、历史分析归档、元数据与来源记录、运行列举/删除、公式注入防护及流式 JSON 写入。
+- `analysis.json`、Markdown 报告和分析归档现在都会递归脱敏已注册凭据；词云损坏或超限时只报告 warning，不再生成失效链接。
+- 分析 JSON、Markdown 与词云采用整组 staging + 原子提交，失败时回滚，避免分析产物只更新一部分。
+- MCP 扩展为 7 个工具，新增持久化 run 的列举与删除能力。
+- 发布前仍须完成 `docs/RELEASE_3.3.0.md` 中的 Tauri 真机验收；验收完成后再填写发布日期并创建标签。
 
 ### v3.2.0 (2026.08.25)
 - 新增本地 MCP 服务器，agent 可越过桌面客户端直接完成「爬取 → 分析 → 导出报告」，对应 Issue #3。

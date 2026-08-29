@@ -27,6 +27,9 @@ python -m venv .venv-agent
 
 Linux / macOS 下把 `.venv-agent/Scripts/python.exe` 换成 `.venv-agent/bin/python`。
 
+v3.3.0 仍采用源码安装。独立 wheel / sdist、PyPI 发布与 MCP Registry 接入已列入
+[`RELEASE_3.3.0.md`](RELEASE_3.3.0.md) 的后续 Python 包计划，不属于本次发布产物。
+
 验证安装：
 
 ```bash
