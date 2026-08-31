@@ -1,1 +1,1 @@
-"""Headless agent service layer shared by the MCP server and the thin CLI."""
+"""Legacy checkout import namespace; implementation is in bilibili_crawler."""

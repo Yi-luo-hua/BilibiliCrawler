@@ -1,6 +1,6 @@
 # v3.3.0 之后的实施计划
 
-更新：2026-08-31。基线：已发布 v3.3.0 / `main` 的 `6ae33df`。
+更新：2026-09-01。基线：已发布 v3.3.0 / `main` 的 `6ae33df`。
 本文把 `RELEASE_3.3.0.md` 的后续路线拆成可独立验收的批次，不承诺尚未确定的发布日期。
 
 ## 当前边界
@@ -22,7 +22,7 @@
 | C | P1 | provider 错误分类、复用原 run 的恢复提示 | A；结合 B 的尝试状态 | 实现、双线 review 与验证完成；未发版 |
 | D | P1 | 耗时、超时、重试提示 | C | 实现、双线 review 与验证完成；未发版 |
 | E | P1 | 真实 MCP stdio、Windows 编码与可选 live smoke | A–D | 实现、双线 review 与离线验证完成；live 未执行 |
-| F | P1 | 命名空间、资源路径、CLI/MCP 可安装包边界 | A–C；E 提供验收基线 | 待开始 |
+| F | P1 | 命名空间、资源路径、CLI/MCP 可安装包边界 | A–C；E 提供验收基线 | 实现、双线 review 与本机安装验证完成；未发包 |
 | G | P2 | wheel/sdist 干净安装与内容审计 | F | 待开始 |
 | H | P3 | GitHub 包资产、TestPyPI/PyPI、发布门禁 | G | 待开始 |
 | I | P4 | 评估是否拆分版本 | 仅当用户群/发布节奏独立时 | 条件性，不排期 |
@@ -108,6 +108,9 @@
 
 F：增加 `pyproject.toml`，统一 `bilibili_crawler` 命名空间；旧入口保留薄兼容层。核心依赖与 MCP extra 分层；静态资源使用包资源 API，run/凭据/缓存脱离 checkout 路径。提供 `bilibili-crawler`、`bilibili-crawler-mcp` 稳定命令。版本仍由 Cargo.toml 派生。
 
+本批具体约束见 [Python 包边界](PYTHON_PACKAGE_BOUNDARY.md)。安装包不写 site-packages/cwd；
+源码 checkout 保留旧数据路径与 profile 发现，避免既有 run 失联。公开名称与多版本矩阵不由本批提前宣称完成。
+
 G：构建 wheel/sdist 并执行 `twine check`；Python 3.10–3.13 全新环境只从产物安装，在无 checkout 的任意工作目录验证 help、doctor、列举、最小爬取与 MCP 握手。包内不得携带 Key、cookies、run、缓存、测试 fixture 或机器绝对路径。
 
 H：先随 GitHub Release 附带包资产，TestPyPI 验证后再启用正式 PyPI，优先 Trusted Publishing。CI 校验版本、产物内容、安装 smoke 和哈希。公共包入口稳定后另行评估 `server.json` 与 MCP Registry。公开发布前确定包名、账户/权限与最终发布产物。
@@ -187,3 +190,15 @@ H：先随 GitHub Release 附带包资产，TestPyPI 验证后再启用正式 Py
 - 新增 2 项 smoke 异常回归（含正常完成、停止/查询/关闭异常子场景），扩展真实 stdio 负例。修复前 smoke 回归出现 1 个失败、3 个错误，协议残尾回归另有 1 个失败；修复后两轴独立复核均无未解决问题。
 - 最终 MCP 2.1.0 全量 308/308；无 MCP 全量 277 项（274 通过、3 个 MCP 模块预期跳过）；桌面 13/13、TypeScript、`git diff --check` 通过。四个改动 Python 文件通过 3.10 语法解析，但运行验证仍是 CPython 3.13.0，不代表多版本安装矩阵完成。
 - 完整日志 `.runlogs/e-review-fix-{mcp,no-mcp,desktop}.log`，修复前失败证据 `.runlogs/e-fix-red-{smoke,schema}.log` 均不纳入提交。未执行真实外网 live smoke、未消费模型额度、未发布安装包或 Python 包。
+
+### F 批验证与 review 结论
+
+- 分支 `codex/python-package-boundary`，基线为 E 追加修复的 `86f0eae`。运行实现迁入 `bilibili_crawler`，旧源码入口保留共享模块的薄兼容层；新增可安装 CLI/MCP 命令、包内词表与平台用户目录。不改 Cargo 版本、桌面锁定依赖或客户端协议。
+- 新增 7 项包边界测试。MCP 2.1.0 全量 315/315；无 MCP 全量 284 项（281 通过、3 个 MCP 模块预期跳过）；桌面真实 SidecarClient/单元测试 13/13、TypeScript 通过。最后的帮助/恢复命令修正后，provider 恢复专项 16/16 与两个环境的安装 smoke 再次通过。
+- wheel 从当前元数据构建，版本为 3.3.0；临时安装目录和无关 cwd 下，CLI/module help、只读 doctor、默认用户 run 目录、包资源与旧通用模块隔离均通过。阻断可选依赖后仍走完真实服务层的爬取、分析和报告落盘；合成 Key 在公开摘要与完整 run 中零命中。两个 MCP 入口经 SDK stdio 握手发现 7 个工具；无 SDK 时返回明确安装提示和退出码 2。
+- Standards：1 项 P2，Pillow 误列可选依赖而持久化层必需；已补入核心依赖，旧 wheel 被新增安装检查拒绝，重建后通过。Spec：1 项 P3，安装帮助仍展示未安装的旧模块；帮助及同类恢复指引均改为新入口。两轴独立复核关闭，无未解决发现。
+- 独立 Spec 安装布局验收覆盖用户 profile、字段覆盖、显式缺失不回退、Windows 桌面 profile 回退和 doctor 零写入；Linux/macOS 为路径逻辑验证，不代表对应系统实机验收。
+- 本机 PyInstaller onedir sidecar 构建及启动通过：ready、session.status、32 项包内词表、用户数据目录和安装目录零写入均核对。工具链为本机 CPython 3.13.0/PyInstaller 6.17.0，不是正式桌面发布工具链或安装器验收；随后修改的 CLI 帮助/恢复文字不涉及该 sidecar 路径。
+- 全量日志 `.runlogs/f-review-{mcp,no-mcp,desktop}.log`，安装日志 `.runlogs/f-install-{mcp,no-mcp}.log`，冻结 smoke `.runlogs/f-frozen-smoke.log`，依赖缺失失败证据 `.runlogs/f-pillow-regression-red.log` 均不纳入提交。
+- 安装 smoke 复用现有解释器依赖，运行验证仍为 CPython 3.13.0；3.10 语法解析不能替代多版本运行。本批未执行外网 live smoke、未消费模型额度、未合并 main、未发布 Python 包或安装器。
+- 下一批 G：wheel/sdist 内容审计、`twine check` 与 Python 3.10–3.13 全新环境产物安装矩阵；H 的公开包名、发布权限和发布流程继续待定。

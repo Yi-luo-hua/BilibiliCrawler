@@ -15,6 +15,19 @@
 
 ## 安装
 
+本分支可从 checkout 安装，不需要在 MCP 宿主中设置 checkout 的 cwd：
+
+```powershell
+python -m pip install ".[mcp,analysis]"
+bilibili-crawler doctor
+bilibili-crawler-mcp
+```
+
+MCP 宿主的 command 可指定环境内 `bilibili-crawler-mcp` 的绝对路径，无须额外 args；
+也可使用该环境的 Python 执行 `-m bilibili_crawler mcp`。普通 CLI 不需要 `mcp` extra。
+下面的旧源码入口仍受支持；wheel/sdist 发布、多版本干净安装矩阵和 PyPI 公共名称尚未完成。
+详细依赖、资源及路径边界见 [Python 包说明](PYTHON_PACKAGE_BOUNDARY.md)。
+
 需要 Python 3.10+。建议用独立虚拟环境，避免与你机器上其他 MCP server 的 `mcp` 版本冲突：
 
 ```bash
@@ -27,7 +40,7 @@ python -m venv .venv-agent
 
 Linux / macOS 下把 `.venv-agent/Scripts/python.exe` 换成 `.venv-agent/bin/python`。
 
-v3.3.0 仍采用源码安装。独立 wheel / sdist、PyPI 发布与 MCP Registry 接入已列入
+已发布的 v3.3.0 仍采用源码安装。本分支新增本地可安装包；独立 wheel / sdist 公开资产、PyPI 发布与 MCP Registry 接入已列入
 [`RELEASE_3.3.0.md`](RELEASE_3.3.0.md) 的后续 Python 包计划，不属于本次发布产物。
 
 验证安装：
@@ -80,10 +93,14 @@ claude mcp add bilibili-crawler -- /path/to/.venv-agent/Scripts/python.exe -m ba
 profile 选择顺序：
 
 1. 显式设置 `BILIBILI_AGENT_CREDENTIALS` 时只使用该文件，不回退其他安装目录。
-2. 未显式指定时自动探测桌面端的 `credentials.json`，依次尝试：
+2. 源码 checkout 未显式指定时保留原发现顺序：
    - `<仓库>/.install-test/user-data/config/credentials.json`（源码调试布局）
    - `%LOCALAPPDATA%\BilibiliCrawler\user-data\config\credentials.json`（installMode=currentUser 的默认安装位置）
    - `%PROGRAMFILES%` 与 `%PROGRAMFILES(X86)%` 下的同名路径
+   - 平台用户配置目录中的 `credentials.json`（见下一项）
+3. 普通 Python 包安装优先读取平台用户配置目录中的 `credentials.json`，然后尝试上述 Windows 桌面安装位置；不探测 checkout。
+   Windows 默认 `%LOCALAPPDATA%\BilibiliCrawler\config`；macOS 默认 `~/Library/Application Support/BilibiliCrawler/config`；
+   Linux 为 `$XDG_CONFIG_HOME/bilibili-crawler`，未设置时为 `~/.config/bilibili-crawler`。
 
 **如果你已经在桌面端配过 key**，按默认位置安装的话会被自动发现，通常什么都不用做，
 不必把明文 key 再抄一份进 MCP 宿主配置。装在非默认位置时用环境变量指过去：
@@ -92,7 +109,7 @@ profile 选择顺序：
 "env": { "BILIBILI_AGENT_CREDENTIALS": "D:\\MyApps\\BilibiliCrawler\\user-data\\config\\credentials.json" }
 ```
 
-安装版的 `user-data` 目录始终在**安装目录旁边**；按默认的 currentUser 方式安装时，安装目录就是 `%LOCALAPPDATA%\BilibiliCrawler`，因此凭据文件位于 `%LOCALAPPDATA%\BilibiliCrawler\user-data\config\credentials.json`。
+桌面安装版的 `user-data` 目录始终在**安装目录旁边**；按默认的 currentUser 方式安装时，安装目录就是 `%LOCALAPPDATA%\BilibiliCrawler`，因此凭据文件位于 `%LOCALAPPDATA%\BilibiliCrawler\user-data\config\credentials.json`。这与 Python 包自己的配置目录不同，读取时仍整份选择同一 profile。
 读取 `credentials.json.api_key` 时，同时读取同目录 `ui.json.llm_base_url` 与 `llm_model`；
 非空 `BILIBILI_LLM_API_KEY` / `BILIBILI_LLM_BASE_URL` / `BILIBILI_LLM_MODEL` 分别覆盖对应字段。
 只有字段仍未提供时，才使用兼容默认值 `https://api.openai.com/v1` 与 `gpt-4.1-mini`。

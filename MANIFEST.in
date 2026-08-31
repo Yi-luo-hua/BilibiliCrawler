@@ -1,0 +1,8 @@
+include pyproject.toml setup.py README.md LICENSE
+include desktop/src-tauri/Cargo.toml
+recursive-include bilibili_crawler *.py *.txt
+prune tests
+prune backend
+prune src
+prune config
+prune utils
