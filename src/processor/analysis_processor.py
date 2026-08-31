@@ -17,18 +17,13 @@ from typing import Any, Callable, Iterable
 
 import requests
 
-from src.service.models import DEFAULT_LLM_BASE_URL, DEFAULT_LLM_MODEL
+from src.service.models import DEFAULT_LLM_BASE_URL, DEFAULT_LLM_MODEL, ErrorCode
+from src.processor.provider_errors import (
+    AnalysisCancelled, AnalysisError, ProviderError, classify_http_error, classify_transport_error,
+)
 
 
 ProgressCallback = Callable[[str, int], None]
-
-
-class AnalysisError(RuntimeError):
-    """Raised when analysis cannot be completed."""
-
-
-class AnalysisCancelled(AnalysisError):
-    """Raised when the user cancels an analysis task."""
 
 
 class LLMAnalysisProcessor:
@@ -297,7 +292,7 @@ class LLMAnalysisProcessor:
         try:
             content = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise AnalysisError("LLM 响应缺少 choices[0].message.content") from exc
+            raise AnalysisError("LLM 响应缺少 choices[0].message.content", code=ErrorCode.LLM_RESPONSE_INVALID) from None
         return cls._parse_json_object(str(content))
 
     @classmethod
@@ -365,14 +360,14 @@ class LLMAnalysisProcessor:
         try:
             content = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise AnalysisError("LLM 总结整合响应缺少 choices[0].message.content") from exc
+            raise AnalysisError("LLM 总结整合响应缺少 choices[0].message.content", code=ErrorCode.LLM_RESPONSE_INVALID) from None
         parsed = cls._parse_json_object(str(content))
         summary = str(parsed.get("summary") or "").strip()
         points = cls._strings(parsed.get("summary_points"))[:7]
         if not summary and points:
             summary = points[0]
         if not summary:
-            raise AnalysisError("LLM 总结整合缺少 summary")
+            raise AnalysisError("LLM 总结整合缺少 summary", code=ErrorCode.LLM_RESPONSE_INVALID)
         return {"summary": summary, "summary_points": points}
 
     @classmethod
@@ -389,28 +384,47 @@ class LLMAnalysisProcessor:
         session = requests.Session()
         session.trust_env = False
         completed = threading.Event()
+        stopped = cancel_event if cancel_event is not None else threading.Event()
         result: dict[str, Any] = {}
 
         def send_request() -> None:
             try:
-                response = session.post(
-                    endpoint,
-                    headers=headers,
-                    json=payload,
-                    timeout=90,
-                )
-                if response.status_code in {400, 404, 422}:
-                    if cancel_event and cancel_event.is_set():
+                request_payload = dict(payload)
+                for attempt in range(3):
+                    cls._raise_if_cancelled(stopped)
+                    response = None
+                    try:
+                        response = session.post(endpoint, headers=headers, json=request_payload,
+                                                timeout=90, allow_redirects=False)
+                        cls._raise_if_cancelled(stopped)
+                        if not 200 <= response.status_code < 300:
+                            raise classify_http_error(response)
+                        try:
+                            data = response.json()
+                        except ValueError:
+                            raise AnalysisError(invalid_json_error, code=ErrorCode.LLM_RESPONSE_INVALID) from None
+                        if not isinstance(data, dict):
+                            raise AnalysisError(invalid_json_error, code=ErrorCode.LLM_RESPONSE_INVALID)
+                        result["data"] = data
+                        return
+                    except requests.RequestException as exc:
+                        failure = classify_transport_error(exc)
+                    except ProviderError as exc:
+                        failure = exc
+                    except UnicodeError:
+                        raise AnalysisError("LLM 请求头编码无效，请检查 API Key。", code=ErrorCode.LLM_REQUEST_INVALID) from None
+                    finally:
+                        if response is not None:
+                            response.close()
+                    cls._raise_if_cancelled(stopped)
+                    if attempt < 2 and failure.drop_response_format and "response_format" in request_payload:
+                        request_payload.pop("response_format")
+                        continue
+                    delay = failure.retry_after if failure.retry_after is not None else float(attempt + 1)
+                    if not failure.retryable or attempt == 2 or delay > 10:
+                        raise AnalysisError(f"{request_error}: {failure}", code=failure.code) from None
+                    if stopped.wait(delay):
                         raise AnalysisCancelled("分析已被取消")
-                    payload.pop("response_format", None)
-                    response = session.post(
-                        endpoint,
-                        headers=headers,
-                        json=payload,
-                        timeout=90,
-                    )
-                response.raise_for_status()
-                result["data"] = response.json()
             except Exception as exc:
                 result["error"] = exc
             finally:
@@ -429,16 +443,12 @@ class LLMAnalysisProcessor:
         error = result.get("error")
         if isinstance(error, AnalysisCancelled):
             raise error
-        if isinstance(error, requests.RequestException):
-            raise AnalysisError(f"{request_error}: {error}") from error
-        if isinstance(error, ValueError):
-            raise AnalysisError(invalid_json_error) from error
         if isinstance(error, BaseException):
             raise error
 
         data = result.get("data")
         if not isinstance(data, dict):
-            raise AnalysisError(invalid_json_error)
+            raise AnalysisError(invalid_json_error, code=ErrorCode.LLM_RESPONSE_INVALID)
         return data
 
     @classmethod
@@ -489,7 +499,7 @@ class LLMAnalysisProcessor:
         # 2. Find the first '{' and track matching '}'
         start = text.find("{")
         if start == -1:
-            raise AnalysisError("LLM 未返回可解析的 JSON 对象")
+            raise AnalysisError("LLM 未返回可解析的 JSON 对象", code=ErrorCode.LLM_RESPONSE_INVALID)
         depth = 0
         in_string = False
         escape = False
@@ -512,7 +522,7 @@ class LLMAnalysisProcessor:
                 depth -= 1
                 if depth == 0:
                     return text[start : i + 1]
-        raise AnalysisError("LLM 返回中无法匹配 JSON 对象的闭合大括号")
+        raise AnalysisError("LLM 返回中无法匹配 JSON 对象的闭合大括号", code=ErrorCode.LLM_RESPONSE_INVALID)
 
     @classmethod
     def _parse_json_object(cls, content: str) -> dict[str, Any]:
@@ -528,12 +538,11 @@ class LLMAnalysisProcessor:
                 try:
                     parsed = json.loads(repaired)
                 except json.JSONDecodeError as exc:
-                    preview = json_text[:500] if len(json_text) > 500 else json_text
                     raise AnalysisError(
-                        f"LLM JSON 解析失败: {exc}\n原始内容预览: {preview}"
-                    ) from exc
+                        "LLM JSON 解析失败，请调整模型或输出配置。", code=ErrorCode.LLM_RESPONSE_INVALID,
+                    ) from None
         if not isinstance(parsed, dict):
-            raise AnalysisError("LLM 返回 JSON 顶层不是对象")
+            raise AnalysisError("LLM 返回 JSON 顶层不是对象", code=ErrorCode.LLM_RESPONSE_INVALID)
         return parsed
 
     @staticmethod
@@ -572,7 +581,9 @@ class LLMAnalysisProcessor:
             )
         except AnalysisCancelled:
             raise
-        except Exception:
+        except Exception as exc:
+            code = exc.code if isinstance(exc, AnalysisError) else ErrorCode.ANALYSIS_FAILED
+            merged.setdefault("warnings", []).append(f"总结整合未完成（{code}），使用已完成批次的总结。")
             merged["summary_points"] = fallback_points
             if fallback_points:
                 merged["summary"] = "；".join(fallback_points[:2])

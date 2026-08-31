@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 
 from src.service.agent_service import AgentService
 from src.service.credentials import install_log_scrubbing, scrub
+from src.service.recovery import analysis_recovery_hint
 from src.service.models import (
     MAX_PAGES_CEILING,
     MAX_PAGES_DEFAULT,
@@ -125,7 +126,7 @@ def _to_result(snapshot: TaskSnapshot) -> ToolResult:
                 else "任务已取消，尚未爬到可保存的数据。"
             )
         else:
-            next_step = "任务失败，请检查 error 说明后重试。"
+            next_step = analysis_recovery_hint(snapshot) or "任务失败，请检查 error 说明后重试。"
     else:
         next_step = (
             f"任务仍在进行。请稍后用 get_task_status(task_id=\"{snapshot.task_id}\") 查询本次尝试，"

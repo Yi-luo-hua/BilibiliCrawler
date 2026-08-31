@@ -268,6 +268,28 @@ SDK 未安装会标明 `installed: false`，不影响普通 CLI 的诊断成功�
 **`[NO_CREDENTIALS] 缺少 LLM API Key`**
 `crawl_comments` 不需要凭据，可以先用它验证链路；分析类工具见上面的「LLM 凭据」。
 
+**爬取成功、分析失败**
+评论和 run_id 会保留；按返回的 `next_step` 修正配置或等待，再调用
+`analyze_run(run_id="...")`，无需重新爬取。CLI 也会给出对应 `analyze-run` 命令。
+
+| error_code | 含义与操作 |
+|---|---|
+| `LLM_AUTH` | 401/403；检查 Key、服务权限及 doctor 配置 |
+| `LLM_MODEL` | provider 明确指出模型参数错误；核对模型名/权限 |
+| `LLM_ENDPOINT` | 路由、方法或重定向不被接受；核对 base_url，普通 404 不断言模型不存在 |
+| `LLM_REQUEST_INVALID` | 其他请求参数错误；检查 provider 支持能力 |
+| `LLM_TLS` | 证书/TLS 失败；修复证书或代理，不关闭证书验证 |
+| `LLM_NETWORK` / `LLM_TIMEOUT` | 网络/超时；已发送的请求可能消费额度，人工确认后再重试 |
+| `LLM_RATE_LIMIT` | 限流或额度不足；等待或检查账户额度 |
+| `LLM_UNAVAILABLE` | 服务暂时不可用；等待恢复 |
+| `LLM_RESPONSE_INVALID` | 响应 JSON/内容格式错误；检查模型输出能力 |
+
+每个聊天请求最多发送三次，包括明确拒绝 `response_format` 时的一次兼容降级。
+只有暂时性限流、部分服务错误和连接超时自动重试；读取超时、连接中断、鉴权、配置、
+TLS、额度不足、解析错误不自动重放。超过 10 秒的 Retry-After 交由用户稍后重试。
+批次结果已经完成而总结整合失败时保留已有结果，并记录 warning。
+详见 [Provider 错误与恢复契约](PROVIDER_RECOVERY.md)。
+
 **`[BUSY] 已有任务正在运行`**
 本进程同时只跑一个任务。用返回里的 `task_id` 调 `stop_task`，或等它结束。
 

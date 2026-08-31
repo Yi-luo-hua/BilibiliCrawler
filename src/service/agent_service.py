@@ -769,7 +769,7 @@ class AgentService:
             self._settle(task, "分析完成", cancelled_stage="分析已取消")
             return
         except AnalysisError as exc:
-            raise ServiceError(ErrorCode.ANALYSIS_FAILED, str(exc)) from exc
+            raise ServiceError(exc.code, str(exc)) from None
 
         # A cancel landing here must not discard an already-complete result:
         # the full LLM cost has been paid, and the crawl half keeps partial
@@ -782,6 +782,8 @@ class AgentService:
         # its own today, but the desktop needs the originals whether or not it
         # keeps doing that. _record_outcome takes the deep copy.
         self._record_outcome(task, analysis=result)
+        for warning in result.get("warnings") or []:
+            task.add_warning(scrub(warning))
 
         task.update(status=RunStatus.EXPORTING, stage="正在导出分析结果", percent=95)
         # The on-disk report gets run context the processor cannot know: the

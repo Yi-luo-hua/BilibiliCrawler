@@ -19,7 +19,7 @@
 |---|---|---|---|---|
 | A | P0 | 完整 LLM profile、`doctor`、配置回归测试 | 当前基线 | 实现、双线 review 与验证完成；未发版 |
 | B | P1 | run 与分析尝试分离、重试与取消的原子语义 | A | 实现、双线 review 与验证完成；未发版 |
-| C | P1 | provider 错误分类、复用原 run 的恢复提示 | A；结合 B 的尝试状态 | 待开始 |
+| C | P1 | provider 错误分类、复用原 run 的恢复提示 | A；结合 B 的尝试状态 | 实现、双线 review 与验证完成；未发版 |
 | D | P1 | 耗时、超时、重试提示 | C | 待开始 |
 | E | P1 | 真实 MCP stdio、Windows 编码与可选 live smoke | A–D | 待开始 |
 | F | P1 | 命名空间、资源路径、CLI/MCP 可安装包边界 | A–C；E 提供验收基线 | 待开始 |
@@ -77,6 +77,9 @@
 
 验收：每种错误均有 provider 夹具；修正配置只重跑分析，评论文件哈希不变，canary 在全 run 中零命中。
 
+具体错误码、三次请求预算、兼容降级、Retry-After 与不重放边界见
+[Provider 错误与恢复契约](PROVIDER_RECOVERY.md)。总结整合失败继续使用已完成批次，另给 warning。
+
 ## D：长请求体验
 
 - 为分析阶段补充已用时、当前批次、重试次数与配置超时；保留已有 0–100 进度语义，不伪造进度增长。
@@ -132,3 +135,16 @@ H：先随 GitHub Release 附带包资产，TestPyPI 验证后再启用正式 Py
 - 两轴无未解决发现；日志在 `.runlogs/b-review-{no-mcp,mcp,desktop}.log`，不纳入提交。故障注入产生的磁盘/锁错误日志为预期回归场景。
 - 本批不支持多进程同时写同一 run；根目录兼容副本不是原子多文件读取入口，使用 artifacts 版本路径。未做真实外部付费模型调用、新安装包验收或 E 批完整 MCP stdio 子进程验收。
 - 下一批 C：provider 错误分类与复用原 run 的恢复提示；其后才处理 D 的耗时/超时体验。
+
+### C 批验证与 review 结论
+
+- 分支 `codex/provider-error-recovery`，基线 B 的 `326bf58`。新增稳定 provider 错误码、按错误类型限制重试、CLI/MCP 原 run 恢复提示；不改 MCP/RPC 字段、不改版本号或 UI。
+- 新增 16 项 provider 回归（含子场景），另新增 1 项 MCP 恢复回归。首轮有效基线回归出现 20 个断言失败、5 个错误，修复后全部通过。
+- 真实 loopback HTTP 验证永久错误只发一次、明确格式拒绝才降级、三次总预算、Retry-After、超时、重定向与取消后不重发。真实 CLI 子进程验证失败退出 1、修正后同一 run 成功退出 0；MCP SDK 验证仅爬取一次、失败与成功复用同一 run、评论哈希不变。
+- 总结整合失败保留已完成批次，安全 warning 同步至结果、任务与 manifest。错误正文、原始异常及 JSON 预览不透传；HTTP 回显 canary 及既有完整 run 脱敏回归通过。
+- 最终无 MCP 全量：266 项（265 通过、MCP 模块 1 项预期跳过），退出码 0；MCP 2.1.0 全量：293/293，退出码 0。provider 专项 16/16、MCP 专项 28/28。
+- 桌面单元/真实 SidecarClient 子进程契约 11/11、TypeScript 和 `git diff --check` 通过。日志位于 `.runlogs/c-review-{no-mcp,mcp,desktop}.log`，不纳入提交。
+- Standards：1 项 P2，真实响应体超时被 requests 包装为 ConnectionError 后误归网络错误；已按具体异常类型链修复，真实 HTTP 超时回归与独立复核通过。
+- Spec：2 项 P2，上述真实超时分类，以及明确其他参数错误被宽泛文本误判为格式拒绝；已让结构化参数优先，并限定明确的字段拒绝措辞，两项独立复核关闭。
+- 两轴无未解决发现。没有调用真实付费 provider、没有关闭 TLS 校验、未构建安装包；MCP 验证仍为 SDK 内存传输，E 批完整 stdio 子进程验收未在此批完成。
+- 下一批 D：长请求耗时、批次/重试提示与超时体验；依赖现有安全重试和取消契约。

@@ -28,6 +28,7 @@ if str(ROOT) not in sys.path:
 if TYPE_CHECKING:
     from src.service.agent_service import AgentService
 from src.service.credentials import install_log_scrubbing, scrub
+from src.service.recovery import analysis_recovery_hint
 from src.service.models import (
     MAX_PAGES_DEFAULT,
     SAMPLE_SIZE_DEFAULT,
@@ -45,6 +46,9 @@ def _snapshot_payload(snapshot: TaskSnapshot) -> dict:
     """
     payload = snapshot.to_dict()
     payload["summary"] = mark_untrusted(payload.get("summary"))
+    recovery = analysis_recovery_hint(snapshot, cli=True)
+    if recovery:
+        payload["next_step"] = recovery
     return payload
 
 
