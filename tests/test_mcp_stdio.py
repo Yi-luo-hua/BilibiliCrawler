@@ -15,6 +15,7 @@ try:
     import anyio
     from mcp import Client, StdioServerParameters
     from mcp.client.stdio import stdio_client
+    from mcp.types import jsonrpc_message_adapter
     import mcp.client.stdio as sdk_stdio
 except ImportError as exc:
     raise unittest.SkipTest("MCP SDK not installed; stdio tests skipped") from exc
@@ -138,8 +139,10 @@ class StdioTests(unittest.IsolatedAsyncioTestCase):
                     self.assertFalse(secret in stdout + text, "credential canary in subprocess output")
                 self.assertTrue(raw.endswith(b"\n"), "unterminated stdout protocol frame")
                 for line in lines:
-                    message = json.loads(line)
-                    self.assertEqual(message["jsonrpc"], "2.0")
+                    try:
+                        jsonrpc_message_adapter.validate_json(line, by_name=False)
+                    except ValueError:
+                        self.fail("invalid JSON-RPC stdout frame")
                 self.assertIn("starting bilibili-crawler MCP server on stdio", text)
 
     async def call(self, client, name, arguments=None, **kwargs):
@@ -166,7 +169,11 @@ class StdioTests(unittest.IsolatedAsyncioTestCase):
     async def test_stdout_audit_rejects_shutdown_tails_including_secret_without_newline(self):
         poison = self.root / "exit-fixture"
         poison.mkdir()
-        for tail, reason in ((b"not-a-frame", "unterminated stdout"), (KEY.encode(), "credential canary")):
+        for tail, reason in (
+            (b"not-a-frame", "unterminated stdout"),
+            (KEY.encode(), "credential canary"),
+            (b'{"jsonrpc":"2.0","log":"noise"}\n', "invalid JSON-RPC"),
+        ):
             with self.subTest(reason=reason):
                 (poison / "sitecustomize.py").write_text(
                     "import atexit, os, runpy\n"
@@ -176,7 +183,7 @@ class StdioTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaisesRegex(AssertionError, reason):
                     async with self.child({"PYTHONPATH": os.pathsep.join([str(poison), str(ROOT)])}) as client:
                         self.assertEqual(len((await client.list_tools()).tools), 7)
-                self.assertEqual(self.transcripts[-1][0][-1], tail.decode())
+                self.assertEqual(self.transcripts[-1][0][-1], tail.decode().rstrip("\n"))
 
     async def test_profile_unicode_restart_and_environment_override_over_real_stdio(self):
         progress = []
@@ -229,7 +236,9 @@ class StdioTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(failed["error_code"], "LLM_AUTH")
                 self.assertIn(f'analyze_run(run_id="{first["run_id"]}")', failed["next_step"])
                 self.assertNotIn("private-error-body", json.dumps(failed))
-            async with self.child({"BILIBILI_LLM_MODEL": "slow-model"}) as client:
+            received = self.root / "late-http-completion.txt"
+            async with self.child({"BILIBILI_LLM_MODEL": "slow-model",
+                                   "BILIBILI_TEST_HTTP_COMPLETION_MARKER": str(received)}) as client:
                 running = await self.call(client, "analyze_run", {"run_id": first["run_id"], "wait_seconds": 0})
                 self.assertFalse(running["done"])
                 self.assertTrue(await asyncio.to_thread(entered.wait, 3))
@@ -240,8 +249,15 @@ class StdioTests(unittest.IsolatedAsyncioTestCase):
                     await self.call(client, "stop_task", {"task_id": running["task_id"]})
                     cancelled = await self.wait_done(client, running["task_id"])
                 self.assertEqual(cancelled["status"], "cancelled")
+                self.assertFalse(received.exists(), "response must remain blocked until after cancellation")
                 for release in releases:
                     release.set()
+                with anyio.fail_after(5):
+                    while not received.exists():
+                        await asyncio.sleep(0.02)
+                self.assertEqual(received.read_text(encoding="utf-8"), "response-received-and-worker-finished")
+                after_response = await self.call(client, "get_task_status", {"task_id": running["task_id"]})
+                self.assertEqual(after_response, cancelled)
                 aggregate = await self.call(client, "get_task_status", {"run_id": first["run_id"]})
                 self.assertEqual(aggregate["status"], "completed")
                 self.assertEqual(aggregate["artifacts"], first["artifacts"])

@@ -26,6 +26,35 @@ def configure():
     from backend.mcp_server import set_service
     from src.service.agent_service import AgentService
 
+    marker_path = os.environ.get("BILIBILI_TEST_HTTP_COMPLETION_MARKER")
+    if marker_path:
+        # Observe, do not replace, the real HTTP exchange. The marker is only
+        # published after the body has been read AND its request thread exits.
+        # This lets the parent query cancellation while this process is alive.
+        import threading
+        from pathlib import Path
+        import requests
+
+        real_send = requests.Session.send
+
+        def observed_send(session, request, **kwargs):
+            response = real_send(session, request, **kwargs)
+            response.content  # also ensure receipt if a future caller streams
+            request_thread = threading.current_thread()
+
+            def mark_completion():
+                request_thread.join(timeout=5)
+                if not request_thread.is_alive():
+                    marker = Path(marker_path)
+                    staging = marker.with_suffix(".tmp")
+                    staging.write_text("response-received-and-worker-finished", encoding="utf-8")
+                    staging.replace(marker)
+
+            threading.Thread(target=mark_completion, daemon=True).start()
+            return response
+
+        requests.Session.send = observed_send
+
     class Crawler:
         def __init__(self, progress):
             self.progress = progress

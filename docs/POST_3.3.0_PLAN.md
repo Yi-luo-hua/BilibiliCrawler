@@ -177,3 +177,13 @@ H：先随 GitHub Release 附带包资产，TestPyPI 验证后再启用正式 Py
 - Standards：2 项 P2（DNS/UDP 隔离缺口、stdout 关闭残尾漏检）均修复并独立复核关闭。Spec：1 项 P2（stdout 无换行退出残尾漏检）已用真实 atexit 输出复现、修复并独立复核关闭。两轴无未解决发现。
 - 完整日志 `.runlogs/e-review-{no-mcp,mcp,desktop}.log` 不纳入提交。没有执行 live B 站/付费模型调用、没有构建安装包或 wheel、未做新的窗口视觉验收。
 - 下一批 F：冻结 Python 包命名空间、资源与用户数据路径的兼容边界，再实现可安装 CLI/MCP 入口；G 单独执行干净安装与产物内容审计，H 才进入公开发布。
+
+### E 批追加 review 修复（基线 `2fbb2fa`）
+
+- 上述为 E 原交付记录；用户要求追加 review 后发现 3 项 P2，本轮修复仍在 `codex/mcp-stdio-validation`，未推进 F。
+- Standards 2 项：stdout 从 JSON/版本字段检查升级为完整 SDK JSON-RPC schema 校验；live 命令在整个 asyncio 传输及清理期间隔离父 SDK 日志，结束后恢复原日志设置。带版本字段的非协议 JSON 与真实 SDK canary 解析错误负例先失败、修复后通过。
+- Spec 1 项：每次成功响应立即记下白名单元数据。停止、轮询、关闭传输三种异常均保留已知 run_id/task_id、最近状态、计数和产物名称；不保留原始错误、摘要或产物路径。正常完成仍返回成功，不额外停止任务。
+- 另关闭迟到响应的验收局限：测试只观察真实 HTTP，不替换返回值；等待子进程读完响应体且请求线程结束后，在仍存活的 MCP 进程核对本次尝试完全保持取消终态、旧报告不变。独立复核额外延迟响应 1 秒也通过。
+- 新增 2 项 smoke 异常回归（含正常完成、停止/查询/关闭异常子场景），扩展真实 stdio 负例。修复前 smoke 回归出现 1 个失败、3 个错误，协议残尾回归另有 1 个失败；修复后两轴独立复核均无未解决问题。
+- 最终 MCP 2.1.0 全量 308/308；无 MCP 全量 277 项（274 通过、3 个 MCP 模块预期跳过）；桌面 13/13、TypeScript、`git diff --check` 通过。四个改动 Python 文件通过 3.10 语法解析，但运行验证仍是 CPython 3.13.0，不代表多版本安装矩阵完成。
+- 完整日志 `.runlogs/e-review-fix-{mcp,no-mcp,desktop}.log`，修复前失败证据 `.runlogs/e-fix-red-{smoke,schema}.log` 均不纳入提交。未执行真实外网 live smoke、未消费模型额度、未发布安装包或 Python 包。
