@@ -36,6 +36,7 @@ class ErrorCode:
     NOT_FOUND = "NOT_FOUND"
     INVALID_INPUT = "INVALID_INPUT"
     NO_CREDENTIALS = "NO_CREDENTIALS"
+    CONFIG_INVALID = "CONFIG_INVALID"
     CRAWL_FAILED = "CRAWL_FAILED"
     ANALYSIS_FAILED = "ANALYSIS_FAILED"
     CANCELLED = "CANCELLED"
@@ -58,6 +59,9 @@ WAIT_SECONDS_DEFAULT = 90
 WAIT_SECONDS_CEILING = 600
 
 # --- Analysis defaults ----------------------------------------------------
+DEFAULT_LLM_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_LLM_MODEL = "gpt-4.1-mini"
+
 # NOTE: LLMAnalysisProcessor._normalize_chart_keys ends in `return selected or
 # allowed_keys`, so passing an empty list silently re-enables EVERY chart
 # including word_cloud. This list must stay explicit and non-empty. Word cloud

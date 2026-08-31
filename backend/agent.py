@@ -10,6 +10,7 @@ the result. The `mcp` subcommand launches the stdio MCP server.
     python -m backend.agent analyze-run <run_id>
     python -m backend.agent status --run-id <run_id>
     python -m backend.agent list-runs
+    python -m backend.agent doctor
 """
 from __future__ import annotations
 
@@ -18,12 +19,14 @@ import json
 import logging
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.service.agent_service import AgentService
+if TYPE_CHECKING:
+    from src.service.agent_service import AgentService
 from src.service.credentials import install_log_scrubbing, scrub
 from src.service.models import (
     MAX_PAGES_DEFAULT,
@@ -54,8 +57,8 @@ def _configure_logging() -> None:
     install_log_scrubbing()
 
 
-def _print(payload: dict) -> None:
-    print(json.dumps(payload, ensure_ascii=False, indent=2))
+def _print(payload: dict, *, ascii_safe: bool = False) -> None:
+    print(json.dumps(payload, ensure_ascii=ascii_safe, indent=2))
 
 
 def _run_blocking(service: AgentService, snapshot: TaskSnapshot, timeout: float) -> TaskSnapshot:
@@ -76,6 +79,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("mcp", help="以 stdio 方式启动 MCP 服务器")
     subparsers.add_parser("list-runs", help="列出本机已有的 run_id")
+    doctor = subparsers.add_parser("doctor", help="只读检查 LLM 配置、MCP SDK 与运行目录；不显示 Key")
+    doctor.add_argument("--check-provider", action="store_true", help="显式请求 GET /models 连通性检查，不发送分析")
+    doctor.add_argument("--timeout", type=float, default=10.0, help="连通性检查连接/读取超时，0–60 秒（默认 10）")
 
     def add_crawl_flags(sub: argparse.ArgumentParser) -> None:
         sub.add_argument("url", help="视频链接 / BV 号 / 动态链接 / 专栏链接")
@@ -106,12 +112,26 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     _configure_logging()
 
+    if args.command == "doctor":
+        from src.service.diagnostics import diagnose
+
+        if not 0 < args.timeout <= 60:
+            _print({"ok": False, "error_code": "INVALID_INPUT", "error": "--timeout 必须大于 0 且不超过 60 秒。"}, ascii_safe=True)
+            return 1
+        payload = diagnose(check_provider=args.check_provider, timeout=args.timeout)
+        # ASCII escapes keep this diagnostic JSON readable by UTF-8 hosts even
+        # when launched from a legacy GBK Windows console.
+        _print(payload, ascii_safe=True)
+        return 0 if payload["ok"] else 1
+
     if args.command == "mcp":
         # Imported lazily so the other subcommands work without the MCP SDK.
         from backend.mcp_server import main as run_mcp
 
         run_mcp()
         return 0
+
+    from src.service.agent_service import AgentService
 
     service = AgentService()
 

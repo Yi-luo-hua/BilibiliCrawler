@@ -74,11 +74,13 @@ claude mcp add bilibili-crawler -- /path/to/.venv-agent/Scripts/python.exe -m ba
 
 只有分析类工具需要凭据；`crawl_comments` 不需要。
 
-解析顺序（先命中者生效）：
+按字段解析：非空环境变量 > 同一个桌面 profile > 默认值。
+只设置 Key 不会丢弃同一 profile 的服务地址与模型；三个环境字段都完整时不读取桌面文件。
 
-1. 环境变量 `BILIBILI_LLM_API_KEY` / `BILIBILI_LLM_BASE_URL` / `BILIBILI_LLM_MODEL`
-2. `BILIBILI_AGENT_CREDENTIALS` 指向的 `credentials.json`
-3. 自动探测桌面端的 `credentials.json`，依次尝试：
+profile 选择顺序：
+
+1. 显式设置 `BILIBILI_AGENT_CREDENTIALS` 时只使用该文件，不回退其他安装目录。
+2. 未显式指定时自动探测桌面端的 `credentials.json`，依次尝试：
    - `<仓库>/.install-test/user-data/config/credentials.json`（源码调试布局）
    - `%LOCALAPPDATA%\BilibiliCrawler\user-data\config\credentials.json`（installMode=currentUser 的默认安装位置）
    - `%PROGRAMFILES%` 与 `%PROGRAMFILES(X86)%` 下的同名路径
@@ -91,7 +93,33 @@ claude mcp add bilibili-crawler -- /path/to/.venv-agent/Scripts/python.exe -m ba
 ```
 
 安装版的 `user-data` 目录始终在**安装目录旁边**；按默认的 currentUser 方式安装时，安装目录就是 `%LOCALAPPDATA%\BilibiliCrawler`，因此凭据文件位于 `%LOCALAPPDATA%\BilibiliCrawler\user-data\config\credentials.json`。
-环境变量优先级高于凭据文件，方便临时切换 key。
+读取 `credentials.json.api_key` 时，同时读取同目录 `ui.json.llm_base_url` 与 `llm_model`；
+非空 `BILIBILI_LLM_API_KEY` / `BILIBILI_LLM_BASE_URL` / `BILIBILI_LLM_MODEL` 分别覆盖对应字段。
+只有字段仍未提供时，才使用兼容默认值 `https://api.openai.com/v1` 与 `gpt-4.1-mini`。
+Key、地址与模型不会从不同安装目录拼接。credentials 文件也可包含 `base_url` / `model`，
+但若与相邻 ui 文件冲突，需要统一配置或显式设置对应环境变量。
+
+缺失 ui 文件可使用默认值；选中的配置损坏、重复字段、类型错误、显式路径不存在则返回
+`CONFIG_INVALID`，不会静默切换 provider。地址必须为 HTTP(S)，不接受 URL 中的用户名、密码或查询参数。
+
+stdio 子进程是否继承调用者环境取决于宿主，不能假定桌面设置或终端变量会自动传入。
+非 OpenAI 用户可让宿主显式传入 `BILIBILI_AGENT_CREDENTIALS` 指向完整桌面 profile，
+或者显式传入三个 `BILIBILI_LLM_*` 字段。例如 SDK 客户端启动参数：
+
+```python
+import os
+from mcp import StdioServerParameters
+
+params = StdioServerParameters(
+    command=r"E:\path\to\BilibiliCrawler\.venv-agent\Scripts\python.exe",
+    args=["-m", "backend.agent", "mcp"],
+    cwd=r"E:\path\to\BilibiliCrawler",
+    env={**os.environ, "BILIBILI_AGENT_CREDENTIALS": r"D:\Apps\BilibiliCrawler\user-data\config\credentials.json"},
+)
+```
+
+上例 Key 在 credentials 文件中、服务地址/模型在相邻 ui 文件中，无需重复填写。
+若宿主已有旧 `BILIBILI_LLM_BASE_URL` / `BILIBILI_LLM_MODEL`，它们仍然优先；用下方 `doctor` 核对最终来源。
 
 API Key 不会写进 `manifest.json`、不会出现在日志（含异常堆栈）、也不会出现在工具返回值里；
 上游报错里回显的 key 会被替换成 `***`。
@@ -187,6 +215,27 @@ MCP 工具可被 agent 循环调用，压力远高于人点 GUI，因此 headles
 ---
 
 ## 故障排查
+
+**先检查最终配置（不显示 API Key）**
+
+```bash
+python -m backend.agent doctor
+python -m backend.agent doctor --check-provider --timeout 10
+```
+
+默认只读、不联网、不创建或迁移运行目录，输出配置来源、有效服务地址/模型、MCP SDK 版本及
+运行目录的权限估计。退出码 0 表示 profile 和目录预检通过，1 表示配置/目录或显式连通性检查失败。
+SDK 未安装会标明 `installed: false`，不影响普通 CLI 的诊断成功；MCP 服务器仍需安装 requirements-agent.txt。
+
+`--check-provider` 才发送带鉴权的 GET `/models`，不跟随重定向，不打印响应正文，不发送评论、
+不调用付费聊天接口。成功不代表所选模型已通过分析验证；部分 provider 不支持模型列表接口。
+`--timeout` 为连接/读取超时（大于 0 且不超过 60 秒），不是整个分析任务的超时设置。
+运行目录只做权限估计，没有实际写文件，Windows ACL 的真实可写性以运行时检查为准。
+诊断 JSON 使用 ASCII 转义，在 GBK 控制台和 UTF-8 宿主间均可解析；解析后中文字段正常。
+
+**`[CONFIG_INVALID] LLM 配置错误`**
+检查所选 credentials 文件及相邻 ui 文件的 UTF-8 JSON、字段类型与冲突。
+若刚切换 provider，用三个显式环境字段完整指定配置，或修正同一个桌面 profile；不要只换 Key 后沿用旧地址。
 
 **宿主显示服务器启动失败**
 先手动跑一次，直接看 stderr：

@@ -17,6 +17,8 @@ from typing import Any, Callable, Iterable
 
 import requests
 
+from src.service.models import DEFAULT_LLM_BASE_URL, DEFAULT_LLM_MODEL
+
 
 ProgressCallback = Callable[[str, int], None]
 
@@ -30,8 +32,8 @@ class AnalysisCancelled(AnalysisError):
 
 
 class LLMAnalysisProcessor:
-    DEFAULT_BASE_URL = "https://api.openai.com/v1"
-    DEFAULT_MODEL = "gpt-4.1-mini"
+    DEFAULT_BASE_URL = DEFAULT_LLM_BASE_URL
+    DEFAULT_MODEL = DEFAULT_LLM_MODEL
     WORD_CLOUD_LIMIT = 80
     WORD_CLOUD_WIDTH = 800
     WORD_CLOUD_HEIGHT = 440

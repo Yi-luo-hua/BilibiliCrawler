@@ -837,7 +837,9 @@ class AgentService:
             "分析完成",
             cancelled_stage="分析已取消",
             percent=100,
-            summary=str(result.get("summary") or ""),
+            # The public snapshot reaches CLI/MCP directly. Disk scrubbing
+            # alone does not protect a successful provider echo in its summary.
+            summary=scrub(result.get("summary")),
             counts={
                 **task.counts,
                 "analyzed": int(meta.get("analyzed_records", 0) or 0),
