@@ -1,6 +1,7 @@
-"""F-stage local wheel smoke. Uses existing interpreter dependencies, no index.
+"""Local wheel smoke, or installed-package smoke inside a clean G-stage venv.
 
-This is not the clean Python-version/dependency matrix required by stage G.
+Wheel mode reuses interpreter dependencies (F). The G matrix runner creates
+fresh venvs before calling --installed; one invocation is not a full matrix.
 """
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+import sysconfig
 import tempfile
 from pathlib import Path
 
@@ -40,31 +42,48 @@ async def handshake(command, args, cwd, env):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("wheel", type=Path)
+    parser.add_argument("wheel", type=Path, nargs="?")
+    parser.add_argument("--installed", action="store_true")
+    parser.add_argument("--expect-mcp", choices=("yes", "no"))
+    parser.add_argument("--work-dir", type=Path)
     args = parser.parse_args()
-    wheel = args.wheel.resolve(strict=True)
-    with tempfile.TemporaryDirectory(prefix="bilibili-install-") as directory:
+    if bool(args.wheel) == args.installed:
+        parser.error("provide a wheel or --installed, exclusively")
+    wheel = args.wheel.resolve(strict=True) if args.wheel else None
+    if args.installed:
+        import site as python_site
+        from importlib import metadata
+        assert sys.prefix != sys.base_prefix and not python_site.ENABLE_USER_SITE
+        assert all(Path(dist.locate_file("")).resolve().is_relative_to(Path(sys.prefix).resolve())
+                   for dist in metadata.distributions()), "dependency outside venv"
+    with tempfile.TemporaryDirectory(prefix="bilibili-install-", dir=args.work_dir) as directory:
         root = Path(directory)
         site, cwd, home = root / "site", root / "unrelated-cwd", root / "home"
         cwd.mkdir()
         home.mkdir()
         env = {name: value for name, value in os.environ.items() if name in
                {"PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "COMSPEC"}}
-        env.update(PYTHONPATH=str(site), PYTHONNOUSERSITE="1", PYTHONDONTWRITEBYTECODE="1",
+        env.update(PYTHONNOUSERSITE="1", PYTHONDONTWRITEBYTECODE="1",
                    PYTHONUTF8="1", PYTHONIOENCODING="utf-8", HOME=str(home), USERPROFILE=str(home),
                    LOCALAPPDATA=str(root / "local"), XDG_DATA_HOME=str(root / "data"),
                    XDG_CONFIG_HOME=str(root / "config"), XDG_CACHE_HOME=str(root / "cache"),
                    BILIBILI_LLM_API_KEY=CANARY, BILIBILI_LLM_BASE_URL="http://127.0.0.1:9/v1",
                    BILIBILI_LLM_MODEL="test-model")
-        run([sys.executable, "-m", "pip", "install", "--no-deps", "--no-index", "--target", str(site), str(wheel)], cwd, env)
+        if args.installed:
+            site = Path(sysconfig.get_path("purelib"))
+            run([sys.executable, "-m", "pip", "check"], cwd, env)
+        else:
+            env["PYTHONPATH"] = str(site)
+            run([sys.executable, "-m", "pip", "install", "--no-deps", "--no-index", "--target", str(site), str(wheel)], cwd, env)
         # Accidental imports of legacy generic namespaces must fail, even in a
         # working directory containing those names. Only the canonical package
         # is installed, and it must not reach back into this repository.
         for name in ("src", "backend", "config", "utils"):
             (cwd / f"{name}.py").write_text("raise AssertionError('legacy namespace imported')\n", encoding="utf-8")
         suffix = ".exe" if os.name == "nt" else ""
-        cli = next(site.rglob("bilibili-crawler" + suffix))
-        mcp_cli = next(site.rglob("bilibili-crawler-mcp" + suffix))
+        scripts = Path(sysconfig.get_path("scripts")) if args.installed else site
+        cli = next(scripts.rglob("bilibili-crawler" + suffix))
+        mcp_cli = next(scripts.rglob("bilibili-crawler-mcp" + suffix))
         help_text = run([str(cli), "--help"], cwd, env)
         assert "python -m bilibili_crawler" in help_text and "backend.agent" not in help_text
         run([str(mcp_cli), "--help"], cwd, env)
@@ -132,13 +151,20 @@ print(json.dumps({'version': importlib.metadata.version('bilibili-crawler')}))
         output = run([sys.executable, "-c", code, str(site)], cwd, env)
         version = json.loads(output.splitlines()[-1])["version"]
         mcp_available = importlib.util.find_spec("mcp") is not None
+        if args.expect_mcp:
+            assert mcp_available == (args.expect_mcp == "yes"), "unexpected MCP installation state"
+        if args.installed:
+            output = run([sys.executable, str(Path(__file__).with_name("package_crawl_probe.py"))], cwd, env)
+            assert json.loads(output)["real_crawl_and_analysis"]
         if mcp_available:
             asyncio.run(handshake(str(mcp_cli), [], cwd, env))
             asyncio.run(handshake(sys.executable, ["-m", "bilibili_crawler", "mcp"], cwd, env))
         else:
             run([str(mcp_cli)], cwd, env, expected=2)
         print(json.dumps({"ok": True, "version": version, "mcp_handshake": mcp_available,
-                          "core_pipeline": True, "isolated_paths": True, "clean_dependency_environment": False}))
+                          "core_pipeline": True, "isolated_paths": True,
+                          "real_crawl_and_analysis": args.installed,
+                          "clean_dependency_environment": args.installed}))
 
 
 if __name__ == "__main__":

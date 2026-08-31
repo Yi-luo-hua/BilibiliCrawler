@@ -23,7 +23,7 @@
 | D | P1 | 耗时、超时、重试提示 | C | 实现、双线 review 与验证完成；未发版 |
 | E | P1 | 真实 MCP stdio、Windows 编码与可选 live smoke | A–D | 实现、双线 review 与离线验证完成；live 未执行 |
 | F | P1 | 命名空间、资源路径、CLI/MCP 可安装包边界 | A–C；E 提供验收基线 | 实现、双线 review 与本机安装验证完成；未发包 |
-| G | P2 | wheel/sdist 干净安装与内容审计 | F | 待开始 |
+| G | P2 | wheel/sdist 干净安装与内容审计 | F | 审计、串行矩阵与双线 review 完成；并发 I/O 风险未定位 |
 | H | P3 | GitHub 包资产、TestPyPI/PyPI、发布门禁 | G | 待开始 |
 | I | P4 | 评估是否拆分版本 | 仅当用户群/发布节奏独立时 | 条件性，不排期 |
 
@@ -112,6 +112,9 @@ F：增加 `pyproject.toml`，统一 `bilibili_crawler` 命名空间；旧入口
 源码 checkout 保留旧数据路径与 profile 发现，避免既有 run 失联。公开名称与多版本矩阵不由本批提前宣称完成。
 
 G：构建 wheel/sdist 并执行 `twine check`；Python 3.10–3.13 全新环境只从产物安装，在无 checkout 的任意工作目录验证 help、doctor、列举、最小爬取与 MCP 握手。包内不得携带 Key、cookies、run、缓存、测试 fixture 或机器绝对路径。
+
+完整门禁、复现命令与证据限制见 [Python 产物与干净安装验收](PYTHON_PACKAGE_VALIDATION.md)。
+当前矩阵针对 Windows，每个版本分别从 wheel/sdist 创建新 venv，先验证基础安装，再增加 MCP extra。
 
 H：先随 GitHub Release 附带包资产，TestPyPI 验证后再启用正式 PyPI，优先 Trusted Publishing。CI 校验版本、产物内容、安装 smoke 和哈希。公共包入口稳定后另行评估 `server.json` 与 MCP Registry。公开发布前确定包名、账户/权限与最终发布产物。
 
@@ -202,3 +205,14 @@ H：先随 GitHub Release 附带包资产，TestPyPI 验证后再启用正式 Py
 - 全量日志 `.runlogs/f-review-{mcp,no-mcp,desktop}.log`，安装日志 `.runlogs/f-install-{mcp,no-mcp}.log`，冻结 smoke `.runlogs/f-frozen-smoke.log`，依赖缺失失败证据 `.runlogs/f-pillow-regression-red.log` 均不纳入提交。
 - 安装 smoke 复用现有解释器依赖，运行验证仍为 CPython 3.13.0；3.10 语法解析不能替代多版本运行。本批未执行外网 live smoke、未消费模型额度、未合并 main、未发布 Python 包或安装器。
 - 下一批 G：wheel/sdist 内容审计、`twine check` 与 Python 3.10–3.13 全新环境产物安装矩阵；H 的公开包名、发布权限和发布流程继续待定。
+
+### G 批验证与 review 结论
+
+- 分支 `codex/python-package-validation`，基线 F 的 `3614a34`。仅修改验收脚本、测试与文档，没有更改生产实现、依赖声明、Cargo 版本或桌面协议。
+- build 1.6.0 在隔离构建环境先生成 sdist、再由 sdist 构建 wheel；twine 7.0.0 对两者执行 `check --strict` 通过。静态审计确认 30 个运行文件逐字节一致，wheel 36 文件、sdist 44 文件，完整白名单、声明依赖/extra、入口、license、RECORD 和常见敏感内容扫描均通过。
+- 新增 6 项归档回归（含多组子场景）：有效归档、混入敏感/未列明文件、Key/Cookie/机器路径、依赖/版本、RECORD/运行内容漂移、穿越/重复/链接/特殊类型/超限。Standards 的 2 项 P2（依赖子集假绿、普通 Cookie 漏检）及 Spec 的 3 项 P2（前两项与 ZIP 特殊类型漏检）均已修复并独立复核关闭。
+- 全量 MCP 2.1.0 环境 321/321；无 MCP 环境 290 项（287 通过、3 个模块预期跳过）；桌面单元/真实 SidecarClient 13/13、TypeScript 通过。F 原 wheel smoke 的有/无 MCP 两种模式继续通过，不被误标为干净安装矩阵。
+- 两轮 `--jobs 4` 矩阵分别完成 15/16、14/16 个阶段，但均在 Python 3.10/sdist 的首次分析目录发布遇到 WinError 5（`stage.rename` 拒绝访问），报告保持失败。原环境随后单独复跑 3 次均通过；尚未定位根因，不能认定为非产品问题或并发可靠性通过。已改为默认串行；并发仍可显式开启。
+- 并发失败记录 `.runlogs/g-matrix/matrix-32yi47c3/`、`matrix-u52z2s10/`，单独复跑 `.runlogs/g-310-repeat-{1,2,3}.log`，全量 `.runlogs/g-review-{mcp,no-mcp,desktop}.log` 保留在本机，不纳入提交。
+- 串行完整矩阵通过：CPython 3.10.20、3.11.16、3.12.14、3.13.15，各自 wheel/sdist 基础安装及 MCP extra 均通过，共 8 个新 venv / 16 阶段。报告 `.runlogs/g-matrix/matrix-4pde6fo3/report.json` 为 `ok: true`、错误列表为空；末次哈希核对与开始时一致。基础环境均无 MCP/jieba/wordcloud/qrcode，所有阶段通过 `pip check`、真实 CLI/HTTP 爬取分析与落盘；8 个 MCP 阶段均验证两个 stdio 入口。
+- 最终表格与产物哈希见 [G 验收记录](PYTHON_PACKAGE_VALIDATION.md)。仅此 Windows 串行矩阵通过，不将单独复跑、语法解析或其他 OS 路径测试扩大为额外兼容承诺。H 尚未开始，公开发布前仍须评估未定位的并发 I/O 风险。
