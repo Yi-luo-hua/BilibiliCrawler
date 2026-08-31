@@ -339,3 +339,30 @@ TLS、额度不足、解析错误不自动重放。超过 10 秒的 Retry-After 
 ```
 
 未安装 MCP SDK 时 `tests/test_mcp_server.py` 会整体跳过，其余测试照常运行。
+
+`tests/test_mcp_stdio.py` 使用 SDK 启动真实 `python -m backend.agent mcp` 子进程，
+在 loopback 夹具下验证 7 工具、中文编码、桌面双文件配置、环境覆盖、取消和重启复用。
+该模块同样在未安装 MCP 时跳过。测试网络限制和证据边界见
+[stdio 验收契约](MCP_STDIO_VALIDATION.md)。
+
+可选外网 smoke 默认只说明跳过，不读取凭据、不联网、不创建 run：
+
+```powershell
+python scripts/smoke_mcp_stdio.py
+```
+
+确实要检查 B 站和已配置的模型时，先指定测试范围，再显式允许 live 调用（可能产生费用）：
+
+```powershell
+$env:BILIBILI_MCP_SMOKE_URL = "BV1GJ411x7h7"
+$env:BILIBILI_MCP_SMOKE_MAX_PAGES = "1"
+$env:BILIBILI_MCP_SMOKE_SAMPLE_SIZE = "20"
+python scripts/smoke_mcp_stdio.py --live
+```
+
+目标支持 BV 号或对应视频 URL。脚本限制 1–5 页、20–300 条抽样，不采集楼中楼；
+`BILIBILI_MCP_SMOKE_WAIT_SECONDS` 可设 1–120 秒，默认 90 秒。
+这只是等待窗口，不是 provider 的计费限额或总体执行 deadline；超窗会请求停止并以失败记录，
+已经发出的模型请求仍可能计费。结果 JSON 记录时间、测试范围、run_id、状态及有限元数据，
+不打印 Key 或完整评论。子进程配置仍遵循本文的 profile/环境规则。
+外网 smoke 不加入默认测试门禁，离线通过不代表外部 provider 已验收。

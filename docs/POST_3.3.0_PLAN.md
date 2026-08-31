@@ -21,7 +21,7 @@
 | B | P1 | run 与分析尝试分离、重试与取消的原子语义 | A | 实现、双线 review 与验证完成；未发版 |
 | C | P1 | provider 错误分类、复用原 run 的恢复提示 | A；结合 B 的尝试状态 | 实现、双线 review 与验证完成；未发版 |
 | D | P1 | 耗时、超时、重试提示 | C | 实现、双线 review 与验证完成；未发版 |
-| E | P1 | 真实 MCP stdio、Windows 编码与可选 live smoke | A–D | 待开始 |
+| E | P1 | 真实 MCP stdio、Windows 编码与可选 live smoke | A–D | 实现、双线 review 与离线验证完成；live 未执行 |
 | F | P1 | 命名空间、资源路径、CLI/MCP 可安装包边界 | A–C；E 提供验收基线 | 待开始 |
 | G | P2 | wheel/sdist 干净安装与内容审计 | F | 待开始 |
 | H | P3 | GitHub 包资产、TestPyPI/PyPI、发布门禁 | G | 待开始 |
@@ -101,6 +101,9 @@
 
 验收：普通 PR 离线夹具稳定通过；真实网络报告单独注明时间、目标、用量边界和未验证项。
 
+实现与隔离规则见 [stdio 验收契约](MCP_STDIO_VALIDATION.md)。可选 live 脚本默认跳过，
+必须显式 `--live` 并从环境指定 BV/视频 URL、页数和抽样量；运行说明见 [MCP 文档](MCP.md)。
+
 ## F–H：Python 包与发布
 
 F：增加 `pyproject.toml`，统一 `bilibili_crawler` 命名空间；旧入口保留薄兼容层。核心依赖与 MCP extra 分层；静态资源使用包资源 API，run/凭据/缓存脱离 checkout 路径。提供 `bilibili-crawler`、`bilibili-crawler-mcp` 稳定命令。版本仍由 Cargo.toml 派生。
@@ -163,3 +166,14 @@ H：先随 GitHub Release 附带包资产，TestPyPI 验证后再启用正式 Py
 - 超时仍为连接 90 秒/读取 90 秒，不代表总体 deadline；没有引入任务总超时或新的配置入口。私有请求方法增加可选 request_progress，公开 analyze 和客户端协议保持兼容。
 - 未调用外部付费模型，未构建安装包、未做新的窗口视觉验收。桌面证据为真实协议通路验收，不替代安装包或 E 批 MCP stdio 验收。
 - 下一批 E：真实 MCP stdio 子进程、Windows 编码、重启复用与可选 live smoke；之后进入 F–H 包边界与发布门禁。
+
+### E 批验证与 review 结论
+
+- 分支 `codex/mcp-stdio-validation`，基线为 D 的 `e672e49`。只新增验收夹具、可选 smoke 脚本和文档，不修改生产服务、版本号、依赖或 UI。
+- 新增 4 项真实 SDK stdio 子进程测试：legacy/auto 握手及 7 工具发现；中文路径、GBK 环境、profile 与环境覆盖、实际进程重启复用；真实 HTTP 鉴权失败、取消与原 run 恢复；退出尾字节污染负例（垃圾和无换行 Key）。每个子进程关闭后退出码为 0。
+- 新增 2 项网络隔离回归与 2 项 smoke CLI 回归。fixture 在解析/连接/UDP 等入口限制 literal loopback，并禁止反向解析；合成审计事件不触发实际外网。默认 smoke 即使有 live 环境参数也不启动服务器、不创建 run、不加载 MCP；无效 live 参数在启动前拒绝。
+- 真正 HTTP 请求核对地址、Authorization 与模型字段；真实 stdout 原始字节、stderr、中文报告与完整 run 均检查 canary。修改 profile/环境后只重新分析原 run，评论哈希不变；取消新尝试保留旧有效报告。
+- 最终无 MCP 全量 276 项（274 通过、两个 MCP 模块按预期跳过）；MCP 2.1.0 全量 306/306，退出码均为 0。桌面 13/13、TypeScript 与 `git diff --check` 通过。本机均为 CPython 3.13.0；没有据此宣称 3.10–3.13 安装矩阵已经完成。
+- Standards：2 项 P2（DNS/UDP 隔离缺口、stdout 关闭残尾漏检）均修复并独立复核关闭。Spec：1 项 P2（stdout 无换行退出残尾漏检）已用真实 atexit 输出复现、修复并独立复核关闭。两轴无未解决发现。
+- 完整日志 `.runlogs/e-review-{no-mcp,mcp,desktop}.log` 不纳入提交。没有执行 live B 站/付费模型调用、没有构建安装包或 wheel、未做新的窗口视觉验收。
+- 下一批 F：冻结 Python 包命名空间、资源与用户数据路径的兼容边界，再实现可安装 CLI/MCP 入口；G 单独执行干净安装与产物内容审计，H 才进入公开发布。
