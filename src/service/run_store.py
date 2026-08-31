@@ -15,6 +15,7 @@ work by run_id instead of relying on in-memory "last result" state:
 from __future__ import annotations
 
 import base64
+import copy
 import json
 import logging
 import os
@@ -45,6 +46,9 @@ ANALYSIS_JSON = "analysis.json"
 REPORT_MD = "report.md"
 ASSETS_DIR = "assets"
 ARCHIVE_DIR = "archive"
+ATTEMPTS_DIR = "analysis-attempts"
+ATTEMPT_ID_RE = re.compile(r"^(?:task|legacy)-[0-9]{8}-[0-9]{6}-[0-9a-f]{8}$")
+ANALYSIS_KEYS = ("analysis_json", "report_markdown", "word_cloud_image")
 
 
 def new_run_id() -> str:
@@ -178,11 +182,14 @@ class RunStore:
 
     def write_manifest(self, run_id: str, manifest: dict[str, Any]) -> None:
         path = self.run_dir(run_id, create=True) / MANIFEST_NAME
-        payload = dict(manifest)
+        payload = copy.deepcopy(manifest)
         payload["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         payload["params"] = sanitize_params(payload.get("params") or {})
         payload["artifacts"] = self._relative_artifacts(run_id, payload.get("artifacts") or {})
-        _atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
+        for record in [payload.get("current_analysis"), *(payload.get("analysis_attempts") or [])]:
+            if isinstance(record, dict):
+                record["artifacts"] = self._relative_artifacts(run_id, record.get("artifacts") or {})
+        _atomic_write_text(path, json.dumps(_scrub_json_value(payload), ensure_ascii=False, indent=2))
 
     def _relative_artifacts(self, run_id: str, artifacts: dict[str, Any]) -> dict[str, str]:
         """Store artifact paths relative to the run directory.
@@ -257,10 +264,41 @@ class RunStore:
         return data
 
     # -- analysis ----------------------------------------------------------
+    def _attempt_dir(self, run_id: str, attempt_id: str) -> Path:
+        if not ATTEMPT_ID_RE.fullmatch(attempt_id):
+            raise ServiceError(ErrorCode.INVALID_INPUT, "analysis attempt_id 格式不合法")
+        root = self.run_dir(run_id)
+        path = (root / ATTEMPTS_DIR / attempt_id).resolve()
+        if root not in path.parents:
+            raise ServiceError(ErrorCode.INVALID_INPUT, "analysis attempt_id 越界")
+        return path
+
     def save_analysis(
-        self, run_id: str, result: dict[str, Any], warnings: list[str] | None = None
+        self, run_id: str, result: dict[str, Any], warnings: list[str] | None = None,
+        *, attempt_id: str | None = None,
     ) -> dict[str, str]:
         path = self.run_dir(run_id, create=True)
+        if attempt_id is None and (path / MANIFEST_NAME).is_file():
+            manifest = self.read_manifest(run_id)
+            if manifest.get("schema_version") == 2:
+                # Preserve direct save_analysis callers after a run is upgraded:
+                # they must publish a version, not only overwrite stale aliases.
+                started = datetime.now().isoformat(timespec="microseconds")
+                generated_id = "task-" + new_run_id()
+                artifacts = RunStore.save_analysis(
+                    self, run_id, result, warnings, attempt_id=generated_id,
+                )
+                attempt = dict(attempt_id=generated_id, started_at=started,
+                               finished_at=datetime.now().isoformat(timespec="microseconds"),
+                               status=RunStatus.COMPLETED, stage="分析完成", artifacts=artifacts,
+                               counts=dict(manifest.get("counts") or {}), summary=scrub(result.get("summary")),
+                               warnings=list(warnings or []), error=None, error_code=None)
+                self.update_analysis_attempt(run_id, attempt)
+                alias_warnings = self.refresh_analysis_aliases(run_id, generated_id, artifacts)
+                if warnings is not None:
+                    warnings.extend(alias_warnings)
+                return artifacts
+        destination = self._attempt_dir(run_id, attempt_id) if attempt_id else path
         stage = Path(tempfile.mkdtemp(dir=str(path), prefix=".analysis-stage-"))
         try:
             payload = dict(result)
@@ -268,7 +306,7 @@ class RunStore:
 
             staged_image, decode_failed = self._extract_word_cloud(stage, payload)
             if staged_image:
-                final_image = path / ASSETS_DIR / "word_cloud.png"
+                final_image = destination / ASSETS_DIR / "word_cloud.png"
                 payload["word_cloud_image"] = str(final_image)
                 artifacts["word_cloud_image"] = str(final_image)
             elif decode_failed and warnings is not None:
@@ -284,12 +322,127 @@ class RunStore:
                 report = re.sub(r"!\[[^\]]*\]\(assets/word_cloud\.png\)\n?", "", report)
             if report:
                 _atomic_write_text(stage / REPORT_MD, scrub(report))
-                artifacts["report_markdown"] = str(path / REPORT_MD)
+                artifacts["report_markdown"] = str(destination / REPORT_MD)
 
             _atomic_dump_json(stage / ANALYSIS_JSON, payload, scrub_secrets=True)
-            artifacts["analysis_json"] = str(path / ANALYSIS_JSON)
-            self._commit_staged_analysis(path, stage)
+            artifacts["analysis_json"] = str(destination / ANALYSIS_JSON)
+            if attempt_id:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                if destination.exists():
+                    raise ServiceError(ErrorCode.INVALID_INPUT, "analysis attempt 已保存，不允许覆盖")
+                stage.rename(destination)
+            else:
+                self._commit_staged_analysis(path, stage)
             return artifacts
+        finally:
+            shutil.rmtree(stage, ignore_errors=True)
+
+    def _resolve_analysis_artifacts(self, run_id: str, artifacts: dict[str, Any]) -> dict[str, str]:
+        root = self.run_dir(run_id)
+        resolved: dict[str, str] = {}
+        for key in ANALYSIS_KEYS:
+            if key not in artifacts:
+                continue
+            path = (root / str(artifacts[key])).resolve()
+            if root not in path.parents:
+                raise ServiceError(ErrorCode.INVALID_INPUT, "analysis artifact 路径越界")
+            if not path.is_file():
+                raise ServiceError(ErrorCode.NOT_FOUND, "analysis artifact 缺失，不能读取完整版本")
+            resolved[key] = str(path)
+        return resolved
+
+    def _legacy_analysis(self, run_id: str, manifest: dict[str, Any]) -> dict[str, Any] | None:
+        """Copy a pre-v2 report before its canonical names can be replaced."""
+        path = self.run_dir(run_id)
+        if (manifest.get("schema_version") == 2 or manifest.get("status") != RunStatus.COMPLETED
+                or not (path / ANALYSIS_JSON).is_file()):
+            return None
+        result = json.loads((path / ANALYSIS_JSON).read_text(encoding="utf-8"))
+        if (path / REPORT_MD).is_file():
+            result["report_markdown"] = (path / REPORT_MD).read_text(encoding="utf-8")
+        if (path / ASSETS_DIR / "word_cloud.png").is_file():
+            result["word_cloud_image"] = "data:image/png;base64," + base64.b64encode(
+                (path / ASSETS_DIR / "word_cloud.png").read_bytes()).decode("ascii")
+        attempt_id = "legacy-" + new_run_id()
+        # Call the base implementation: this is an import, not a new processor
+        # result passed through custom store transformations a second time.
+        artifacts = RunStore.save_analysis(self, run_id, result, attempt_id=attempt_id)
+        return {"attempt_id": attempt_id, "artifacts": artifacts,
+                "counts": dict(manifest.get("counts") or {}), "summary": scrub(result.get("summary")),
+                "finished_at": manifest.get("updated_at", ""), "warnings": list(manifest.get("warnings") or [])}
+
+    def update_analysis_attempt(self, run_id: str, attempt: dict[str, Any], **changes: Any) -> bool:
+        """Publish one complete version with a single atomic manifest replace."""
+        manifest = self.read_manifest(run_id)
+        current = manifest.get("current_analysis") or self._legacy_analysis(run_id, manifest)
+        attempts = list(manifest.get("analysis_attempts") or [])
+        for index, previous in enumerate(attempts):
+            if previous["attempt_id"] == attempt["attempt_id"]:
+                attempts[index] = attempt
+                break
+        else:
+            attempts.append(attempt)
+        if attempt["status"] == RunStatus.COMPLETED and attempt["artifacts"]:
+            current = {key: copy.deepcopy(attempt[key]) for key in (
+                "attempt_id", "artifacts", "counts", "summary", "finished_at", "warnings")}
+        if current:
+            artifacts = {key: value for key, value in (manifest.get("artifacts") or {}).items()
+                         if key not in ANALYSIS_KEYS}
+            artifacts.update(current["artifacts"])
+            changes.update(status=RunStatus.COMPLETED, stage="分析完成", counts=current["counts"],
+                           artifacts=artifacts, error=None, error_code=None, warnings=current["warnings"])
+        self.update_manifest(run_id, **changes, schema_version=2,
+                             current_analysis=current, analysis_attempts=attempts)
+        return not current or current["attempt_id"] == attempt["attempt_id"]
+
+    def refresh_analysis_aliases(
+        self, run_id: str, attempt_id: str, artifacts: dict[str, str],
+    ) -> list[str]:
+        """Refresh compatibility copies without undoing a published result.
+
+        Record a refresh failure against the same attempt so restart queries
+        retain the warning. This only annotates metadata; it never republishes
+        a version or retries the failed copy operation.
+        """
+        try:
+            self.sync_analysis_aliases(run_id, artifacts)
+            return []
+        except (OSError, ServiceError):
+            warning = "根目录兼容副本刷新失败；请使用 artifacts 指向的完整分析版本。"
+        warnings = [warning]
+        try:
+            manifest = self.read_manifest(run_id)
+            attempts = manifest.get("analysis_attempts") or []
+            current = manifest.get("current_analysis") or {}
+            records = [record for record in attempts if record.get("attempt_id") == attempt_id]
+            if current.get("attempt_id") == attempt_id:
+                records.extend([current, manifest])
+            elif not current and attempts and attempts[-1].get("attempt_id") == attempt_id:
+                records.append(manifest)
+            for record in records:
+                existing = list(record.get("warnings") or [])
+                if warning not in existing:
+                    existing.append(warning)
+                record["warnings"] = existing
+            if records:
+                self.write_manifest(run_id, manifest)
+        except (OSError, ServiceError) as exc:
+            logger.warning("could not persist alias warning for run %s: %s", run_id, scrub(exc))
+            warnings.append("兼容副本警告未能写入运行记录。")
+        return warnings
+
+    def sync_analysis_aliases(self, run_id: str, artifacts: dict[str, str]) -> None:
+        """Best-effort compatibility copies, never the authoritative reader path."""
+        path = self.run_dir(run_id)
+        stage = Path(tempfile.mkdtemp(dir=str(path), prefix=".analysis-alias-"))
+        try:
+            names = {"analysis_json": Path(ANALYSIS_JSON), "report_markdown": Path(REPORT_MD),
+                     "word_cloud_image": Path(ASSETS_DIR) / "word_cloud.png"}
+            for key, source in self._resolve_analysis_artifacts(run_id, artifacts).items():
+                target = stage / names[key]
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, target)
+            self._commit_staged_analysis(path, stage)
         finally:
             shutil.rmtree(stage, ignore_errors=True)
 
@@ -382,16 +535,25 @@ class RunStore:
         return str(image_path), False
 
     def load_analysis(self, run_id: str) -> dict[str, Any]:
-        analysis_path = self.run_dir(run_id) / ANALYSIS_JSON
+        artifacts = self.artifacts(run_id)
+        saved_path = artifacts.get("analysis_json")
+        if not saved_path:
+            raise ServiceError(ErrorCode.NOT_FOUND, f"run {run_id} 尚无分析结果")
+        analysis_path = Path(saved_path)
         if not analysis_path.is_file():
             raise ServiceError(ErrorCode.NOT_FOUND, f"run {run_id} 尚无分析结果")
         try:
-            return json.loads(analysis_path.read_text(encoding="utf-8"))
+            result = json.loads(analysis_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as exc:
             raise ServiceError(ErrorCode.NOT_FOUND, f"run {run_id} 的分析结果损坏") from exc
+        if not isinstance(result, dict):
+            raise ServiceError(ErrorCode.NOT_FOUND, f"run {run_id} 的分析结果格式异常")
+        if "word_cloud_image" in artifacts:
+            result["word_cloud_image"] = artifacts["word_cloud_image"]
+        return result
 
     # -- misc --------------------------------------------------------------
-    def artifacts(self, run_id: str) -> dict[str, str]:
+    def artifacts(self, run_id: str, *, manifest: dict[str, Any] | None = None) -> dict[str, str]:
         path = self.run_dir(run_id)
         known = {
             "comments_json": path / COMMENTS_JSON,
@@ -400,7 +562,14 @@ class RunStore:
             "report_markdown": path / REPORT_MD,
             "word_cloud_image": path / ASSETS_DIR / "word_cloud.png",
         }
-        return {key: str(value) for key, value in known.items() if value.is_file()}
+        found = {key: str(value) for key, value in known.items() if value.is_file()}
+        manifest = manifest if manifest is not None else self.read_manifest(run_id)
+        if manifest.get("schema_version") == 2:
+            current = manifest.get("current_analysis") or {}
+            reference = current.get("artifacts") if current else manifest.get("artifacts")
+            found = {key: value for key, value in found.items() if key not in ANALYSIS_KEYS}
+            found.update(self._resolve_analysis_artifacts(run_id, reference or {}))
+        return found
 
     def _run_created_at(self, run_id: str) -> datetime:
         try:

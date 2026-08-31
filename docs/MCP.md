@@ -132,7 +132,7 @@ API Key 不会写进 `manifest.json`、不会出现在日志（含异常堆栈�
 |---|---|---|
 | `crawl_and_analyze` | 主入口：爬取 + 分析 + 导出报告，一次完成 | 是 |
 | `crawl_comments` | 只爬取，落盘 JSON 和 CSV | 否 |
-| `analyze_run` | 对已有 `run_id` 重新分析（旧结果归档到 `archive/`） | 是 |
+| `analyze_run` | 对已有 `run_id` 重新分析；成功切换有效版本，取消/失败保留旧报告 | 是 |
 | `get_task_status` | 查询状态、进度、计数、产物路径 | 否 |
 | `stop_task` | 停止正在跑的任务 | 否 |
 | `list_runs` | 列出持久化运行记录（最新在前） | 否 |
@@ -152,9 +152,14 @@ run_id 时生效）；省略 `prune_to` 不会默认全删，正在执行的任�
 `crawl_and_analyze` 等工具默认最多阻塞 `wait_seconds`（默认 90 秒，上限 600），
 期间通过 MCP progress 通知汇报进度。
 
-如果在窗口内没跑完，工具会带着 `done: false` 和 `run_id` 正常返回，
-之后用 `get_task_status(run_id=...)` 继续查询即可。这样长任务不会被宿主的
+如果在窗口内没跑完，工具会带着 `done: false`、`task_id` 和 `run_id` 正常返回，
+之后用 `get_task_status(task_id=...)` 查询本次尝试的最终状态。这样长任务不会被宿主的
 单次调用超时打断。
+
+按 `run_id` 查询时，运行中返回当前进度；任务结束后返回最近成功报告的状态。
+因此重分析取消/失败后，`task_id` 查询显示本次取消/失败，`run_id` 查询仍可显示
+`completed` 并附上 warning。进程重启后 task_id 不再可用，用 run_id 找回有效报告；
+每次尝试的状态和错误保留在 manifest 的 `analysis_attempts` 中。
 
 ---
 
@@ -165,13 +170,23 @@ run_id 时生效）；省略 `prune_to` 不会默认全删，正在执行的任�
   manifest.json     状态、计数、参数、产物清单
   comments.json     清洗后的评论
   comments.csv      Excel 可直接打开
-  analysis.json     完整分析结果
-  report.md         Markdown 报告
+  analysis.json     当前报告的兼容副本
+  report.md         Markdown 兼容副本
+  analysis-attempts/<attempt_id>/
+    analysis.json   本次尝试的完整分析结果
+    report.md       本次尝试的 Markdown 报告
+    assets/         可选词云图片
 ```
 
 目录内所有文件都采用「临时文件 + 原子替换」写入，进程中途被杀不会留下截断的
 `manifest.json` 或半截 CSV。若 CSV 导出失败，任务会在 `warnings` 里明确报告，
 而不是静默地只留下 JSON。
+
+分析先完整落定一个不可变版本目录，再原子更新 manifest 的 `current_analysis` 指针。
+读取完整结果应使用 `artifacts` 返回的版本路径；根目录兼容副本不保证多文件原子刷新。
+取消或失败不会替换上一份已提交报告；成功后的旧兼容副本仍归档到 `archive/`。
+副本刷新失败会保留成功版本并记录 warning。详细状态与兼容边界见
+[分析尝试契约](ANALYSIS_ATTEMPTS.md)。
 
 仓库目录不可写时自动回落到 `%LOCALAPPDATA%\BilibiliCrawler\analysis-runs\`，
 与桌面端 `analysis-assets` 采用同一套目录选择策略。可用 `BILIBILI_AGENT_RUNS_DIR` 覆盖。

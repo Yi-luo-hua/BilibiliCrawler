@@ -1307,13 +1307,13 @@ class ReviewHardeningTests(AgentServiceTestCase):
                 super().__init__(root)
                 self.service = None
 
-            def save_analysis(self, run_id, result, warnings=None):
+            def save_analysis(self, run_id, result, warnings=None, **kwargs):
                 if self.service is not None:
                     snapshot = self.service.get_status(run_id=run_id)
                     observed["status"] = snapshot.status
                     observed["stage"] = snapshot.stage
                     observed["percent"] = snapshot.percent
-                return super().save_analysis(run_id, result, warnings=warnings)
+                return super().save_analysis(run_id, result, warnings=warnings, **kwargs)
 
         store = ObservingStore(self.root)
         self.store = store

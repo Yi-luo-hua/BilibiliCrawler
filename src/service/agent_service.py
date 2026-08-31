@@ -83,6 +83,9 @@ class _Task:
         # Status alone is ambiguous: both crawl and analyze pass through
         # EXPORTING.
         self.phase = TaskKind.CRAWL
+        self.attempt_started_at = ""
+        self.attempt_finished_at = ""
+        self.attempt_artifacts: dict[str, str] = {}
         # Set once the task has committed to a terminal status, so a late
         # stop() cannot move it back to a non-terminal one.
         self.terminal = False
@@ -394,8 +397,7 @@ class AgentService:
                     if key not in task.artifacts:
                         artifacts.pop(key, None)
             target = {**(existing.get("target") or {}), **task.target}
-            self._store.update_manifest(
-                task.run_id,
+            changes = dict(
                 status=task.status,
                 stage=task.stage,
                 counts=counts,
@@ -405,6 +407,21 @@ class AgentService:
                 error=task.error,
                 error_code=task.error_code,
             )
+            if task.attempt_started_at:
+                if task.terminal and not task.attempt_finished_at:
+                    task.attempt_finished_at = datetime.now().isoformat(timespec="microseconds")
+                attempt = dict(
+                    attempt_id=task.task_id, started_at=task.attempt_started_at,
+                    finished_at=task.attempt_finished_at, status=task.status,
+                    stage=task.stage, counts=dict(task.counts), summary=task.summary,
+                    artifacts=dict(task.attempt_artifacts), warnings=list(task.warnings),
+                    error=task.error, error_code=task.error_code,
+                )
+                publish_aliases = self._store.update_analysis_attempt(task.run_id, attempt, **changes)
+                if task.terminal and task.attempt_artifacts and publish_aliases:
+                    self._sync_analysis_aliases(task)
+            else:
+                self._store.update_manifest(task.run_id, **changes)
         except ServiceError:
             logger.warning("could not persist manifest for run %s", task.run_id)
         except OSError as exc:
@@ -412,7 +429,21 @@ class AgentService:
             # a transient write failure (antivirus/indexer holding the file,
             # disk full). The data files are already on disk; only this
             # manifest refresh is lost.
-            logger.warning("could not persist manifest for run %s: %s", task.run_id, exc)
+            logger.warning("could not persist manifest for run %s: %s", task.run_id, scrub(exc))
+            task.add_warning("运行记录更新失败；已保存结果仍在，原有效报告指针未改变。")
+            # Preserve the old first-analysis paid-result contract even if a
+            # transient manifest lock prevented recording it. Never overwrite
+            # an already existing report on this failure path.
+            if task.terminal and task.attempt_artifacts and not (
+                self._store.run_dir(task.run_id) / "analysis.json"
+            ).exists():
+                self._sync_analysis_aliases(task)
+
+    def _sync_analysis_aliases(self, task: _Task) -> None:
+        for warning in self._store.refresh_analysis_aliases(
+            task.run_id, task.task_id, task.attempt_artifacts,
+        ):
+            task.add_warning(warning)
 
     # -- public API --------------------------------------------------------
     def start_crawl(
@@ -451,7 +482,7 @@ class AgentService:
             existing = self._store.read_manifest(run_id)
             task.update(
                 counts={str(k): int(v) for k, v in (existing.get("counts") or {}).items()},
-                artifacts=dict(self._store.artifacts(run_id)),
+                artifacts=dict(self._store.artifacts(run_id, manifest=existing)),
             )
         except ServiceError:
             logger.warning("could not seed task from manifest for run %s", run_id)
@@ -492,7 +523,7 @@ class AgentService:
             return task.snapshot()
         if run_id:
             for task in reversed(list(self._tasks.values())):
-                if task.run_id == run_id:
+                if task.run_id == run_id and task.alive:
                     return task.snapshot()
             return self._snapshot_from_manifest(run_id)
         with self._lock:
@@ -708,8 +739,13 @@ class AgentService:
         return changes
 
     def _do_analyze(self, task: _Task, params: dict[str, Any]) -> None:
+        task.attempt_started_at = datetime.now().isoformat(timespec="microseconds")
         task.update(phase=TaskKind.ANALYZE, status=RunStatus.ANALYZING, stage="正在分析评论")
         self._persist(task)
+
+        if task.cancel_event.is_set():
+            self._settle(task, "分析完成", cancelled_stage="分析已取消")
+            return
 
         comments = self._store.load_comments(task.run_id)
 
@@ -821,7 +857,10 @@ class AgentService:
                 )
             payload["report_markdown"] = build_report(*report_args, **report_kwargs)
         store_warnings: list[str] = []
-        artifacts = self._store.save_analysis(task.run_id, payload, warnings=store_warnings)
+        artifacts = self._store.save_analysis(
+            task.run_id, payload, warnings=store_warnings, attempt_id=task.task_id,
+        )
+        task.attempt_artifacts = dict(artifacts)
         for message in store_warnings:
             task.add_warning(message)
         meta = result.get("meta") or {}
@@ -927,6 +966,14 @@ class AgentService:
         stage = str(manifest.get("stage") or "")
         error = manifest.get("error")
         error_code = manifest.get("error_code")
+        warnings = list(manifest.get("warnings") or [])
+        attempts = manifest.get("analysis_attempts") or []
+        if manifest.get("current_analysis") and attempts:
+            latest = attempts[-1]
+            if latest.get("status") in {RunStatus.CANCELLED, RunStatus.FAILED}:
+                warnings.append("最近一次分析尝试未完成；当前返回上一次已提交的有效报告。")
+            elif latest.get("status") not in RunStatus.TERMINAL:
+                warnings.append("上一次分析尝试未正常结束；已提交的有效报告仍可用。")
 
         if status not in RunStatus.TERMINAL:
             # No task is running for this run in this process, so a non-terminal
@@ -945,9 +992,9 @@ class AgentService:
             stage=stage,
             percent=100,
             counts={str(k): int(v) for k, v in (manifest.get("counts") or {}).items()},
-            summary="",
-            artifacts=self._store.artifacts(run_id),
-            warnings=list(manifest.get("warnings") or []),
+            summary=scrub((manifest.get("current_analysis") or {}).get("summary")),
+            artifacts=self._store.artifacts(run_id, manifest=manifest),
+            warnings=warnings,
             error=error,
             error_code=error_code,
         )

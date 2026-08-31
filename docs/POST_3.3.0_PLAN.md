@@ -18,7 +18,7 @@
 | 批次 | 优先级 | 交付物 | 依赖 | 状态 |
 |---|---|---|---|---|
 | A | P0 | 完整 LLM profile、`doctor`、配置回归测试 | 当前基线 | 实现、双线 review 与验证完成；未发版 |
-| B | P1 | run 与分析尝试分离、重试与取消的原子语义 | A | 待开始 |
+| B | P1 | run 与分析尝试分离、重试与取消的原子语义 | A | 实现、双线 review 与验证完成；未发版 |
 | C | P1 | provider 错误分类、复用原 run 的恢复提示 | A；结合 B 的尝试状态 | 待开始 |
 | D | P1 | 耗时、超时、重试提示 | C | 待开始 |
 | E | P1 | 真实 MCP stdio、Windows 编码与可选 live smoke | A–D | 待开始 |
@@ -60,11 +60,13 @@
 
 - 先冻结 manifest schema：run 保存评论数据与最近一次已提交报告；每次分析拥有独立 `attempt_id`、状态、开始/结束时间、错误与产物引用。
 - 新尝试失败或取消只结束本次尝试；保留上一份完整结果的状态和引用，不改写评论原始数据。
-- 成功后将分析 JSON、Markdown、词云和归档整组原子提交，再更新有效报告指针。中断不能留下新旧产物混合。
+- 成功后先完整落定包含分析 JSON、Markdown、词云的不可变版本目录，再一次原子替换有效报告指针。根目录兼容副本另行归档/刷新，不作为多文件原子入口；中断后通过 artifacts 读取不会拼接不同版本。
 - 兼容读取旧 manifest；不一次性重写历史目录，不破坏现有 MCP 返回字段及桌面 RPC。
 - 用阻塞夹具覆盖请求前、请求中、结果返回后、文件 staging、提交边界的取消与重试。测试每个窗口的内存/manifest/报告一致性。
 
 验收：完成 → 再分析 → 取消/失败 → 再成功，旧报告始终可用；成功后只切换一次有效版本；跨进程恢复仍可判定当前结果。此前明确的取消竞态必须有回归测试。
+
+具体 schema、task/run 查询差异、兼容入口与写失败边界见 [分析尝试契约](ANALYSIS_ATTEMPTS.md)。
 
 ## C：错误分类与恢复指引
 
@@ -110,10 +112,23 @@ H：先随 GitHub Release 附带包资产，TestPyPI 验证后再启用正式 Py
 - 桌面 `npm run test:unit`：11/11 通过（含真实 SidecarClient 子进程）；`npm run typecheck` 通过；`git diff --check` 通过。
 - 本机完整日志在 `.runlogs/p0-review-{no-mcp,mcp,desktop}.log`（忽略文件，不纳入提交）。
 - 未调用外部付费模型，未跑新的 Tauri 真机验收或安装包构建；本批未修改 UI、Rust 或桌面请求配置语义。完整 MCP stdio 子进程验收仍属于 E 批，不能用本批 CLI doctor 子进程和进程内 MCP 测试代替。
-- 下一批从 B 的 manifest schema 与取消窗口回归开始；C 的错误分类可在该状态契约确定后接入。
+- A 已提交推送为 `7658ace`。B 在独立分支 `codex/analysis-attempt-state` 继续实现；后续 C 的错误分类按已冻结的分析尝试契约接入。
 
 ### A 批 review 结论
 
 - Standards：发现 1 项 P2，无法编码为 HTTP 请求头的 Key 导致 doctor 崩溃；已在 resolver 校验并加诊断兜底，真 CLI 回归通过，独立复核关闭。
 - Spec：发现 1 项 P2，纯空白环境变量中的 tab/newline 没有回退；已按字段跳过纯空白并保留非空控制字符校验，独立复核关闭。
 - 两轴均无未解决发现；不等于外部 provider 或新的安装包已经验收。
+
+### B 批验证与 review 结论
+
+- 分支 `codex/analysis-attempt-state`，基线为 A 的 `7658ace`；不更改版本号、不合并 main、不构建安装包。
+- 新增 18 项分析尝试回归：取消窗口、失败/重试、旧格式按需升级、直接保存兼容、staging/manifest/兼容副本故障、单一 manifest 快照、真实子进程中断恢复、含 PNG 的 run 迁移、路径越界与缺失版本。
+- 新增 1 项 MCP SDK 客户端回归，区分本次尝试 cancelled 与有效 run completed，并验证重新创建服务后仍能查询旧报告；轮询指引同步改为 task_id。MCP 专项 27/27 通过。
+- 无 MCP 环境全量 250 项（249 通过、MCP 模块 1 项按预期跳过）；MCP 2.1.0 环境全量 276/276；退出码均为 0。
+- 桌面单元/真实 SidecarClient 子进程契约 11/11，TypeScript 检查和 `git diff --check` 通过。已有真实 HTTP canary 回显回归覆盖新版本目录、manifest、根目录副本及 archive，评论哈希保持不变。
+- Standards：审查发现的旧取消产物误提升、旧签名直接保存不可见、直接保存已发布后被兼容副本异常判失败均已修复，独立复核关闭。
+- Spec：审查发现的直接保存可见性、快照两次读取混合版本、兼容副本 warning 未持久化、直接保存副本失败语义均已修复，独立复核关闭。
+- 两轴无未解决发现；日志在 `.runlogs/b-review-{no-mcp,mcp,desktop}.log`，不纳入提交。故障注入产生的磁盘/锁错误日志为预期回归场景。
+- 本批不支持多进程同时写同一 run；根目录兼容副本不是原子多文件读取入口，使用 artifacts 版本路径。未做真实外部付费模型调用、新安装包验收或 E 批完整 MCP stdio 子进程验收。
+- 下一批 C：provider 错误分类与复用原 run 的恢复提示；其后才处理 D 的耗时/超时体验。
