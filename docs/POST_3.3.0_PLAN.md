@@ -20,7 +20,7 @@
 | A | P0 | 完整 LLM profile、`doctor`、配置回归测试 | 当前基线 | 实现、双线 review 与验证完成；未发版 |
 | B | P1 | run 与分析尝试分离、重试与取消的原子语义 | A | 实现、双线 review 与验证完成；未发版 |
 | C | P1 | provider 错误分类、复用原 run 的恢复提示 | A；结合 B 的尝试状态 | 实现、双线 review 与验证完成；未发版 |
-| D | P1 | 耗时、超时、重试提示 | C | 待开始 |
+| D | P1 | 耗时、超时、重试提示 | C | 实现、双线 review 与验证完成；未发版 |
 | E | P1 | 真实 MCP stdio、Windows 编码与可选 live smoke | A–D | 待开始 |
 | F | P1 | 命名空间、资源路径、CLI/MCP 可安装包边界 | A–C；E 提供验收基线 | 待开始 |
 | G | P2 | wheel/sdist 干净安装与内容审计 | F | 待开始 |
@@ -88,6 +88,10 @@
 
 验收：慢响应、断连、限流和取消夹具；桌面可区分等待/重试/失败，超时后能复用同一 run。UI 改动须另做真实窗口验收。
 
+本批通过现有 progress 文本提供信息，不新增客户端字段或修改 UI 文件。连接/读取超时
+保持原值各 90 秒，不增加整体任务 deadline。具体线程、计时和兼容边界见
+[长请求进度契约](ANALYSIS_PROGRESS.md)。
+
 ## E：真实 MCP 传输与 Windows 编码
 
 - 启动真实 `python -m backend.agent mcp` 子进程，经 SDK stdio 客户端完成初始化、7 工具发现、爬取、分析、状态查询和取消。
@@ -148,3 +152,14 @@ H：先随 GitHub Release 附带包资产，TestPyPI 验证后再启用正式 Py
 - Spec：2 项 P2，上述真实超时分类，以及明确其他参数错误被宽泛文本误判为格式拒绝；已让结构化参数优先，并限定明确的字段拒绝措辞，两项独立复核关闭。
 - 两轴无未解决发现。没有调用真实付费 provider、没有关闭 TLS 校验、未构建安装包；MCP 验证仍为 SDK 内存传输，E 批完整 stdio 子进程验收未在此批完成。
 - 下一批 D：长请求耗时、批次/重试提示与超时体验；依赖现有安全重试和取消契约。
+
+### D 批验证与 review 结论
+
+- 分支 `codex/analysis-progress-details`，基线为 C 已推送的 `67b668e`。沿用原客户端消息/字段，显示单调时钟耗时、批次、请求次数、退避与实际超时，不修改 UI 文件。
+- 新增 5 项 Python 进度回归：真实慢 HTTP 的每秒等待提示和固定百分比、批次/总结重试消息、取消后无迟到进度、观察者失败停止重试、真实超时后原 run 重试与评论哈希不变。
+- 新增 2 项桌面回归：reducer 对消息刷新保持原百分比；真实 SidecarClient + Python 子进程 + loopback HTTP 503→200，收到等待/退避/第二次请求消息，始终保持既有分析百分比且不泄露 canary。
+- 最终无 MCP 全量 271 项（270 通过、MCP 模块 1 项预期跳过），MCP 2.1.0 全量 298/298，退出码均为 0。桌面 13/13、TypeScript 与 `git diff --check` 通过。
+- Standards：0 项发现；Spec：0 项发现；两轴独立复核关闭。完整日志 `.runlogs/d-review-{no-mcp,mcp,desktop}.log` 不纳入提交。
+- 超时仍为连接 90 秒/读取 90 秒，不代表总体 deadline；没有引入任务总超时或新的配置入口。私有请求方法增加可选 request_progress，公开 analyze 和客户端协议保持兼容。
+- 未调用外部付费模型，未构建安装包、未做新的窗口视觉验收。桌面证据为真实协议通路验收，不替代安装包或 E 批 MCP stdio 验收。
+- 下一批 E：真实 MCP stdio 子进程、Windows 编码、重启复用与可选 live smoke；之后进入 F–H 包边界与发布门禁。

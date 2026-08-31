@@ -161,6 +161,12 @@ run_id 时生效）；省略 `prune_to` 不会默认全删，正在执行的任�
 `completed` 并附上 warning。进程重启后 task_id 不再可用，用 run_id 找回有效报告；
 每次尝试的状态和错误保留在 manifest 的 `analysis_attempts` 中。
 
+LLM 请求等待期间，stage/progress 消息约每秒刷新本次分析已用时，并显示批次、
+请求/重试次数及退避原因。等待只更新文本，不增加百分比；桌面沿用同一消息通路。
+连接超时和读取超时仍各为 90 秒，消息中的 `90/90s` 不是整个任务的总时限。
+`wait_seconds` 则只是 MCP 工具本次调用的等待窗口，超出窗口后仍按 task_id 轮询。
+详见 [长请求进度契约](ANALYSIS_PROGRESS.md)。
+
 ---
 
 ## 运行目录

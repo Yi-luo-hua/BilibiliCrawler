@@ -7,6 +7,7 @@ import base64
 import io
 import json
 import math
+import queue
 import re
 import threading
 import time
@@ -29,6 +30,9 @@ ProgressCallback = Callable[[str, int], None]
 class LLMAnalysisProcessor:
     DEFAULT_BASE_URL = DEFAULT_LLM_BASE_URL
     DEFAULT_MODEL = DEFAULT_LLM_MODEL
+    CONNECT_TIMEOUT_SECONDS = 90
+    READ_TIMEOUT_SECONDS = 90
+    PROGRESS_INTERVAL_SECONDS = 1.0
     WORD_CLOUD_LIMIT = 80
     WORD_CLOUD_WIDTH = 800
     WORD_CLOUD_HEIGHT = 440
@@ -135,7 +139,7 @@ class LLMAnalysisProcessor:
         progress: ProgressCallback | None = None,
         cancel_event: threading.Event | None = None,
     ) -> dict[str, Any]:
-        started_at = time.time()
+        started_at = time.monotonic()
         source = cls._normalize_source(comments, dynamics, params.get("source"))
         strategy = params.get("strategy") or "sample"
         sample_size = cls._clamp_int(params.get("sample_size"), 300, 20, 2000)
@@ -176,6 +180,9 @@ class LLMAnalysisProcessor:
                     strategy,
                     chart_keys,
                     cancel_event=cancel_event,
+                    request_progress=(lambda message: progress(
+                        f"第 {index}/{len(batches)} 批 · 已用时 {int(time.monotonic() - started_at)}s · {message}", percent,
+                    )) if progress else None,
                 )
             )
 
@@ -193,6 +200,9 @@ class LLMAnalysisProcessor:
             len(records),
             len(selected),
             cancel_event=cancel_event,
+            request_progress=(lambda message: progress(
+                f"总结整合 · 已用时 {int(time.monotonic() - started_at)}s · {message}", 84,
+            )) if progress else None,
         )
         cls._raise_if_cancelled(cancel_event)
         if progress:
@@ -217,7 +227,7 @@ class LLMAnalysisProcessor:
                 "analyzed_records": len(selected),
                 "batch_count": len(batches),
                 "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "elapsed_seconds": round(time.time() - started_at, 1),
+                "elapsed_seconds": round(time.monotonic() - started_at, 1),
                 "chart_keys": chart_keys,
                 **location_stats,
             },
@@ -252,6 +262,7 @@ class LLMAnalysisProcessor:
         strategy: str,
         chart_keys: list[str],
         cancel_event: threading.Event | None = None,
+        request_progress: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         endpoint = base_url.rstrip("/") + "/chat/completions"
         messages = [
@@ -287,6 +298,7 @@ class LLMAnalysisProcessor:
             cancel_event,
             request_error="LLM 请求失败",
             invalid_json_error="LLM 返回不是有效 JSON 响应",
+            request_progress=request_progress,
         )
 
         try:
@@ -307,6 +319,7 @@ class LLMAnalysisProcessor:
         total_records: int,
         analyzed: int,
         cancel_event: threading.Event | None = None,
+        request_progress: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         endpoint = base_url.rstrip("/") + "/chat/completions"
         prompt_payload = {
@@ -355,6 +368,7 @@ class LLMAnalysisProcessor:
             cancel_event,
             request_error="LLM 总结整合失败",
             invalid_json_error="LLM 总结整合返回不是有效 JSON 响应",
+            request_progress=request_progress,
         )
 
         try:
@@ -380,22 +394,29 @@ class LLMAnalysisProcessor:
         *,
         request_error: str,
         invalid_json_error: str,
+        request_progress: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         session = requests.Session()
         session.trust_env = False
         completed = threading.Event()
         stopped = cancel_event if cancel_event is not None else threading.Event()
         result: dict[str, Any] = {}
+        updates: queue.Queue[str] = queue.Queue()
 
         def send_request() -> None:
             try:
                 request_payload = dict(payload)
                 for attempt in range(3):
                     cls._raise_if_cancelled(stopped)
+                    updates.put(
+                        f"等待 LLM 响应 · 请求 {attempt + 1}/3（重试 {attempt}） · "
+                        f"连接/读取超时 {cls.CONNECT_TIMEOUT_SECONDS}/{cls.READ_TIMEOUT_SECONDS}s（非任务总时限）"
+                    )
                     response = None
                     try:
                         response = session.post(endpoint, headers=headers, json=request_payload,
-                                                timeout=90, allow_redirects=False)
+                                                timeout=(cls.CONNECT_TIMEOUT_SECONDS, cls.READ_TIMEOUT_SECONDS),
+                                                allow_redirects=False)
                         cls._raise_if_cancelled(stopped)
                         if not 200 <= response.status_code < 300:
                             raise classify_http_error(response)
@@ -418,11 +439,13 @@ class LLMAnalysisProcessor:
                             response.close()
                     cls._raise_if_cancelled(stopped)
                     if attempt < 2 and failure.drop_response_format and "response_format" in request_payload:
+                        updates.put(f"格式兼容降级 · 即将请求 {attempt + 2}/3（重试 {attempt + 1}）")
                         request_payload.pop("response_format")
                         continue
                     delay = failure.retry_after if failure.retry_after is not None else float(attempt + 1)
                     if not failure.retryable or attempt == 2 or delay > 10:
                         raise AnalysisError(f"{request_error}: {failure}", code=failure.code) from None
+                    updates.put(f"{failure.code} · 退避中（间隔 {delay:g}s） · 下次请求 {attempt + 2}/3（重试 {attempt + 1}）")
                     if stopped.wait(delay):
                         raise AnalysisCancelled("分析已被取消")
             except Exception as exc:
@@ -434,10 +457,33 @@ class LLMAnalysisProcessor:
         request_thread = threading.Thread(target=send_request, daemon=True)
         request_thread.start()
 
-        while not completed.wait(timeout=0.1):
-            if cancel_event and cancel_event.is_set():
-                session.close()
-                raise AnalysisCancelled("分析已被取消")
+        last_message, next_update = "", 0.0
+        try:
+            while True:
+                done = completed.wait(timeout=0.1)
+                cls._raise_if_cancelled(stopped)
+                changed = False
+                while True:
+                    try:
+                        last_message = updates.get_nowait()
+                    except queue.Empty:
+                        break
+                    if request_progress:
+                        cls._raise_if_cancelled(stopped)
+                        request_progress(last_message)
+                    changed = True
+                now = time.monotonic()
+                if changed:
+                    next_update = now + cls.PROGRESS_INTERVAL_SECONDS
+                elif not done and last_message and request_progress and now >= next_update:
+                    request_progress(last_message)
+                    next_update = now + cls.PROGRESS_INTERVAL_SECONDS
+                if done:
+                    break
+        except BaseException:
+            stopped.set()
+            session.close()
+            raise
 
         cls._raise_if_cancelled(cancel_event)
         error = result.get("error")
@@ -562,6 +608,7 @@ class LLMAnalysisProcessor:
         total_records: int,
         analyzed: int,
         cancel_event: threading.Event | None = None,
+        request_progress: Callable[[str], None] | None = None,
     ) -> None:
         fallback_points = cls._fallback_summary_points(batch_results, merged)
         if len(batch_results) <= 1:
@@ -578,6 +625,7 @@ class LLMAnalysisProcessor:
                 total_records,
                 analyzed,
                 cancel_event=cancel_event,
+                request_progress=request_progress,
             )
         except AnalysisCancelled:
             raise
