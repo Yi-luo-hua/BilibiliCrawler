@@ -31,13 +31,13 @@ F 的 `check_package_install.py <wheel>` 仍只代表借用当前依赖的本机
 
 ## 本机产物记录（2026-09-01，未发布）
 
-build 1.6.0 / twine 7.0.0；版本仍为 Cargo 派生的 3.3.0。运行内容来自 F 基线，
-本批验收脚本与测试不进入包。完整库存见本机 `.runlogs/g-audit.json`。
+build 1.6.0 / twine 7.0.0；版本仍为 Cargo 派生的 3.3.0。累计 review 修复后重新从
+当前源码构建；验收脚本与测试不进入包。完整库存见本机 `.runlogs/fix-audit.json`。
 
 | 产物 | 文件数 | SHA-256 |
 |---|---:|---|
-| `bilibili_crawler-3.3.0-py3-none-any.whl` | 36 | `c590f8e3164767a6f5096d9e00e3b53395e53e9717839c5aa661db5dc6cc0c01` |
-| `bilibili_crawler-3.3.0.tar.gz` | 44 | `f9a20d3b5bdafb26ebae5bfb46007e5a3532c5d0ce47fb4c6e7573b820adcc86` |
+| `bilibili_crawler-3.3.0-py3-none-any.whl` | 36 | `c4b59ad991822e2cc358c8c64d199402bbfdfe9837d8e7b9aa226ff4341b1c32` |
+| `bilibili_crawler-3.3.0.tar.gz` | 44 | `9d01433c20da50971b5b5b534784b0c9432fc03f898fc6be91b7fca72ce65f53` |
 
 两次四解释器并发运行在 Python 3.10/sdist 的 `stage.rename(destination)` 遇到 WinError 5；
 现有日志与源码复核无法确定根因。单独复跑三次通过仍不代表并发问题解决，后续应在失败时
@@ -46,7 +46,7 @@ build 1.6.0 / twine 7.0.0；版本仍为 Cargo 派生的 3.3.0。运行内容来
 ## Windows 串行矩阵结果
 
 最终从头创建 8 个新 venv，16/16 阶段通过，没有复用前两轮的测试环境；报告为
-`.runlogs/g-matrix/matrix-4pde6fo3/report.json`（`jobs: 1`、`ok: true`、`errors: []`）。
+`.runlogs/fix-matrix/matrix-o02f4wde/report.json`（`jobs: 1`、`ok: true`、`errors: []`）。
 报告记录各阶段完整依赖版本，开始与结束时的产物 SHA-256 一致。
 
 | CPython | wheel 基础 | wheel + MCP | sdist 基础 | sdist + MCP |

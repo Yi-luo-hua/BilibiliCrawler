@@ -118,6 +118,19 @@ class AttemptTests(AgentServiceTestCase):
         self.assertEqual(self.store.load_analysis(run_id)["summary"], "legacy report")
         self.assertEqual((self.store.run_dir(run_id) / "analysis.json").read_bytes(), original_json)
 
+    def test_corrupt_legacy_report_does_not_block_reanalysis(self):
+        run_id = self.seed_run()
+        self.store.save_analysis(run_id, {"summary": "old report", "report_markdown": "# old"})
+        (self.store.run_dir(run_id) / "analysis.json").write_text("{invalid JSON", encoding="utf-8")
+        processor = FakeAnalysisProcessor(summary="recovered report")
+        service = self.make_service(processor=processor)
+
+        final = self.run_to_completion(service, service.start_analyze(run_id))
+
+        self.assertEqual(final.status, RunStatus.COMPLETED)
+        self.assertEqual(len(processor.params), 1)
+        self.assertEqual(self.store.load_analysis(run_id)["summary"], "recovered report")
+
     def test_legacy_cancelled_paid_result_is_not_promoted_to_success(self):
         run_id = self.seed_run()
         self.store.save_analysis(run_id, {"summary": "cancelled legacy", "report_markdown": "# kept"})
@@ -134,6 +147,12 @@ class AttemptTests(AgentServiceTestCase):
         saved = self.store.save_analysis(first.run_id, {"summary": "direct new value", "report_markdown": "# direct"})
         self.assertEqual(self.store.load_analysis(first.run_id)["summary"], "direct new value")
         self.assertEqual(saved["analysis_json"], self.store.artifacts(first.run_id)["analysis_json"])
+
+    def test_original_save_analysis_without_manifest_remains_readable(self):
+        run_id = new_run_id()
+        saved = self.store.save_analysis(run_id, {"summary": "direct result", "report_markdown": "# direct"})
+        self.assertEqual(self.store.load_analysis(run_id)["summary"], "direct result")
+        self.assertEqual(saved["analysis_json"], self.store.artifacts(run_id)["analysis_json"])
 
     def test_snapshot_metadata_and_artifacts_use_one_manifest_revision(self):
         service, first = self.completed_run()

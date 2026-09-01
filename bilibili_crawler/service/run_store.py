@@ -357,12 +357,22 @@ class RunStore:
         if (manifest.get("schema_version") == 2 or manifest.get("status") != RunStatus.COMPLETED
                 or not (path / ANALYSIS_JSON).is_file()):
             return None
-        result = json.loads((path / ANALYSIS_JSON).read_text(encoding="utf-8"))
-        if (path / REPORT_MD).is_file():
-            result["report_markdown"] = (path / REPORT_MD).read_text(encoding="utf-8")
-        if (path / ASSETS_DIR / "word_cloud.png").is_file():
-            result["word_cloud_image"] = "data:image/png;base64," + base64.b64encode(
-                (path / ASSETS_DIR / "word_cloud.png").read_bytes()).decode("ascii")
+        try:
+            result = json.loads((path / ANALYSIS_JSON).read_text(encoding="utf-8"))
+            if not isinstance(result, dict):
+                raise ValueError("legacy analysis is not an object")
+            if (path / REPORT_MD).is_file():
+                result["report_markdown"] = (path / REPORT_MD).read_text(encoding="utf-8")
+            if (path / ASSETS_DIR / "word_cloud.png").is_file():
+                result["word_cloud_image"] = "data:image/png;base64," + base64.b64encode(
+                    (path / ASSETS_DIR / "word_cloud.png").read_bytes()).decode("ascii")
+        except (json.JSONDecodeError, OSError, UnicodeError, ValueError):
+            # A damaged compatibility report is not authoritative. Keep its
+            # files in place, skip promotion, and let intact comments produce
+            # a fresh analysis instead of trapping every retry before the
+            # processor is called.
+            logger.warning("could not import legacy analysis for run %s; continuing without it", run_id)
+            return None
         attempt_id = "legacy-" + new_run_id()
         # Call the base implementation: this is an import, not a new processor
         # result passed through custom store transformations a second time.
@@ -563,7 +573,13 @@ class RunStore:
             "word_cloud_image": path / ASSETS_DIR / "word_cloud.png",
         }
         found = {key: str(value) for key, value in known.items() if value.is_file()}
-        manifest = manifest if manifest is not None else self.read_manifest(run_id)
+        if manifest is None:
+            # Pre-manifest callers have always been allowed to save and read
+            # analysis artifacts directly. Preserve that API while keeping an
+            # existing but unreadable manifest fail-closed.
+            if not (path / MANIFEST_NAME).is_file():
+                return found
+            manifest = self.read_manifest(run_id)
         if manifest.get("schema_version") == 2:
             current = manifest.get("current_analysis") or {}
             reference = current.get("artifacts") if current else manifest.get("artifacts")

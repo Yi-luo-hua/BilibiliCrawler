@@ -216,3 +216,11 @@ H：先随 GitHub Release 附带包资产，TestPyPI 验证后再启用正式 Py
 - 并发失败记录 `.runlogs/g-matrix/matrix-32yi47c3/`、`matrix-u52z2s10/`，单独复跑 `.runlogs/g-310-repeat-{1,2,3}.log`，全量 `.runlogs/g-review-{mcp,no-mcp,desktop}.log` 保留在本机，不纳入提交。
 - 串行完整矩阵通过：CPython 3.10.20、3.11.16、3.12.14、3.13.15，各自 wheel/sdist 基础安装及 MCP extra 均通过，共 8 个新 venv / 16 阶段。报告 `.runlogs/g-matrix/matrix-4pde6fo3/report.json` 为 `ok: true`、错误列表为空；末次哈希核对与开始时一致。基础环境均无 MCP/jieba/wordcloud/qrcode，所有阶段通过 `pip check`、真实 CLI/HTTP 爬取分析与落盘；8 个 MCP 阶段均验证两个 stdio 入口。
 - 最终表格与产物哈希见 [G 验收记录](PYTHON_PACKAGE_VALIDATION.md)。仅此 Windows 串行矩阵通过，不将单独复跑、语法解析或其他 OS 路径测试扩大为额外兼容承诺。H 尚未开始，公开发布前仍须评估未定位的并发 I/O 风险。
+
+### A–G 累计全面 review 追加修复
+
+- 累计 review 发现 2 项 P2：无 manifest 的原 `RunStore.save_analysis()` 调用可写但不能再读；损坏的旧 `analysis.json` 会在 processor 调用前反复抛错，完整评论也无法用于重分析。
+- 新增 2 项公开接口回归，均先复现失败再修复。无 manifest 时恢复读取根目录兼容产物，但已有且损坏的 manifest 仍保持 fail-closed；损坏旧报告不再晋升为 legacy 当前版本，原文件保留至新分析正常发布，重分析可以完成。
+- 最终 MCP 2.1.0 环境 323/323；无 MCP 环境 292 项（289 通过、3 个模块预期跳过）；分析尝试专项 20/20；桌面 13/13、TypeScript 和 `git diff --check` 通过。
+- 生产运行文件变化后重新从 sdist 构建 wheel，`twine check --strict` 和 30 个运行文件的产物审计通过。新 wheel/sdist 哈希及报告已更新至 [G 验收记录](PYTHON_PACKAGE_VALIDATION.md)。
+- Windows 串行矩阵重新创建 8 个 venv，CPython 3.10.20、3.11.16、3.12.14、3.13.15 的 wheel/sdist 基础与 MCP extra 共 16/16 阶段通过，报告 `.runlogs/fix-matrix/matrix-o02f4wde/report.json`。本轮未运行并发矩阵，不关闭既有 WinError 5 风险。
