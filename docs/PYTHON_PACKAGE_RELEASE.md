@@ -43,7 +43,8 @@
    `main`；`pypi` 已要求 `Yi-luo-hua` reviewer。仍须在 TestPyPI 和 PyPI 为仓库、
    environment、工作流文件配置 pending Trusted Publisher。不得创建长期 token 作为临时替代。
 2. **候选版本**：根据 A–H 的用户可见变化确定下一个 lockstep 版本，更新 Cargo、桌面配置、
-   lockfile 和 release notes；完成桌面发布门禁后创建指向候选提交的 annotated tag。
+   lockfile 和 release notes；完成桌面发布门禁后创建指向候选提交的 annotated tag。逐项清单见
+   [v3.4.0 发布准备与验收清单](RELEASE_3.4.0.md)。
 3. **GitHub 资产**：从默认分支手工运行 `Publish Python package`，选择
    `github-release`。下载四个资产并反向验证 manifest、checksum、tag peeled SHA。
 4. **TestPyPI**：选择 `testpypi`；必须由对应 environment 审批和 OIDC 发布。工作流自动
@@ -79,3 +80,6 @@ JSON API，不上传文件，也不读取本机 PyPI 凭据。
 2026-09-02 将首次公开 Python 包及 A–H 的向后兼容新增能力归入 `v3.4.0`。这是新增 CLI、
 MCP、分析尝试状态与恢复能力的次版本，不作为 `v3.3.0` 的补丁重新发布。正式标签只能在
 候选 PR 合入、桌面与 Python 包门禁通过、且 TestPyPI/PyPI Trusted Publisher 配置完成后创建。
+候选 PR 已于 2026-09-02 合入 `main`（`52281af`，Cargo 版本 3.4.0，`Python package gate` 通过）；
+后续的桌面真机验收、标签、Release 资产与索引发布按 [RELEASE_3.4.0.md](RELEASE_3.4.0.md) 执行，
+其中 PyPI 上传是唯一不可撤销的一步。
