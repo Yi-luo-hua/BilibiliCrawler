@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import re
+import subprocess
 import tarfile
 import zipfile
 from configparser import ConfigParser
@@ -99,7 +100,7 @@ def check_metadata(data, version):
     return requirements
 
 
-def audit(wheel, sdist, version, forbidden_paths=()):
+def audit(wheel, sdist, version, forbidden_paths=(), source_root=None, source_ref=None):
     require(re.fullmatch(r"\d+\.\d+\.\d+(?:[a-zA-Z0-9.]+)?", version), "invalid expected version")
     wheel_files, source_files = read_archive(wheel), read_archive(sdist)
     prefix = f"bilibili_crawler-{version}"
@@ -113,6 +114,21 @@ def audit(wheel, sdist, version, forbidden_paths=()):
     require(set(source_files) == expected_source, "unexpected or missing sdist files")
     for name in PACKAGE_FILES:
         require(wheel_files[name] == source_files[name], "wheel/sdist runtime content mismatch: " + name)
+        if source_root is not None:
+            if source_ref:
+                try:
+                    tagged_content = subprocess.check_output(
+                        ["git", "show", f"{source_ref}:{name}"], cwd=source_root,
+                        stderr=subprocess.DEVNULL,
+                    )
+                except subprocess.CalledProcessError as error:
+                    raise AuditError("tagged source runtime file missing: " + name) from error
+            else:
+                source_path = Path(source_root) / name
+                require(source_path.is_file(), "tagged source runtime file missing: " + name)
+                tagged_content = source_path.read_bytes()
+            require(wheel_files[name] == tagged_content,
+                    "artifact/tagged source runtime content mismatch: " + name)
     requirements = check_metadata(wheel_files[dist + "METADATA"], version)
     require(check_metadata(source_files["PKG-INFO"], version) == requirements, "wheel/sdist dependencies differ")
     require(wheel_files[dist + "licenses/LICENSE"] == source_files["LICENSE"], "license mismatch")
@@ -138,6 +154,7 @@ def audit(wheel, sdist, version, forbidden_paths=()):
             actual = base64.urlsafe_b64encode(hashlib.sha256(wheel_files[name]).digest()).rstrip(b"=").decode()
             require(digest == "sha256=" + actual and size == str(len(wheel_files[name])), "RECORD mismatch: " + name)
     return {"ok": True, "version": version, "runtime_files": len(PACKAGE_FILES),
+            "source_bound": source_root is not None,
             "artifacts": [{"name": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                            "files": sorted(files)} for path, files in ((wheel, wheel_files), (sdist, source_files))]}
 
@@ -148,8 +165,13 @@ def main():
     parser.add_argument("sdist", type=Path)
     parser.add_argument("--version", required=True)
     parser.add_argument("--report", type=Path)
+    parser.add_argument("--source-root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--source-ref",
+                        help="immutable git ref whose runtime blobs must match the artifacts")
     args = parser.parse_args()
-    result = audit(args.wheel, args.sdist, args.version, (Path(__file__).resolve().parents[1], Path.home()))
+    source_root = args.source_root.resolve(strict=True) if args.source_ref else None
+    result = audit(args.wheel, args.sdist, args.version,
+                   (Path(__file__).resolve().parents[1], Path.home()), source_root, args.source_ref)
     output = json.dumps(result, ensure_ascii=False, indent=2)
     if args.report:
         args.report.write_text(output + "\n", encoding="utf-8")

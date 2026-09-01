@@ -32,11 +32,18 @@ def main():
     parser.add_argument("--version", required=True)
     parser.add_argument("--python", action="append", required=True, type=Path)
     parser.add_argument("--work-dir", required=True, type=Path)
+    parser.add_argument("--source-ref",
+                        help="immutable git commit whose runtime files must match the artifacts")
     parser.add_argument("--jobs", type=int, choices=range(1, 5), default=1,
                         help="concurrent interpreters (default 1 to avoid build/smoke disk contention)")
+    parser.add_argument("--ci-shard", action="store_true",
+                        help="validate exactly one supported interpreter; CI must cover the complete matrix")
     args = parser.parse_args()
     wheel, sdist = args.wheel.resolve(strict=True), args.sdist.resolve(strict=True)
-    artifact_report = audit(wheel, sdist, args.version, (Path(__file__).resolve().parents[1], Path.home()))
+    source_root = Path(__file__).resolve().parents[1] if args.source_ref else None
+    artifact_report = audit(wheel, sdist, args.version,
+                            (Path(__file__).resolve().parents[1], Path.home()),
+                            source_root, args.source_ref)
     args.work_dir.mkdir(parents=True, exist_ok=True)
     root = Path(tempfile.mkdtemp(prefix="matrix-", dir=args.work_dir.resolve()))
     env = {key: value for key, value in os.environ.items()
@@ -56,7 +63,11 @@ def main():
         if minor in interpreters:
             raise ValueError("duplicate Python minor version")
         interpreters[minor] = (executable, ".".join(map(str, version)))
-    if set(interpreters) != {"3.10", "3.11", "3.12", "3.13"}:
+    required = {"3.10", "3.11", "3.12", "3.13"}
+    if args.ci_shard:
+        if len(interpreters) != 1 or not set(interpreters) <= required:
+            raise ValueError("a CI shard requires exactly one supported Python 3.10-3.13 interpreter")
+    elif set(interpreters) != required:
         raise ValueError("the complete 3.10-3.13 matrix is required")
     scripts = Path(__file__).resolve().parent
 
@@ -94,7 +105,8 @@ def main():
             outcomes.append({"python": version, "artifact": kind, "stages": stages})
         return outcomes
 
-    report = {"ok": False, "jobs": args.jobs, "artifacts": artifact_report, "matrix": [], "errors": []}
+    report = {"ok": False, "mode": "ci-shard" if args.ci_shard else "full-matrix",
+              "jobs": args.jobs, "artifacts": artifact_report, "matrix": [], "errors": []}
     report_path = root / "report.json"
     try:
         with ThreadPoolExecutor(max_workers=args.jobs) as pool:
@@ -105,7 +117,8 @@ def main():
                 except Exception as error:
                     report["errors"].append({"python": pending[future], "error": str(error)})
         report["matrix"].sort(key=lambda row: (row["python"], row["artifact"]))
-        report["ok"] = not report["errors"] and len(report["matrix"]) == 8
+        expected_rows = 2 if args.ci_shard else 8
+        report["ok"] = not report["errors"] and len(report["matrix"]) == expected_rows
     finally:
         report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(f"Report: {report_path}", flush=True)

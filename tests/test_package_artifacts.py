@@ -119,6 +119,19 @@ class PackageArtifactTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditError, "content mismatch"):
             audit(self.wheel, self.sdist, VERSION)
 
+    def test_artifacts_are_bound_to_tagged_runtime_source(self):
+        self.archives()
+        source_root = self.root / "checkout"
+        for name, body in self.runtime.items():
+            path = source_root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(body)
+        result = audit(self.wheel, self.sdist, VERSION, source_root=source_root)
+        self.assertTrue(result["source_bound"])
+        (source_root / "bilibili_crawler" / "agent.py").write_bytes(b"changed after build")
+        with self.assertRaisesRegex(AuditError, "tagged source runtime content mismatch"):
+            audit(self.wheel, self.sdist, VERSION, source_root=source_root)
+
     def test_archive_traversal_duplicates_links_and_limits_fail(self):
         for name in ("../escape", "/absolute", "C:/absolute", "a/../escape", "a\\escape"):
             with self.subTest(name=name):

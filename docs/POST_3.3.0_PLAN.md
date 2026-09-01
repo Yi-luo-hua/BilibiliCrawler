@@ -1,6 +1,6 @@
 # v3.3.0 之后的实施计划
 
-更新：2026-09-01。基线：已发布 v3.3.0 / `main` 的 `6ae33df`。
+更新：2026-09-02。基线：已发布 v3.3.0 / `main` 的 `6ae33df`。
 本文把 `RELEASE_3.3.0.md` 的后续路线拆成可独立验收的批次，不承诺尚未确定的发布日期。
 
 ## 当前边界
@@ -17,14 +17,14 @@
 
 | 批次 | 优先级 | 交付物 | 依赖 | 状态 |
 |---|---|---|---|---|
-| A | P0 | 完整 LLM profile、`doctor`、配置回归测试 | 当前基线 | 实现、双线 review 与验证完成；未发版 |
-| B | P1 | run 与分析尝试分离、重试与取消的原子语义 | A | 实现、双线 review 与验证完成；未发版 |
-| C | P1 | provider 错误分类、复用原 run 的恢复提示 | A；结合 B 的尝试状态 | 实现、双线 review 与验证完成；未发版 |
-| D | P1 | 耗时、超时、重试提示 | C | 实现、双线 review 与验证完成；未发版 |
-| E | P1 | 真实 MCP stdio、Windows 编码与可选 live smoke | A–D | 实现、双线 review 与离线验证完成；live 未执行 |
-| F | P1 | 命名空间、资源路径、CLI/MCP 可安装包边界 | A–C；E 提供验收基线 | 实现、双线 review 与本机安装验证完成；未发包 |
-| G | P2 | wheel/sdist 干净安装与内容审计 | F | 审计、串行矩阵与双线 review 完成；并发 I/O 风险未定位 |
-| H | P3 | GitHub 包资产、TestPyPI/PyPI、发布门禁 | G | 待开始 |
+| A | P0 | 完整 LLM profile、`doctor`、配置回归测试 | 当前基线 | **已完成**；未随新版本发布 |
+| B | P1 | run 与分析尝试分离、重试与取消的原子语义 | A | **已完成**；未随新版本发布 |
+| C | P1 | provider 错误分类、复用原 run 的恢复提示 | A；结合 B 的尝试状态 | **已完成**；未随新版本发布 |
+| D | P1 | 耗时、超时、重试提示 | C | **已完成**；未随新版本发布 |
+| E | P1 | 真实 MCP stdio、Windows 编码与可选 live smoke | A–D | **已完成**；外部付费 live smoke 保持可选、未执行 |
+| F | P1 | 命名空间、资源路径、CLI/MCP 可安装包边界 | A–C；E 提供验收基线 | **已完成**；未公开发包 |
+| G | P2 | wheel/sdist 干净安装与内容审计 | F | **已完成**；Windows 四版本并发矩阵 16/16 通过 |
+| H | P3 | GitHub 包资产、TestPyPI/PyPI、发布门禁 | G | **进行中**；自动化链路已实现，待候选版本与远端发布配置 |
 | I | P4 | 评估是否拆分版本 | 仅当用户群/发布节奏独立时 | 条件性，不排期 |
 
 每批只修改本批相关行为，验证后再进入下一批；不在单个 PR 中混合状态机、UI、命名空间迁移和发布治理。
@@ -116,7 +116,15 @@ G：构建 wheel/sdist 并执行 `twine check`；Python 3.10–3.13 全新环境
 完整门禁、复现命令与证据限制见 [Python 产物与干净安装验收](PYTHON_PACKAGE_VALIDATION.md)。
 当前矩阵针对 Windows，每个版本分别从 wheel/sdist 创建新 venv，先验证基础安装，再增加 MCP extra。
 
-H：先随 GitHub Release 附带包资产，TestPyPI 验证后再启用正式 PyPI，优先 Trusted Publishing。CI 校验版本、产物内容、安装 smoke 和哈希。公共包入口稳定后另行评估 `server.json` 与 MCP Registry。公开发布前确定包名、账户/权限与最终发布产物。
+H：先随 GitHub Release 附带包资产，TestPyPI 验证后再启用正式 PyPI，使用 Trusted Publishing，
+不保存长期上传 token。PR CI 校验版本、产物内容、Windows 3.10–3.13、Ubuntu/macOS 3.13
+干净安装 smoke 和哈希。发布工作流强制 annotated tag、Cargo/包版本、构建提交一致；TestPyPI
+发布前要求 GitHub Release 已存在逐字节相同的 wheel/sdist，PyPI 发布前再要求 TestPyPI
+存在相同 SHA-256。公共包入口稳定后另行评估 `server.json` 与 MCP Registry。
+
+具体状态、工作流和仍需人工配置的发布边界见 [Python 包发布治理](PYTHON_PACKAGE_RELEASE.md)。
+现有 `v3.3.0` 标签早于 Python 包实现，禁止把当前 3.3.0 产物追加到该历史 Release；正式发布
+必须先确定并验证下一个 lockstep 版本，再从对应标签重新构建。
 
 ## 验证记录
 
@@ -232,3 +240,20 @@ H：先随 GitHub Release 附带包资产，TestPyPI 验证后再启用正式 Py
 - 新增 2 项 Windows 回归：短暂锁前两次失败、第三次成功；持续锁用尽 6 次总尝试后任务失败并保持旧有效报告。分析尝试专项 22/22 通过。
 - 最终 MCP 2.1.0 环境 325/325；无 MCP 环境 294 项（291 通过、3 个模块预期跳过）；桌面 13/13、TypeScript 和 `git diff --check` 通过。
 - 从当前源码重新构建 sdist/wheel，`twine check --strict` 与 30 个运行文件审计通过；`--jobs 4` 重新创建 8 个 venv，CPython 3.10.20–3.13.15 的 16/16 阶段通过，报告 `.runlogs/rename-fix-matrix/matrix-z42mz8rc/report.json`。未调用真实 B 站或外部付费模型，未发布包。
+
+### H 批当前进展
+
+- 已建立 PR/main Python 包门禁与手工发布工作流。普通门禁构建一次产物，执行严格元数据、
+  内容、源码绑定和 Windows 3.10–3.13、Ubuntu/macOS 3.13 干净安装矩阵。
+- 发布只接受与 Cargo 版本一致、指向 checkout 且可从 `origin/main` 到达的 annotated tag。
+  GitHub Release 阶段构建一次；TestPyPI/PyPI 复用 Release 的 immutable 资产并核验 source
+  commit、文件名、大小、SHA-256 和 checksum，避免重复构建时间戳造成哈希变化。
+- 构建/twine 工具链使用 universal 哈希锁和 `--no-isolation`；wheel/sdist 的 30 个运行文件
+  还必须与标签 checkout 逐字节一致。相关对抗性回归及 actionlint 通过。
+- GitHub `testpypi`、`pypi` environments 已创建并仅允许 `main`；`pypi` 要求仓库管理员
+  reviewer。TestPyPI/PyPI 网站侧 pending Trusted Publisher、候选版本、正式标签和真实上传
+  尚未完成，不能把 H 或公开发包标记完成。
+- 本地最终验证：MCP 环境 330/330；无 MCP 环境 299 项（296 通过、3 个模块预期跳过）；
+  发布/产物专项 11/11，actionlint 与 `git diff --check` 通过。哈希锁 `--no-isolation`
+  真实构建、`twine check --strict`、30 个运行文件源码绑定通过；Python 3.13 CI shard 的
+  wheel/sdist 基础与 MCP 四阶段通过。远端六 shard 仍须由 PR Actions 给出独立结果。
