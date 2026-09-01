@@ -73,3 +73,9 @@ Windows 工作树可能因 Git CRLF 转换而与 tag blob 不同；`--source-ref
 `check_package_release.py --tag vX.Y.Z --require-head-tag --require-ancestor-of origin/main` 会拒绝
 轻量标签、版本不一致、标签未指向当前提交或提交不属于默认分支。远端索引验证只读取公开
 JSON API，不上传文件，也不读取本机 PyPI 凭据。
+
+## v3.4.0 候选决定
+
+2026-09-02 将首次公开 Python 包及 A–H 的向后兼容新增能力归入 `v3.4.0`。这是新增 CLI、
+MCP、分析尝试状态与恢复能力的次版本，不作为 `v3.3.0` 的补丁重新发布。正式标签只能在
+候选 PR 合入、桌面与 Python 包门禁通过、且 TestPyPI/PyPI Trusted Publisher 配置完成后创建。
