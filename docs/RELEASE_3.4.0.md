@@ -43,7 +43,12 @@
   与 `corepack pnpm@10.28.0 run typecheck`。
 - [ ] 前端构建：在 `desktop/` 运行 `corepack pnpm@10.28.0 run build`。
 - [ ] 依赖审计：在 `desktop/` 运行 `corepack pnpm@10.28.0 audit`。
-- [ ] Rust 检查：`cargo check --locked --manifest-path desktop/src-tauri/Cargo.toml`。
+- [ ] Rust 检查：**必须在 sidecar 构建完成之后**运行。先
+  `powershell -ExecutionPolicy Bypass -File scripts/build_backend.ps1 -Python $ReleasePython`
+  生成 `desktop/src-tauri/resources/backend`，再运行
+  `cargo check --locked --manifest-path desktop/src-tauri/Cargo.toml`。干净 checkout 里该目录不存在，
+  `tauri.conf.json` 又把它声明为打包资源，先跑 cargo check 会直接以
+  `resource path resources\backend doesn't exist` 失败。
 - [ ] 基础卫生：合并后设置 `$CandidateSha = git rev-parse HEAD`，运行
   `git diff --check "$CandidateSha^1" $CandidateSha`。
 - [ ] GitHub Actions `Python package gate` 在候选提交对应的 `main` push 上为绿：一次构建产物、
@@ -128,7 +133,11 @@
 - [ ] 更新本地 `main` 到 `origin/main`，确认工作区干净且没有未合并发布提交；设置
   `$CandidateSha = git rev-parse HEAD`。
 - [ ] 从 `$CandidateSha` 创建全新干净 worktree，断言其中 `git rev-parse HEAD` 等于 `$CandidateSha`
-  且 `git status --porcelain` 为空；在该 worktree 中重新运行第 2 节全部本机门禁。
+  且 `git status --porcelain` 为空；在该 worktree 中重新运行第 2 节全部本机门禁。门禁内部有顺序依赖：
+  Rust 检查排在 `build_backend.ps1` 之后，其余各项可先行。`build_installer.ps1` 会再次调用
+  `build_backend.ps1`，重复构建 sidecar 是预期行为。
+- [ ] worktree 放在短路径下（例如与仓库同级的 `BilibiliCommentsCrawler-worktrees\`）。`node_modules`
+  与 Rust target 会叠加很深的相对路径，深目录下的创建或删除会遇到 Windows `Filename too long`。
 - [ ] 在该 worktree 中使用全新 CPython 3.13.15 x64 构建环境重新运行 `scripts/build_installer.ps1`；
   只有这次构建生成的安装包才是最终 Release 资产。
 - [ ] 设置 `$Installer = Resolve-Path 'desktop/src-tauri/target/release/bundle/nsis/BilibiliCrawler-Setup-3.4.0-x64.exe'`，
