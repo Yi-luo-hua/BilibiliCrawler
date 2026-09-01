@@ -350,7 +350,19 @@ BilibiliCrawler/
 
 ## 更新日志
 
-### v3.3.0（待发布）
+### v3.4.0（待发布）
+- 新增可安装的 `bilibili-crawler` Python 包与 `bilibili-crawler`、`bilibili-crawler-mcp` 稳定命令，支持 Python 3.10–3.13；旧源码入口保留为薄兼容层。
+- 桌面端、CLI 与 MCP 统一按同一个 profile 解析 provider、model 与 API Key，避免把凭据发往错误端点。
+- 新增只读 `doctor` 诊断，展示配置来源、有效 provider/model、运行目录与 MCP 状态；只有显式要求联网检查时才访问 provider。
+- 分离持久化 run 与分析 attempt：重新分析失败或取消时保留上一份完整报告，成功后一次性原子切换有效版本。
+- 为鉴权、模型、端点、网络、超时、限流与解析失败提供稳定错误分类，可恢复故障才允许有限重试，并提示直接复用已爬取的 run。
+- 长分析进度补充已用时间、当前批次、请求次数与实际超时；连接/读取超时保持各 90 秒，不新增任务总 deadline。
+- 补齐真实 MCP stdio 子进程验收，覆盖中文内容、Windows 编码、进程重启复用 run 与可选 live smoke。
+- Windows 上目录发布遇到短暂共享锁（WinError 5/32）时按有限退避重试；持续锁与目标冲突仍 fail-closed。
+- 新增 Python 包 CI 门禁与手工发布链路：产物哈希锁定、源码逐字节绑定，GitHub Release → TestPyPI → PyPI 顺序发布并使用 OIDC Trusted Publishing。
+- 发布前仍须完成 `docs/RELEASE_3.4.0.md` 中的 Tauri 真机验收与包发布门禁；完成后再填写发布日期并创建标签。
+
+### v3.3.0 (2026.08.30)
 - 桌面评论爬取与 `source == "comments"` 的分析已迁入共享 `AgentService`，同时保留既有 RPC、事件、取消、空结果和 source 回退契约。
 - 新增适配器 outcome 通道与类型化事件，并补齐终态读取、深拷贝所有权、默认关闭零额外调用及取消竞态的回归覆盖。
 - 新增真实 `SidecarClient` 跨进程端到端测试，覆盖请求关联、进度事件、完成事件、取消与重试。
@@ -358,7 +370,7 @@ BilibiliCrawler/
 - `analysis.json`、Markdown 报告和分析归档现在都会递归脱敏已注册凭据；词云损坏或超限时只报告 warning，不再生成失效链接。
 - 分析 JSON、Markdown 与词云采用整组 staging + 原子提交，失败时回滚，避免分析产物只更新一部分。
 - MCP 扩展为 7 个工具，新增持久化 run 的列举与删除能力。
-- 发布前仍须完成 `docs/RELEASE_3.3.0.md` 中的 Tauri 真机验收；验收完成后再填写发布日期并创建标签。
+- 已按 `docs/RELEASE_3.3.0.md` 完成 Tauri 真机验收，标签 `v3.3.0` 指向 `6ae33df`，Windows x64 安装包随 GitHub Release 发布。
 
 ### v3.2.0 (2026.08.25)
 - 新增本地 MCP 服务器，agent 可越过桌面客户端直接完成「爬取 → 分析 → 导出报告」，对应 Issue #3。

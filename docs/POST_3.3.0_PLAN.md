@@ -257,3 +257,6 @@ H：先随 GitHub Release 附带包资产，TestPyPI 验证后再启用正式 Py
   发布/产物专项 11/11，actionlint 与 `git diff --check` 通过。哈希锁 `--no-isolation`
   真实构建、`twine check --strict`、30 个运行文件源码绑定通过；Python 3.13 CI shard 的
   wheel/sdist 基础与 MCP 四阶段通过。远端六 shard 仍须由 PR Actions 给出独立结果。
+- v3.4.0 候选已合入 `main`（`52281af`），Cargo 版本为 3.4.0，`Python package gate` 在该 push 上通过。
+  剩余的桌面真机验收、annotated tag、GitHub Release 资产、TestPyPI 与 PyPI 发布逐项清单见
+  [v3.4.0 发布准备与验收清单](RELEASE_3.4.0.md)；TestPyPI/PyPI 站点侧 Trusted Publisher 仍未配置。
