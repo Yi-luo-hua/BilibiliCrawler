@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { createServer } from "node:http";
 import readline from "node:readline";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -70,13 +71,17 @@ class SidecarHarness {
   private nextId = 1;
   private spawnError: Error | null = null;
 
-  constructor() {
+  constructor(realProvider = false) {
     const executable = pythonExecutable();
     this.runRoot = mkdtempSync(path.join(tmpdir(), "bilibili-sidecar-e2e-"));
     this.child = spawn(executable, [fixturePath], {
       cwd: repoRoot,
-      env: { ...process.env, BILIBILI_AGENT_RUNS_DIR: this.runRoot },
+      env: {
+        ...process.env, BILIBILI_AGENT_RUNS_DIR: this.runRoot,
+        BILIBILI_E2E_REAL_PROVIDER: realProvider ? "1" : "0",
+      },
       stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
     });
     this.client = new SidecarClient(
       (request) => this.send(request),
@@ -183,6 +188,45 @@ class SidecarHarness {
     rmSync(this.runRoot, { recursive: true, force: true });
   }
 }
+
+test("SidecarClient receives real provider waiting and retry details over JSON lines", async (t) => {
+  let requests = 0;
+  const server = createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      requests += 1;
+      if (requests === 1) {
+        response.writeHead(503, { "Content-Type": "application/json", "Retry-After": "1" });
+        response.end(JSON.stringify({ error: { message: "temporary" } }));
+      } else {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ choices: [{ message: { content: '{"summary":"桌面等待测试"}' } }] }));
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const harness = new SidecarHarness(true);
+  t.after(() => harness.close());
+  await harness.client.request("comments.start", { input: "BV1xx411c7mD", max_pages: 1 });
+  await harness.waitForEvent("progress", "comments", 0, "idle");
+  const after = harness.events.length;
+  await harness.client.request("analysis.start", {
+    source: "comments", chart_keys: ["topic_ranking"],
+    llm_config: { api_key: "sk-progress-canary-12345", model: "test-model", base_url: `http://127.0.0.1:${address.port}/v1` },
+  });
+  const finished = await harness.waitForEvent("finished", "analysis", after);
+  const progress = harness.events.slice(after).filter((event) => event.event === "analysis.progress" && event.message?.includes("第 1/1 批 ·"));
+  assert.ok(progress.some((event) => event.message?.includes("连接/读取超时 90/90s")));
+  assert.ok(progress.some((event) => event.message?.includes("退避中")));
+  assert.ok(progress.some((event) => event.message?.includes("请求 2/3（重试 1）")));
+  assert.ok(progress.every((event) => event.percent === 80));
+  assert.equal(requests, 2);
+  assert.equal(finished.result?.summary, "桌面等待测试");
+  assert.equal(JSON.stringify(progress).includes("sk-progress-canary"), false);
+});
 
 test("SidecarClient completes a persisted comment-to-analysis run over JSON lines", async (t) => {
   const harness = new SidecarHarness();

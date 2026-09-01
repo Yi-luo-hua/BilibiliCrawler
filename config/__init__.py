@@ -1,2 +1,1 @@
-# 配置模块
-
+"""Legacy checkout import namespace; implementation is in bilibili_crawler."""

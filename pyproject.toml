@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=77", "wheel", "tomli>=2; python_version < '3.11'"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bilibili-crawler"
+dynamic = ["version"]
+description = "Bilibili comment crawler with CLI, local analysis runs, and optional MCP stdio"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = ["requests>=2.31.0", "Pillow>=10.0"]
+
+[project.optional-dependencies]
+mcp = ["mcp==2.1.0"]
+analysis = ["jieba>=0.42.1", "wordcloud>=1.9.3"]
+desktop = ["qrcode>=7.4", "jieba>=0.42.1", "wordcloud>=1.9.3"]
+
+[project.scripts]
+bilibili-crawler = "bilibili_crawler.agent:main"
+bilibili-crawler-mcp = "bilibili_crawler.agent:mcp_main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["bilibili_crawler", "bilibili_crawler.*"]
+namespaces = false
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools.package-data]
+"bilibili_crawler.resources" = ["stopwords.txt"]

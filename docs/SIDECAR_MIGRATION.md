@@ -5,7 +5,7 @@
 
 | | |
 |---|---|
-| 状态 | 阶段 1–6 已合并到 `main`，自动化跨进程验证已完成。**Tauri 真机完整链路仍待发版前手工验证** |
+| 状态 | 阶段 1–6 已合并到 `main`，自动化跨进程验证已完成，v3.3.0 已发布。真机证据见 [发布验收记录](RELEASE_3.3.0.md)，后续任务见 [实施计划](POST_3.3.0_PLAN.md) |
 | 前置 | PR #5、#7、#8、#9、#12、#13、#14、#15、#16 均已合并 |
 | 迁入范围 | 评论爬取；`source` **严格等于** `comments` 的分析 |
 | 不在范围 | 扫码登录、动态爬取；`dynamics` / `all` / `auto` / 缺失 / 非法 source 的分析 |
@@ -203,7 +203,7 @@ characterization 测试把当前行为钉住，迁移后保持一致；如果之
 | `batch_size` 透传 | `test_comment_analysis_reuses_the_persisted_comment_run` | 已补（阶段 5） |
 | `export.csv` 在迁移后仍可用 | `SidecarClient completes a persisted comment-to-analysis run over JSON lines` | 已补（阶段 6） |
 | `analysis.export` 保留完整结果且导出文件不含 API Key | 同上（JSON + Markdown） | 已补（阶段 6） |
-| 真机桌面端完整链路 | 无 | 发版前必做，不以自动化测试代替 |
+| 真机桌面端完整链路 | `RELEASE_3.3.0.md` 中的真机证据 | 已记录 v3.3.0 候选验收；每次发版仍须复验，不以自动化测试代替 |
 
 ---
 

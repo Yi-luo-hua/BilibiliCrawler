@@ -1,2 +1,1 @@
-# B站评论爬虫工具
-
+"""Legacy checkout import namespace; implementation is in bilibili_crawler."""

@@ -6,6 +6,7 @@ contributor who only installed requirements.txt for desktop work -- the whole
 module skips rather than breaking `python -m unittest discover -s tests`.
 """
 import json
+import hashlib
 import tempfile
 import threading
 import unittest
@@ -101,7 +102,7 @@ class McpServerTestCase(unittest.IsolatedAsyncioTestCase):
                 if task.thread is not None:
                     task.thread.join(timeout=5)
 
-    def install_service(self, release=None, summary="整体情绪偏正面。") -> AgentService:
+    def install_service(self, release=None, summary="整体情绪偏正面。", credentials_resolver=fake_credentials) -> AgentService:
         if release is not None:
             self._releases.append(release)
 
@@ -115,7 +116,7 @@ class McpServerTestCase(unittest.IsolatedAsyncioTestCase):
             api=object(),
             crawler_factory=factory,
             analysis_processor=FakeAnalysisProcessor(summary=summary),
-            credentials_resolver=fake_credentials,
+            credentials_resolver=credentials_resolver,
         )
         self.services.append(service)
         mcp_server.set_service(service)
@@ -190,7 +191,7 @@ class CrawlToolTests(McpServerTestCase):
         self.assertIn("report_markdown", payload["artifacts"])
         self.assertIn("整体情绪偏正面", payload["summary"])
 
-    async def test_bounded_wait_returns_a_pollable_run_id_instead_of_hanging(self) -> None:
+    async def test_bounded_wait_returns_a_pollable_task_id_instead_of_hanging(self) -> None:
         # wait_seconds=0 models the case where the host's timeout would fire
         # before a long crawl finishes.
         release = threading.Event()
@@ -205,6 +206,7 @@ class CrawlToolTests(McpServerTestCase):
         self.assertTrue(payload["run_id"])
         self.assertTrue(payload["task_id"])
         self.assertIn("get_task_status", payload["next_step"])
+        self.assertIn(f'task_id="{payload["task_id"]}"', payload["next_step"])
         release.set()
 
     async def test_page_ceiling_is_enforced_even_when_the_caller_asks_for_more(self) -> None:
@@ -218,6 +220,64 @@ class CrawlToolTests(McpServerTestCase):
 
 
 class StatusAndStopTests(McpServerTestCase):
+    async def test_provider_failure_guides_retry_of_the_original_run(self) -> None:
+        from test_provider_recovery import provider, error_body, KEY, BODY_MARKER, SUCCESS
+        from src.processor.analysis_processor import LLMAnalysisProcessor
+
+        with provider([(401, error_body(), {}), (200, SUCCESS, {})]) as (url, calls):
+            service = self.install_service(credentials_resolver=lambda: LLMCredentials(KEY, url, "test-model"))
+            service._analysis_processor = LLMAnalysisProcessor
+            async with self.client() as client:
+                failed_result = await client.call_tool("crawl_and_analyze", {"url": "BV1xx411c7mD"})
+                failed = failed_result.structured_content
+                self.assertEqual(failed["error_code"], "LLM_AUTH")
+                self.assertFalse(failed["ok"])
+                self.assertIn(f'analyze_run(run_id="{failed["run_id"]}")', failed["next_step"])
+                comments = Path(failed["artifacts"]["comments_json"])
+                digest = hashlib.sha256(comments.read_bytes()).hexdigest()
+                self.assertTrue(service.wait_until_finished(failed["task_id"], 5))
+                retry = (await client.call_tool("analyze_run", {"run_id": failed["run_id"]})).structured_content
+            self.assertEqual(retry["status"], RunStatus.COMPLETED)
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(len(self.crawlers), 1)
+            self.assertEqual(hashlib.sha256(comments.read_bytes()).hexdigest(), digest)
+            self.assertEqual(retry["run_id"], failed["run_id"])
+            for result in (failed, retry):
+                self.assertNotIn(KEY, json.dumps(result))
+                self.assertNotIn(BODY_MARKER, json.dumps(result))
+
+    async def test_cancelled_retry_and_effective_report_have_distinct_query_results(self) -> None:
+        service = self.install_service()
+        release = threading.Event()
+        self._releases.append(release)
+
+        class BlockingProcessor(FakeAnalysisProcessor):
+            def analyze(self, *args, **kwargs):
+                release.wait(5)
+                return super().analyze(*args, **kwargs)
+
+        async with self.client() as client:
+            first = (await client.call_tool("crawl_and_analyze", {"url": "BV1xx411c7mD"})).structured_content
+            self.assertTrue(service.wait_until_finished(first["task_id"], 5))
+            service._analysis_processor = BlockingProcessor(summary="cancelled candidate")
+            retry = (await client.call_tool("analyze_run", {
+                "run_id": first["run_id"], "wait_seconds": 0,
+            })).structured_content
+            self.assertFalse(retry["done"])
+            await client.call_tool("stop_task", {"task_id": retry["task_id"]})
+            release.set()
+            self.assertTrue(service.wait_until_finished(retry["task_id"], 5))
+            attempt = (await client.call_tool("get_task_status", {"task_id": retry["task_id"]})).structured_content
+            effective = (await client.call_tool("get_task_status", {"run_id": first["run_id"]})).structured_content
+            self.install_service()
+            recovered = (await client.call_tool("get_task_status", {"run_id": first["run_id"]})).structured_content
+        self.assertEqual(attempt["status"], RunStatus.CANCELLED)
+        for result in (effective, recovered):
+            self.assertEqual(result["status"], RunStatus.COMPLETED)
+            self.assertTrue(result["warnings"])
+            self.assertEqual(result["artifacts"], first["artifacts"])
+            self.assertEqual(result["summary"], first["summary"])
+
     async def test_status_can_be_queried_by_run_id_after_a_restart(self) -> None:
         self.install_service()
         async with self.client() as client:

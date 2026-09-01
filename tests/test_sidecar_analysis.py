@@ -740,7 +740,7 @@ class SidecarAnalysisTests(unittest.TestCase):
     def test_analysis_processor_builds_layers_from_comment_fixture_without_real_llm(self) -> None:
         original_call_llm = LLMAnalysisProcessor._call_llm
 
-        def fake_call_llm(cls, base_url, api_key, model, records, source, strategy, chart_keys, cancel_event=None):
+        def fake_call_llm(cls, base_url, api_key, model, records, source, strategy, chart_keys, cancel_event=None, request_progress=None):
             return {
                 "summary": "整体反馈偏正向，但存在标题误解和更新频率担忧。",
                 "sentiment_counts": [{"name": "正向", "value": 2}, {"name": "负向", "value": 1}],
@@ -814,7 +814,7 @@ class SidecarAnalysisTests(unittest.TestCase):
         batch_sizes: list[int] = []
         summary_inputs: list[int] = []
 
-        def fake_call_llm(cls, base_url, api_key, model, records, source, strategy, chart_keys, cancel_event=None):
+        def fake_call_llm(cls, base_url, api_key, model, records, source, strategy, chart_keys, cancel_event=None, request_progress=None):
             batch_sizes.append(len(records))
             index = len(batch_sizes)
             return {
@@ -824,7 +824,7 @@ class SidecarAnalysisTests(unittest.TestCase):
                 "notable_quotes": [f"batch {index} quote"],
             }
 
-        def fake_call_summary_llm(cls, base_url, api_key, model, batch_results, merged, strategy, total_records, analyzed, cancel_event=None):
+        def fake_call_summary_llm(cls, base_url, api_key, model, batch_results, merged, strategy, total_records, analyzed, cancel_event=None, request_progress=None):
             summary_inputs.append(len(batch_results))
             return {
                 "summary": "integrated summary",
@@ -860,7 +860,7 @@ class SidecarAnalysisTests(unittest.TestCase):
         original_call_llm = LLMAnalysisProcessor._call_llm
         original_call_summary_llm = LLMAnalysisProcessor._call_summary_llm
 
-        def fake_call_llm(cls, base_url, api_key, model, records, source, strategy, chart_keys, cancel_event=None):
+        def fake_call_llm(cls, base_url, api_key, model, records, source, strategy, chart_keys, cancel_event=None, request_progress=None):
             index = 2 if any("batch-marker-20" in str(item.get("content", "")) for item in records) else 1
             return {
                 "summary": f"local summary {index}",
@@ -869,7 +869,7 @@ class SidecarAnalysisTests(unittest.TestCase):
                 "notable_quotes": [],
             }
 
-        def fake_call_summary_llm(cls, base_url, api_key, model, batch_results, merged, strategy, total_records, analyzed, cancel_event=None):
+        def fake_call_summary_llm(cls, base_url, api_key, model, batch_results, merged, strategy, total_records, analyzed, cancel_event=None, request_progress=None):
             raise RuntimeError("summary service down")
 
         try:
@@ -900,7 +900,7 @@ class SidecarAnalysisTests(unittest.TestCase):
         original_call_llm = LLMAnalysisProcessor._call_llm
         captured_prompt = ""
 
-        def fake_call_llm(cls, base_url, api_key, model, records, source, strategy, chart_keys, cancel_event=None):
+        def fake_call_llm(cls, base_url, api_key, model, records, source, strategy, chart_keys, cancel_event=None, request_progress=None):
             nonlocal captured_prompt
             captured_prompt = cls._build_prompt(records, source, strategy, chart_keys)
             return {
@@ -943,7 +943,7 @@ class SidecarAnalysisTests(unittest.TestCase):
         captured_chart_keys: list[str] = []
         captured_prompt = ""
 
-        def fake_call_llm(cls, base_url, api_key, model, records, source, strategy, chart_keys, cancel_event=None):
+        def fake_call_llm(cls, base_url, api_key, model, records, source, strategy, chart_keys, cancel_event=None, request_progress=None):
             nonlocal captured_chart_keys, captured_prompt
             captured_chart_keys = list(chart_keys)
             captured_prompt = cls._build_prompt(records, source, strategy, chart_keys)
@@ -985,7 +985,7 @@ class SidecarAnalysisTests(unittest.TestCase):
     def test_region_counts_split_domestic_and_overseas(self) -> None:
         original_call_llm = LLMAnalysisProcessor._call_llm
 
-        def fake_call_llm(cls, base_url, api_key, model, records, source, strategy, chart_keys, cancel_event=None):
+        def fake_call_llm(cls, base_url, api_key, model, records, source, strategy, chart_keys, cancel_event=None, request_progress=None):
             return {
                 "summary": "地域测试。",
                 "risk_points": [],
@@ -1028,7 +1028,7 @@ class SidecarAnalysisTests(unittest.TestCase):
     def test_region_map_does_not_count_dynamics_as_unknown_ip(self) -> None:
         original_call_llm = LLMAnalysisProcessor._call_llm
 
-        def fake_call_llm(cls, base_url, api_key, model, records, source, strategy, chart_keys, cancel_event=None):
+        def fake_call_llm(cls, base_url, api_key, model, records, source, strategy, chart_keys, cancel_event=None, request_progress=None):
             return {"summary": "混合数据测试。", "risk_points": [], "insights": [], "notable_quotes": []}
 
         comments = json.loads((FIXTURE_DIR / "analysis_comments.json").read_text(encoding="utf-8"))

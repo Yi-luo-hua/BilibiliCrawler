@@ -19,7 +19,17 @@
 
 BilibiliCrawler 是一个 B 站评论 / 动态爬取与舆论分析桌面工具。v2.00 起项目迁移为 **Tauri 2 + React + TypeScript** 桌面应用，Python 爬虫和分析逻辑作为本地 sidecar 后端运行，通过本地进程通信完成爬取、扫码登录、LLM 分析和导出。
 
-现已支持MCP调用，请阅读docs/MCP.md。
+现已支持 MCP 调用，请阅读 [MCP 文档](docs/MCP.md)。本分支支持从 checkout 安装 CLI/MCP 包：
+
+```powershell
+python -m pip install ".[mcp,analysis]"
+bilibili-crawler doctor
+bilibili-crawler-mcp
+```
+
+省略 extras 的 `pip install .` 只装 CLI/文本分析核心；词云/分词选 `analysis`，MCP 选 `mcp`，
+源码桌面后端选 `desktop`。尚未发布到 PyPI，不要把本地分发名视为已注册的公共包。
+包边界、旧入口兼容及安装后的数据目录见 [Python 包说明](docs/PYTHON_PACKAGE_BOUNDARY.md)。
 
 > 旧版 Python GUI / 单 exe 代码保留在 `legacy-python-gui` 分支。主分支以后以 Windows 安装包桌面应用为主。
 
@@ -253,10 +263,16 @@ cargo check --manifest-path desktop\src-tauri\Cargo.toml --locked
 ```text
 BilibiliCrawler/
 ├─ assets/                         应用 logo 与图标资源
+├─ bilibili_crawler/                唯一 Python 运行实现，可安装命名空间
+│  ├─ agent.py / mcp_server.py / sidecar.py  CLI、MCP 与桌面协议适配
+│  ├─ api/ crawler/ exporter/ processor/ service/  爬取、分析与持久化
+│  ├─ config/ utils/                默认配置与链接解析
+│  └─ resources/stopwords.txt       通过 importlib.resources 加载的词表
+├─ pyproject.toml / setup.py        包元数据、extras、入口；版本从 Cargo 派生
 ├─ backend/
-│  ├─ agent.py                    薄 CLI，也是 MCP 服务器启动入口
-│  ├─ mcp_server.py               MCP stdio 适配层（7 个工具）
-│  └─ sidecar.py                   Python sidecar 入口，与 Tauri 进程通信
+│  ├─ agent.py                    旧 CLI/MCP 兼容启动入口
+│  ├─ mcp_server.py               旧 MCP 模块别名
+│  └─ sidecar.py                   旧桌面构建/启动兼容入口
 ├─ config/
 │  └─ config.py                    全局配置
 ├─ desktop/                        Tauri + React 桌面前端
@@ -299,7 +315,7 @@ BilibiliCrawler/
 ├─ scripts/
 │  ├─ build_backend.ps1            安装 Python 依赖并用 PyInstaller 构建 sidecar
 │  └─ build_installer.ps1          NSIS 安装包构建
-├─ src/
+├─ src/                            以下旧路径仅为模块别名，不保留重复实现
 │  ├─ api/bilibili_api.py          B 站 API 封装
 │  ├─ crawler/comment_crawler.py   评论爬虫
 │  ├─ crawler/dynamic_crawler.py   动态爬虫
@@ -323,7 +339,7 @@ BilibiliCrawler/
 │  ├─ test_mcp_server.py            MCP 工具契约与不可信内容测试
 │  ├─ test_sidecar_analysis.py      sidecar 与分析回归测试
 │  └─ test_sidecar_characterization.py sidecar 端到端特征基准测试
-├─ utils/
+├─ utils/                          旧链接工具模块别名
 │  └─ helpers.py                   链接解析等工具函数
 ├─ requirements.txt
 ├─ requirements-agent.txt          MCP / CLI 额外依赖

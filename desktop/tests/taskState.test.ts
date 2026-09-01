@@ -70,3 +70,21 @@ test("a cancelled analysis becomes restartable without being marked failed", () 
   });
   assert.equal(restarted.phase, "starting");
 });
+
+test("waiting and retry messages refresh without increasing the completed percentage", () => {
+  const running = taskReducer(initialTaskState, { type: "session.running", mode: "analysis" });
+  const waiting = taskReducer(running, {
+    type: "analysis.progress", percent: 45,
+    message: "第 1/2 批 · 已用时 1s · 等待 LLM 响应 · 请求 1/3（重试 0）",
+  });
+  const retrying = taskReducer(waiting, {
+    type: "analysis.progress", percent: 45,
+    message: "第 1/2 批 · 已用时 2s · LLM_UNAVAILABLE · 退避中（间隔 1s）",
+  });
+  assert.equal(retrying.progressPercent, waiting.progressPercent);
+  assert.equal(retrying.phase, "running");
+  assert.match(retrying.progressStatus, /退避中/);
+  const legacy = taskReducer(retrying, { type: "analysis.progress", percent: 80 });
+  assert.equal(legacy.progressStatus, retrying.progressStatus);
+  assert.equal(legacy.progressPercent, 80);
+});

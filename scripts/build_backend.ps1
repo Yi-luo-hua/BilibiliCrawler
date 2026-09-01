@@ -52,6 +52,7 @@ if (Test-Path $SidecarOutputFull) {
     --name sidecar `
     --hidden-import wordcloud `
     --hidden-import jieba `
+    --collect-data bilibili_crawler.resources `
     --distpath $ResourceDir `
     --workpath $WorkDir `
     --specpath $WorkDir `

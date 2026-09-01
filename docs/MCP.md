@@ -15,6 +15,19 @@
 
 ## 安装
 
+本分支可从 checkout 安装，不需要在 MCP 宿主中设置 checkout 的 cwd：
+
+```powershell
+python -m pip install ".[mcp,analysis]"
+bilibili-crawler doctor
+bilibili-crawler-mcp
+```
+
+MCP 宿主的 command 可指定环境内 `bilibili-crawler-mcp` 的绝对路径，无须额外 args；
+也可使用该环境的 Python 执行 `-m bilibili_crawler mcp`。普通 CLI 不需要 `mcp` extra。
+下面的旧源码入口仍受支持；wheel/sdist 发布、多版本干净安装矩阵和 PyPI 公共名称尚未完成。
+详细依赖、资源及路径边界见 [Python 包说明](PYTHON_PACKAGE_BOUNDARY.md)。
+
 需要 Python 3.10+。建议用独立虚拟环境，避免与你机器上其他 MCP server 的 `mcp` 版本冲突：
 
 ```bash
@@ -27,7 +40,7 @@ python -m venv .venv-agent
 
 Linux / macOS 下把 `.venv-agent/Scripts/python.exe` 换成 `.venv-agent/bin/python`。
 
-v3.3.0 仍采用源码安装。独立 wheel / sdist、PyPI 发布与 MCP Registry 接入已列入
+已发布的 v3.3.0 仍采用源码安装。本分支新增本地可安装包；独立 wheel / sdist 公开资产、PyPI 发布与 MCP Registry 接入已列入
 [`RELEASE_3.3.0.md`](RELEASE_3.3.0.md) 的后续 Python 包计划，不属于本次发布产物。
 
 验证安装：
@@ -74,14 +87,20 @@ claude mcp add bilibili-crawler -- /path/to/.venv-agent/Scripts/python.exe -m ba
 
 只有分析类工具需要凭据；`crawl_comments` 不需要。
 
-解析顺序（先命中者生效）：
+按字段解析：非空环境变量 > 同一个桌面 profile > 默认值。
+只设置 Key 不会丢弃同一 profile 的服务地址与模型；三个环境字段都完整时不读取桌面文件。
 
-1. 环境变量 `BILIBILI_LLM_API_KEY` / `BILIBILI_LLM_BASE_URL` / `BILIBILI_LLM_MODEL`
-2. `BILIBILI_AGENT_CREDENTIALS` 指向的 `credentials.json`
-3. 自动探测桌面端的 `credentials.json`，依次尝试：
+profile 选择顺序：
+
+1. 显式设置 `BILIBILI_AGENT_CREDENTIALS` 时只使用该文件，不回退其他安装目录。
+2. 源码 checkout 未显式指定时保留原发现顺序：
    - `<仓库>/.install-test/user-data/config/credentials.json`（源码调试布局）
    - `%LOCALAPPDATA%\BilibiliCrawler\user-data\config\credentials.json`（installMode=currentUser 的默认安装位置）
    - `%PROGRAMFILES%` 与 `%PROGRAMFILES(X86)%` 下的同名路径
+   - 平台用户配置目录中的 `credentials.json`（见下一项）
+3. 普通 Python 包安装优先读取平台用户配置目录中的 `credentials.json`，然后尝试上述 Windows 桌面安装位置；不探测 checkout。
+   Windows 默认 `%LOCALAPPDATA%\BilibiliCrawler\config`；macOS 默认 `~/Library/Application Support/BilibiliCrawler/config`；
+   Linux 为 `$XDG_CONFIG_HOME/bilibili-crawler`，未设置时为 `~/.config/bilibili-crawler`。
 
 **如果你已经在桌面端配过 key**，按默认位置安装的话会被自动发现，通常什么都不用做，
 不必把明文 key 再抄一份进 MCP 宿主配置。装在非默认位置时用环境变量指过去：
@@ -90,8 +109,34 @@ claude mcp add bilibili-crawler -- /path/to/.venv-agent/Scripts/python.exe -m ba
 "env": { "BILIBILI_AGENT_CREDENTIALS": "D:\\MyApps\\BilibiliCrawler\\user-data\\config\\credentials.json" }
 ```
 
-安装版的 `user-data` 目录始终在**安装目录旁边**；按默认的 currentUser 方式安装时，安装目录就是 `%LOCALAPPDATA%\BilibiliCrawler`，因此凭据文件位于 `%LOCALAPPDATA%\BilibiliCrawler\user-data\config\credentials.json`。
-环境变量优先级高于凭据文件，方便临时切换 key。
+桌面安装版的 `user-data` 目录始终在**安装目录旁边**；按默认的 currentUser 方式安装时，安装目录就是 `%LOCALAPPDATA%\BilibiliCrawler`，因此凭据文件位于 `%LOCALAPPDATA%\BilibiliCrawler\user-data\config\credentials.json`。这与 Python 包自己的配置目录不同，读取时仍整份选择同一 profile。
+读取 `credentials.json.api_key` 时，同时读取同目录 `ui.json.llm_base_url` 与 `llm_model`；
+非空 `BILIBILI_LLM_API_KEY` / `BILIBILI_LLM_BASE_URL` / `BILIBILI_LLM_MODEL` 分别覆盖对应字段。
+只有字段仍未提供时，才使用兼容默认值 `https://api.openai.com/v1` 与 `gpt-4.1-mini`。
+Key、地址与模型不会从不同安装目录拼接。credentials 文件也可包含 `base_url` / `model`，
+但若与相邻 ui 文件冲突，需要统一配置或显式设置对应环境变量。
+
+缺失 ui 文件可使用默认值；选中的配置损坏、重复字段、类型错误、显式路径不存在则返回
+`CONFIG_INVALID`，不会静默切换 provider。地址必须为 HTTP(S)，不接受 URL 中的用户名、密码或查询参数。
+
+stdio 子进程是否继承调用者环境取决于宿主，不能假定桌面设置或终端变量会自动传入。
+非 OpenAI 用户可让宿主显式传入 `BILIBILI_AGENT_CREDENTIALS` 指向完整桌面 profile，
+或者显式传入三个 `BILIBILI_LLM_*` 字段。例如 SDK 客户端启动参数：
+
+```python
+import os
+from mcp import StdioServerParameters
+
+params = StdioServerParameters(
+    command=r"E:\path\to\BilibiliCrawler\.venv-agent\Scripts\python.exe",
+    args=["-m", "backend.agent", "mcp"],
+    cwd=r"E:\path\to\BilibiliCrawler",
+    env={**os.environ, "BILIBILI_AGENT_CREDENTIALS": r"D:\Apps\BilibiliCrawler\user-data\config\credentials.json"},
+)
+```
+
+上例 Key 在 credentials 文件中、服务地址/模型在相邻 ui 文件中，无需重复填写。
+若宿主已有旧 `BILIBILI_LLM_BASE_URL` / `BILIBILI_LLM_MODEL`，它们仍然优先；用下方 `doctor` 核对最终来源。
 
 API Key 不会写进 `manifest.json`、不会出现在日志（含异常堆栈）、也不会出现在工具返回值里；
 上游报错里回显的 key 会被替换成 `***`。
@@ -104,7 +149,7 @@ API Key 不会写进 `manifest.json`、不会出现在日志（含异常堆栈�
 |---|---|---|
 | `crawl_and_analyze` | 主入口：爬取 + 分析 + 导出报告，一次完成 | 是 |
 | `crawl_comments` | 只爬取，落盘 JSON 和 CSV | 否 |
-| `analyze_run` | 对已有 `run_id` 重新分析（旧结果归档到 `archive/`） | 是 |
+| `analyze_run` | 对已有 `run_id` 重新分析；成功切换有效版本，取消/失败保留旧报告 | 是 |
 | `get_task_status` | 查询状态、进度、计数、产物路径 | 否 |
 | `stop_task` | 停止正在跑的任务 | 否 |
 | `list_runs` | 列出持久化运行记录（最新在前） | 否 |
@@ -124,9 +169,20 @@ run_id 时生效）；省略 `prune_to` 不会默认全删，正在执行的任�
 `crawl_and_analyze` 等工具默认最多阻塞 `wait_seconds`（默认 90 秒，上限 600），
 期间通过 MCP progress 通知汇报进度。
 
-如果在窗口内没跑完，工具会带着 `done: false` 和 `run_id` 正常返回，
-之后用 `get_task_status(run_id=...)` 继续查询即可。这样长任务不会被宿主的
+如果在窗口内没跑完，工具会带着 `done: false`、`task_id` 和 `run_id` 正常返回，
+之后用 `get_task_status(task_id=...)` 查询本次尝试的最终状态。这样长任务不会被宿主的
 单次调用超时打断。
+
+按 `run_id` 查询时，运行中返回当前进度；任务结束后返回最近成功报告的状态。
+因此重分析取消/失败后，`task_id` 查询显示本次取消/失败，`run_id` 查询仍可显示
+`completed` 并附上 warning。进程重启后 task_id 不再可用，用 run_id 找回有效报告；
+每次尝试的状态和错误保留在 manifest 的 `analysis_attempts` 中。
+
+LLM 请求等待期间，stage/progress 消息约每秒刷新本次分析已用时，并显示批次、
+请求/重试次数及退避原因。等待只更新文本，不增加百分比；桌面沿用同一消息通路。
+连接超时和读取超时仍各为 90 秒，消息中的 `90/90s` 不是整个任务的总时限。
+`wait_seconds` 则只是 MCP 工具本次调用的等待窗口，超出窗口后仍按 task_id 轮询。
+详见 [长请求进度契约](ANALYSIS_PROGRESS.md)。
 
 ---
 
@@ -137,13 +193,23 @@ run_id 时生效）；省略 `prune_to` 不会默认全删，正在执行的任�
   manifest.json     状态、计数、参数、产物清单
   comments.json     清洗后的评论
   comments.csv      Excel 可直接打开
-  analysis.json     完整分析结果
-  report.md         Markdown 报告
+  analysis.json     当前报告的兼容副本
+  report.md         Markdown 兼容副本
+  analysis-attempts/<attempt_id>/
+    analysis.json   本次尝试的完整分析结果
+    report.md       本次尝试的 Markdown 报告
+    assets/         可选词云图片
 ```
 
 目录内所有文件都采用「临时文件 + 原子替换」写入，进程中途被杀不会留下截断的
 `manifest.json` 或半截 CSV。若 CSV 导出失败，任务会在 `warnings` 里明确报告，
 而不是静默地只留下 JSON。
+
+分析先完整落定一个不可变版本目录，再原子更新 manifest 的 `current_analysis` 指针。
+读取完整结果应使用 `artifacts` 返回的版本路径；根目录兼容副本不保证多文件原子刷新。
+取消或失败不会替换上一份已提交报告；成功后的旧兼容副本仍归档到 `archive/`。
+副本刷新失败会保留成功版本并记录 warning。详细状态与兼容边界见
+[分析尝试契约](ANALYSIS_ATTEMPTS.md)。
 
 仓库目录不可写时自动回落到 `%LOCALAPPDATA%\BilibiliCrawler\analysis-runs\`，
 与桌面端 `analysis-assets` 采用同一套目录选择策略。可用 `BILIBILI_AGENT_RUNS_DIR` 覆盖。
@@ -188,6 +254,27 @@ MCP 工具可被 agent 循环调用，压力远高于人点 GUI，因此 headles
 
 ## 故障排查
 
+**先检查最终配置（不显示 API Key）**
+
+```bash
+python -m backend.agent doctor
+python -m backend.agent doctor --check-provider --timeout 10
+```
+
+默认只读、不联网、不创建或迁移运行目录，输出配置来源、有效服务地址/模型、MCP SDK 版本及
+运行目录的权限估计。退出码 0 表示 profile 和目录预检通过，1 表示配置/目录或显式连通性检查失败。
+SDK 未安装会标明 `installed: false`，不影响普通 CLI 的诊断成功；MCP 服务器仍需安装 requirements-agent.txt。
+
+`--check-provider` 才发送带鉴权的 GET `/models`，不跟随重定向，不打印响应正文，不发送评论、
+不调用付费聊天接口。成功不代表所选模型已通过分析验证；部分 provider 不支持模型列表接口。
+`--timeout` 为连接/读取超时（大于 0 且不超过 60 秒），不是整个分析任务的超时设置。
+运行目录只做权限估计，没有实际写文件，Windows ACL 的真实可写性以运行时检查为准。
+诊断 JSON 使用 ASCII 转义，在 GBK 控制台和 UTF-8 宿主间均可解析；解析后中文字段正常。
+
+**`[CONFIG_INVALID] LLM 配置错误`**
+检查所选 credentials 文件及相邻 ui 文件的 UTF-8 JSON、字段类型与冲突。
+若刚切换 provider，用三个显式环境字段完整指定配置，或修正同一个桌面 profile；不要只换 Key 后沿用旧地址。
+
 **宿主显示服务器启动失败**
 先手动跑一次，直接看 stderr：
 
@@ -203,6 +290,28 @@ MCP 工具可被 agent 循环调用，压力远高于人点 GUI，因此 headles
 
 **`[NO_CREDENTIALS] 缺少 LLM API Key`**
 `crawl_comments` 不需要凭据，可以先用它验证链路；分析类工具见上面的「LLM 凭据」。
+
+**爬取成功、分析失败**
+评论和 run_id 会保留；按返回的 `next_step` 修正配置或等待，再调用
+`analyze_run(run_id="...")`，无需重新爬取。CLI 也会给出对应 `analyze-run` 命令。
+
+| error_code | 含义与操作 |
+|---|---|
+| `LLM_AUTH` | 401/403；检查 Key、服务权限及 doctor 配置 |
+| `LLM_MODEL` | provider 明确指出模型参数错误；核对模型名/权限 |
+| `LLM_ENDPOINT` | 路由、方法或重定向不被接受；核对 base_url，普通 404 不断言模型不存在 |
+| `LLM_REQUEST_INVALID` | 其他请求参数错误；检查 provider 支持能力 |
+| `LLM_TLS` | 证书/TLS 失败；修复证书或代理，不关闭证书验证 |
+| `LLM_NETWORK` / `LLM_TIMEOUT` | 网络/超时；已发送的请求可能消费额度，人工确认后再重试 |
+| `LLM_RATE_LIMIT` | 限流或额度不足；等待或检查账户额度 |
+| `LLM_UNAVAILABLE` | 服务暂时不可用；等待恢复 |
+| `LLM_RESPONSE_INVALID` | 响应 JSON/内容格式错误；检查模型输出能力 |
+
+每个聊天请求最多发送三次，包括明确拒绝 `response_format` 时的一次兼容降级。
+只有暂时性限流、部分服务错误和连接超时自动重试；读取超时、连接中断、鉴权、配置、
+TLS、额度不足、解析错误不自动重放。超过 10 秒的 Retry-After 交由用户稍后重试。
+批次结果已经完成而总结整合失败时保留已有结果，并记录 warning。
+详见 [Provider 错误与恢复契约](PROVIDER_RECOVERY.md)。
 
 **`[BUSY] 已有任务正在运行`**
 本进程同时只跑一个任务。用返回里的 `task_id` 调 `stop_task`，或等它结束。
@@ -247,3 +356,35 @@ MCP 工具可被 agent 循环调用，压力远高于人点 GUI，因此 headles
 ```
 
 未安装 MCP SDK 时 `tests/test_mcp_server.py` 会整体跳过，其余测试照常运行。
+
+`tests/test_mcp_stdio.py` 使用 SDK 启动真实 `python -m backend.agent mcp` 子进程，
+在 loopback 夹具下验证 7 工具、中文编码、桌面双文件配置、环境覆盖、取消和重启复用。
+该模块同样在未安装 MCP 时跳过。测试网络限制和证据边界见
+[stdio 验收契约](MCP_STDIO_VALIDATION.md)。
+
+可选外网 smoke 默认只说明跳过，不读取凭据、不联网、不创建 run：
+
+```powershell
+python scripts/smoke_mcp_stdio.py
+```
+
+确实要检查 B 站和已配置的模型时，先指定测试范围，再显式允许 live 调用（可能产生费用）：
+
+```powershell
+$env:BILIBILI_MCP_SMOKE_URL = "BV1GJ411x7h7"
+$env:BILIBILI_MCP_SMOKE_MAX_PAGES = "1"
+$env:BILIBILI_MCP_SMOKE_SAMPLE_SIZE = "20"
+python scripts/smoke_mcp_stdio.py --live
+```
+
+目标支持 BV 号或对应视频 URL。脚本限制 1–5 页、20–300 条抽样，不采集楼中楼；
+`BILIBILI_MCP_SMOKE_WAIT_SECONDS` 可设 1–120 秒，默认 90 秒。
+这只是等待窗口，不是 provider 的计费限额或总体执行 deadline；超窗会请求停止并以失败记录，
+已经发出的模型请求仍可能计费。结果 JSON 记录时间、测试范围、run_id、状态及有限元数据，
+不打印 Key 或完整评论。子进程配置仍遵循本文的 profile/环境规则。
+停止、轮询或关闭传输失败时，报告仍保留已获得的 run_id/task_id、最近状态、计数及产物名称；
+这些状态是最后一次成功响应，不代表异常后仍然实时可用。异常只报告类型，不输出正文或 SDK 原始日志。
+脚本在本次传输及清理期间临时禁用父进程日志，结束后恢复原设置；子进程 stderr 另行隔离。
+`tests/test_mcp_smoke_live.py` 用替代打印子进程和内存客户端验收异常日志与元数据保留，不访问外网；
+未安装 MCP 时该模块同样跳过。
+外网 smoke 不加入默认测试门禁，离线通过不代表外部 provider 已验收。

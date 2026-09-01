@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backend.sidecar import Sidecar, SidecarServices
-from src.processor.analysis_processor import AnalysisCancelled
+from src.processor.analysis_processor import AnalysisCancelled, LLMAnalysisProcessor
 
 
 COMMENT = {
@@ -149,7 +149,8 @@ def main() -> None:
     services = SidecarServices(
         api=object(),
         comment_crawler_factory=FixtureCrawler,
-        analysis_processor=FixtureAnalysisProcessor(),
+        analysis_processor=(LLMAnalysisProcessor if os.environ.get("BILIBILI_E2E_REAL_PROVIDER") == "1"
+                            else FixtureAnalysisProcessor()),
     )
     sidecar = FixtureSidecar(services=services)
     sidecar.emit("ready")
