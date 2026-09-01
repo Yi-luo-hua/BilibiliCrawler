@@ -1,11 +1,13 @@
 """A cancelled retry must not invalidate an already committed report."""
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
 import threading
 from pathlib import Path
+from unittest import skipUnless
 from unittest.mock import patch
 
 from test_agent_service import AgentServiceTestCase, FakeAnalysisProcessor, WordCloudProcessor, fake_credentials
@@ -229,6 +231,50 @@ class AttemptTests(AgentServiceTestCase):
         self.assertEqual(retry.status, RunStatus.FAILED)
         self.assertEqual(self.store.load_analysis(first.run_id)["summary"], "old report")
         self.assertFalse(list(self.store.run_dir(first.run_id).glob(".analysis-stage-*")))
+
+    @skipUnless(os.name == "nt", "Windows directory sharing semantics")
+    def test_transient_windows_directory_lock_is_retried_before_analysis_fails(self):
+        service, first = self.completed_run()
+        service._analysis_processor = FakeAnalysisProcessor(summary="retried publish")
+        real_rename = Path.rename
+        failures = [5, 32]
+        calls = []
+
+        def locked_twice(source, destination):
+            calls.append((source, destination))
+            if failures:
+                error = PermissionError(13, "temporary directory lock")
+                error.winerror = failures.pop(0)
+                raise error
+            return real_rename(source, destination)
+
+        with patch.object(Path, "rename", locked_twice):
+            retry = self.run_to_completion(service, service.start_analyze(first.run_id))
+
+        self.assertEqual(retry.status, RunStatus.COMPLETED)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(self.store.load_analysis(first.run_id)["summary"], "retried publish")
+
+    @skipUnless(os.name == "nt", "Windows directory sharing semantics")
+    def test_persistent_windows_directory_lock_exhausts_retry_budget(self):
+        service, first = self.completed_run()
+        service._analysis_processor = FakeAnalysisProcessor(summary="never published")
+        calls = []
+
+        def always_locked(source, destination):
+            calls.append((source, destination))
+            error = PermissionError(13, "persistent directory lock")
+            error.winerror = 5
+            raise error
+
+        with patch.object(Path, "rename", always_locked), \
+                patch("src.service.run_store.time.sleep") as pause:
+            retry = self.run_to_completion(service, service.start_analyze(first.run_id))
+
+        self.assertEqual(retry.status, RunStatus.FAILED)
+        self.assertEqual(len(calls), 6)
+        self.assertEqual(pause.call_count, 5)
+        self.assertEqual(self.store.load_analysis(first.run_id)["summary"], "old report")
 
     def test_manifest_commit_failure_preserves_old_version_and_reports_saved_candidate(self):
         service, first = self.completed_run()

@@ -23,6 +23,7 @@ import re
 import secrets
 import shutil
 import tempfile
+import time
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -49,10 +50,37 @@ ARCHIVE_DIR = "archive"
 ATTEMPTS_DIR = "analysis-attempts"
 ATTEMPT_ID_RE = re.compile(r"^(?:task|legacy)-[0-9]{8}-[0-9]{6}-[0-9a-f]{8}$")
 ANALYSIS_KEYS = ("analysis_json", "report_markdown", "word_cloud_image")
+WINDOWS_DIRECTORY_RENAME_DELAYS = (0.05, 0.1, 0.2, 0.4, 0.8) if os.name == "nt" else ()
 
 
 def new_run_id() -> str:
     return f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(4)}"
+
+
+def _publish_directory(source: Path, destination: Path) -> None:
+    """Atomically publish a staged directory, tolerating brief Windows scans.
+
+    Defender, indexers, and file watchers can open a newly written child long
+    enough for Windows to reject the parent-directory rename with WinError 5
+    or 32. Retry only that sharing shape while the source is intact and the
+    destination is still absent; path, collision, and permission errors keep
+    their original fail-closed behavior.
+    """
+    delays = iter(WINDOWS_DIRECTORY_RENAME_DELAYS)
+    while True:
+        try:
+            source.rename(destination)
+            return
+        except PermissionError as exc:
+            retryable = (
+                getattr(exc, "winerror", None) in {5, 32}
+                and source.is_dir()
+                and not destination.exists()
+            )
+            delay = next(delays, None) if retryable else None
+            if delay is None:
+                raise
+            time.sleep(delay)
 
 
 def _atomic_write_bytes(path: Path, payload: bytes) -> None:
@@ -330,7 +358,7 @@ class RunStore:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 if destination.exists():
                     raise ServiceError(ErrorCode.INVALID_INPUT, "analysis attempt 已保存，不允许覆盖")
-                stage.rename(destination)
+                _publish_directory(stage, destination)
             else:
                 self._commit_staged_analysis(path, stage)
             return artifacts

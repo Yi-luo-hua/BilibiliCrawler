@@ -32,21 +32,23 @@ F 的 `check_package_install.py <wheel>` 仍只代表借用当前依赖的本机
 ## 本机产物记录（2026-09-01，未发布）
 
 build 1.6.0 / twine 7.0.0；版本仍为 Cargo 派生的 3.3.0。累计 review 修复后重新从
-当前源码构建；验收脚本与测试不进入包。完整库存见本机 `.runlogs/fix-audit.json`。
+当前源码构建；验收脚本与测试不进入包。完整库存见本机 `.runlogs/rename-fix-audit.json`。
 
 | 产物 | 文件数 | SHA-256 |
 |---|---:|---|
-| `bilibili_crawler-3.3.0-py3-none-any.whl` | 36 | `c4b59ad991822e2cc358c8c64d199402bbfdfe9837d8e7b9aa226ff4341b1c32` |
-| `bilibili_crawler-3.3.0.tar.gz` | 44 | `9d01433c20da50971b5b5b534784b0c9432fc03f898fc6be91b7fca72ce65f53` |
+| `bilibili_crawler-3.3.0-py3-none-any.whl` | 36 | `50ce075154c4ad1fdaef8d2740a98606c527016fa6096b4c0f870cfa387cce98` |
+| `bilibili_crawler-3.3.0.tar.gz` | 44 | `acdf3d43302ace33981c9706419773fee6e28d5c380665026fe738ace77e23ce` |
 
-两次四解释器并发运行在 Python 3.10/sdist 的 `stage.rename(destination)` 遇到 WinError 5；
-现有日志与源码复核无法确定根因。单独复跑三次通过仍不代表并发问题解决，后续应在失败时
-捕获文件系统事件/句柄证据。并发日志与串行最终结论分别保留，不修改生产持久化逻辑来处理此风险。
+两次四解释器并发运行曾在 Python 3.10/sdist 的 `stage.rename(destination)` 遇到 WinError 5。
+最小 NTFS 探针确认 staging 内任一文件被打开时会产生同样错误，关闭句柄后原目录可立即发布；
+正常保存点没有本进程自持句柄，24 次并发安装态 smoke 全部通过，因此根因收敛为外部扫描器的
+短暂 Windows 共享锁。目录发布现在只对 WinError 5/32、源仍完整且目标不存在的情况执行总计
+1.55 秒的有限退避；其他权限、路径和冲突错误仍立即失败。
 
-## Windows 串行矩阵结果
+## Windows 并发矩阵结果
 
 最终从头创建 8 个新 venv，16/16 阶段通过，没有复用前两轮的测试环境；报告为
-`.runlogs/fix-matrix/matrix-o02f4wde/report.json`（`jobs: 1`、`ok: true`、`errors: []`）。
+`.runlogs/rename-fix-matrix/matrix-z42mz8rc/report.json`（`jobs: 4`、`ok: true`、`errors: []`）。
 报告记录各阶段完整依赖版本，开始与结束时的产物 SHA-256 一致。
 
 | CPython | wheel 基础 | wheel + MCP | sdist 基础 | sdist + MCP |
@@ -59,4 +61,5 @@ build 1.6.0 / twine 7.0.0；版本仍为 Cargo 派生的 3.3.0。累计 review �
 每阶段均验证 help/doctor/list-runs、包资源、用户目录、`pip check`、真实 HTTP 爬取与
 原 run 分析、评论哈希不变和全 run canary 零命中。MCP 阶段另验证 console/module 两个
 stdio 入口的 7 工具握手。基础环境确实没有 MCP/jieba/wordcloud/qrcode；所有分发来自 venv。
-这份通过记录不关闭上面的并发 WinError 5 风险，也不代表 macOS/Linux 实机或公开发布完成。
+注入 WinError 5/32 的回归分别验证短暂锁恢复和持续锁耗尽后 fail-closed；这份通过记录不代表
+macOS/Linux 实机或公开发布完成。

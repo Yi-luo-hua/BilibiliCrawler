@@ -224,3 +224,11 @@ H：先随 GitHub Release 附带包资产，TestPyPI 验证后再启用正式 Py
 - 最终 MCP 2.1.0 环境 323/323；无 MCP 环境 292 项（289 通过、3 个模块预期跳过）；分析尝试专项 20/20；桌面 13/13、TypeScript 和 `git diff --check` 通过。
 - 生产运行文件变化后重新从 sdist 构建 wheel，`twine check --strict` 和 30 个运行文件的产物审计通过。新 wheel/sdist 哈希及报告已更新至 [G 验收记录](PYTHON_PACKAGE_VALIDATION.md)。
 - Windows 串行矩阵重新创建 8 个 venv，CPython 3.10.20、3.11.16、3.12.14、3.13.15 的 wheel/sdist 基础与 MCP extra 共 16/16 阶段通过，报告 `.runlogs/fix-matrix/matrix-o02f4wde/report.json`。本轮未运行并发矩阵，不关闭既有 WinError 5 风险。
+
+### 并发 WinError 5 定位与修复
+
+- 历史两次失败均为同卷、目标不存在时发布非空 staging 目录遇到 WinError 5。最小 NTFS 探针复现了“子文件被打开 → 同样错误；关闭句柄 → 原目录立即发布”，正常保存点未发现本进程自持句柄；排除 pip 后同一 3.10/sdist 环境并发 24 次 smoke 全部通过，根因收敛为 Defender、索引器或文件监视器造成的短暂外部共享锁，无法从历史日志反查具体进程。
+- 目录发布仅在 Windows WinError 5/32、源目录仍完整且目标不存在时按 50/100/200/400/800ms 有限退避。持续锁、目标冲突、路径和其他权限错误仍 fail-closed，不改变原子版本发布及 manifest 指针顺序。
+- 新增 2 项 Windows 回归：短暂锁前两次失败、第三次成功；持续锁用尽 6 次总尝试后任务失败并保持旧有效报告。分析尝试专项 22/22 通过。
+- 最终 MCP 2.1.0 环境 325/325；无 MCP 环境 294 项（291 通过、3 个模块预期跳过）；桌面 13/13、TypeScript 和 `git diff --check` 通过。
+- 从当前源码重新构建 sdist/wheel，`twine check --strict` 与 30 个运行文件审计通过；`--jobs 4` 重新创建 8 个 venv，CPython 3.10.20–3.13.15 的 16/16 阶段通过，报告 `.runlogs/rename-fix-matrix/matrix-z42mz8rc/report.json`。未调用真实 B 站或外部付费模型，未发布包。
