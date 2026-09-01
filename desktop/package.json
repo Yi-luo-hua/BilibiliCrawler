@@ -41,6 +41,7 @@
   },
   "pnpm": {
     "overrides": {
+      "browserslist": "4.28.8",
       "esbuild": "0.28.2",
       "nanoid": "3.3.18",
       "postcss": "8.5.26"
