@@ -93,7 +93,7 @@ class ProviderTests(unittest.TestCase):
             self.assertNotIn("response_format", calls[1])
 
     def test_other_parameter_error_does_not_trigger_format_fallback(self):
-        for param in ("temperature", None):
+        for param in ("top_p", None):
             body = {"error": {"param": param, "code": "unsupported_parameter",
                               "message": "temperature is not supported; response_format is supported"}}
             with self.subTest(param=param), provider([(400, body, {})]) as (url, calls):
@@ -105,6 +105,101 @@ class ProviderTests(unittest.TestCase):
                        (200, SUCCESS, {})]) as (url, calls):
             self.assertEqual(self.call(url)["summary"], "recovered")
             self.assertEqual(len(calls), 2)
+
+    def test_only_structured_temperature_rejection_drops_that_field_once(self):
+        with provider([(400, error_body("unsupported_parameter", "temperature"), {}),
+                       (200, SUCCESS, {})]) as (url, calls):
+            self.assertEqual(self.call(url)["summary"], "recovered")
+            self.assertEqual(len(calls), 2)
+            self.assertIn("temperature", calls[0])
+            self.assertNotIn("temperature", calls[1])
+            # Only the rejected field is dropped; the rest of the payload stands.
+            self.assertIn("response_format", calls[1])
+            self.assertEqual({k: v for k, v in calls[0].items() if k != "temperature"}, calls[1])
+
+    def test_unstructured_or_unrelated_temperature_errors_fail_closed(self):
+        bodies = [
+            # Free text alone never establishes which field the provider rejected.
+            {"error": {"message": "temperature is not supported"}},
+            {"error": {"code": "unsupported_parameter",
+                       "message": "temperature is not supported"}},
+            # A structured rejection naming another field must not drop temperature.
+            {"error": {"code": "unsupported_parameter", "param": "top_p",
+                       "message": f"{KEY} {BODY_MARKER}"}},
+            # Temperature named without an unsupported-parameter code stays ambiguous.
+            {"error": {"code": "invalid_request_error", "param": "temperature",
+                       "message": f"{KEY} {BODY_MARKER}"}},
+            {"error": {}},
+        ]
+        for body in bodies:
+            with self.subTest(body=json.dumps(body)), provider([(400, body, {})]) as (url, calls):
+                with self.assertRaises(AnalysisError) as raised:
+                    self.call(url)
+                self.assertEqual(raised.exception.code, "LLM_REQUEST_INVALID")
+                self.assertEqual(len(calls), 1)
+                self.assertNotIn(KEY, str(raised.exception))
+                self.assertNotIn(BODY_MARKER, str(raised.exception))
+
+    def test_request_invalid_surfaces_only_sanitized_code_and_param(self):
+        with provider([(400, error_body("unsupported_parameter", "top_p"), {})]) as (url, _):
+            with self.assertRaises(AnalysisError) as raised:
+                self.call(url)
+            message = str(raised.exception)
+            self.assertIn("unsupported_parameter", message)
+            self.assertIn("top_p", message)
+            self.assertNotIn(KEY, message)
+            self.assertNotIn(BODY_MARKER, message)
+
+    def test_unsafe_code_and_param_are_omitted_rather_than_reflected(self):
+        unsafe = [f"sk-leak {KEY}", BODY_MARKER + " with spaces", "x" * 80,
+                  "值不安全", "<script>", 12345, {"nested": "object"}]
+        for value in unsafe:
+            body = {"error": {"code": value, "param": value, "message": f"{KEY} {BODY_MARKER}"}}
+            with self.subTest(value=repr(value)), provider([(400, body, {})]) as (url, calls):
+                with self.assertRaises(AnalysisError) as raised:
+                    self.call(url)
+                message = str(raised.exception)
+                self.assertEqual(raised.exception.code, "LLM_REQUEST_INVALID")
+                self.assertEqual(len(calls), 1)
+                self.assertNotIn(KEY, message)
+                self.assertNotIn(BODY_MARKER, message)
+                self.assertNotIn("script", message)
+                self.assertNotIn("不安全", message)
+
+    def test_missing_code_and_param_leave_the_message_unadorned(self):
+        with provider([(400, {"error": {"message": f"{KEY} {BODY_MARKER}"}}, {})]) as (url, _):
+            with self.assertRaises(AnalysisError) as raised:
+                self.call(url)
+            message = str(raised.exception)
+            self.assertNotIn("code=", message)
+            self.assertNotIn("param=", message)
+            self.assertNotIn(KEY, message)
+
+    def test_both_compatibility_drops_share_the_single_request_budget(self):
+        with provider([(400, error_body("unsupported_parameter", "response_format"), {}),
+                       (400, error_body("unsupported_parameter", "temperature"), {}),
+                       (200, SUCCESS, {})]) as (url, calls):
+            self.assertEqual(self.call(url)["summary"], "recovered")
+            self.assertEqual(len(calls), 3)
+            self.assertNotIn("response_format", calls[2])
+            self.assertNotIn("temperature", calls[2])
+        with provider([(503, error_body(), {"Retry-After": "0"}),
+                       (400, error_body("unsupported_parameter", "temperature"), {}),
+                       (503, error_body(), {"Retry-After": "0"})]) as (url, calls):
+            with self.assertRaises(AnalysisError) as raised:
+                self.call(url)
+            self.assertEqual(len(calls), 3)
+            self.assertEqual(raised.exception.code, "LLM_UNAVAILABLE")
+
+    def test_repeated_temperature_rejection_is_not_replayed_without_progress(self):
+        # The field is gone after the first drop, so a second identical rejection
+        # must end the attempt instead of looping on an unchanged payload.
+        with provider([(400, error_body("unsupported_parameter", "temperature"), {})]) as (url, calls):
+            with self.assertRaises(AnalysisError) as raised:
+                self.call(url)
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(raised.exception.code, "LLM_REQUEST_INVALID")
+            self.assertNotIn("temperature", calls[1])
 
     def test_transient_response_recovers_with_bounded_retries(self):
         for status in (429, 500, 502, 503, 504):

@@ -411,6 +411,10 @@ class LLMAnalysisProcessor:
                         updates.put(f"格式兼容降级 · 即将请求 {attempt + 2}/3（重试 {attempt + 1}）")
                         request_payload.pop("response_format")
                         continue
+                    if attempt < 2 and failure.drop_temperature and "temperature" in request_payload:
+                        updates.put(f"采样参数兼容降级 · 即将请求 {attempt + 2}/3（重试 {attempt + 1}）")
+                        request_payload.pop("temperature")
+                        continue
                     delay = failure.retry_after if failure.retry_after is not None else float(attempt + 1)
                     if not failure.retryable or attempt == 2 or delay > 10:
                         raise AnalysisError(f"{request_error}: {failure}", code=failure.code) from None

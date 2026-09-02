@@ -24,11 +24,13 @@ class AnalysisCancelled(AnalysisError):
 
 class ProviderError(AnalysisError):
     def __init__(self, code: str, message: str, *, retryable: bool = False,
-                 retry_after: float | None = None, drop_response_format: bool = False):
+                 retry_after: float | None = None, drop_response_format: bool = False,
+                 drop_temperature: bool = False):
         super().__init__(message, code=code)
         self.retryable = retryable
         self.retry_after = retry_after
         self.drop_response_format = drop_response_format
+        self.drop_temperature = drop_temperature
 
 
 def retry_after_seconds(value: str | None) -> float | None:
@@ -42,6 +44,31 @@ def retry_after_seconds(value: str | None) -> float | None:
         except (ValueError, TypeError, OverflowError):
             return None
     return max(0.0, seconds) if math.isfinite(seconds) else None
+
+
+_SAFE_TOKEN = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,39}$")
+
+
+def _safe_token(value: object) -> str:
+    """Return a provider-supplied identifier only when it cannot carry payload.
+
+    Codes and params are remote text like any other field, so they are echoed
+    only when they look like a bare identifier: ASCII, bounded, no whitespace.
+    Anything else is dropped rather than truncated or escaped.
+    """
+    if not isinstance(value, str):
+        return ""
+    token = value.strip().lower()
+    return token if _SAFE_TOKEN.match(token) else ""
+
+
+def _error_detail(error: dict) -> str:
+    code = _safe_token(error.get("code")) or _safe_token(error.get("type"))
+    param = _safe_token(error.get("param"))
+    parts = [f"code={code}"] if code else []
+    if param:
+        parts.append(f"param={param}")
+    return f"（{'，'.join(parts)}）" if parts else ""
 
 
 def classify_http_error(response: requests.Response) -> ProviderError:
@@ -77,8 +104,14 @@ def classify_http_error(response: requests.Response) -> ProviderError:
                 message,
             ))
         )
-        return ProviderError(ErrorCode.LLM_REQUEST_INVALID, f"LLM 请求配置不被接受（HTTP {status}），请核对服务支持的参数。",
-                             drop_response_format=format_rejected)
+        # Sampling fields are dropped only on a structured rejection that names
+        # the field. Free text alone cannot establish which field was refused,
+        # and a code without `param` may describe any part of the payload.
+        temperature_rejected = param == "temperature" and unsupported
+        return ProviderError(ErrorCode.LLM_REQUEST_INVALID,
+                             f"LLM 请求配置不被接受（HTTP {status}），请核对服务支持的参数。{_error_detail(error)}",
+                             drop_response_format=format_rejected,
+                             drop_temperature=temperature_rejected)
     if status in {404, 405} or 300 <= status < 400:
         return ProviderError(ErrorCode.LLM_ENDPOINT, f"LLM 端点或路由不可用（HTTP {status}），请核对 base_url 与模型配置。")
     if status in {500, 502, 503, 504}:
