@@ -52,6 +52,9 @@ struct UiConfig {
 
 /// A user-authored analysis angle. The id indexes results and historical
 /// reports, so it is generated once by the UI and never rewritten here.
+///
+/// There is deliberately no `enabled` flag: `analysis_chart_keys` is the one
+/// selection list, and a second source of truth could contradict it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CustomModule {
     #[serde(default)]
@@ -60,8 +63,6 @@ struct CustomModule {
     title: String,
     #[serde(default)]
     prompt: String,
-    #[serde(default)]
-    enabled: bool,
 }
 
 impl SidecarState {
@@ -368,7 +369,7 @@ fn normalize_custom_modules(modules: Vec<CustomModule>) -> Vec<CustomModule> {
         if title.is_empty() || prompt.is_empty() {
             continue;
         }
-        normalized.push(CustomModule { id, title, prompt, enabled: module.enabled });
+        normalized.push(CustomModule { id, title, prompt });
         if normalized.len() >= CUSTOM_MODULE_SAVED_LIMIT {
             break;
         }
@@ -542,7 +543,6 @@ mod tests {
             id: id.to_string(),
             title: title.to_string(),
             prompt: prompt.to_string(),
-            enabled: true,
         }
     }
 
@@ -588,6 +588,16 @@ mod tests {
         assert_eq!(ids, vec!["custom_a1b2c3"]);
         assert_eq!(normalized[0].title, "标题");
         assert_eq!(normalized[0].prompt, "提示");
+    }
+
+    #[test]
+    fn an_unknown_enabled_field_is_ignored_rather_than_rejected() {
+        // Configurations written before the flag was dropped must still load.
+        let module: CustomModule = serde_json::from_str(
+            r#"{"id":"custom_a1b2c3","title":"标题","prompt":"提示","enabled":false}"#,
+        )
+        .expect("legacy entry should deserialize");
+        assert_eq!(normalize_custom_modules(vec![module]).len(), 1);
     }
 
     #[test]

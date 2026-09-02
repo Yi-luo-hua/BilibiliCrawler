@@ -46,7 +46,6 @@ export interface CustomAnalysisModule {
   id: CustomAnalysisModuleId;
   title: string;
   prompt: string;
-  enabled: boolean;
 }
 
 /** Custom module ids are `custom_` plus six hex digits. Kept as a template

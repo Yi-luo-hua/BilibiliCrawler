@@ -63,6 +63,11 @@
   仓库根的 `user_config.json` 是遗留文件。步骤 6 的表述与代码一致。
 - 步骤 5 的「显式加入 `custom_results`」改为仅在非空时加入。始终加入会改变已被特征化测试钉住的
   RPC 载荷形状，与「未启用时输出与实施前完全一致」的验收标准冲突。
+- 数据契约里每项包含的 `enabled` 字段已删除。契约同时要求「把这些 `id` 混入既有的 `chart_keys`，
+  不另开启用列表」，两句自相矛盾：保留 `enabled` 就等于存在第二个启用来源，二者不一致时行为无解。
+  以更具体的那句为准，`analysis_chart_keys` 是唯一的选中列表；旧配置里的 `enabled` 读取时忽略。
+- 三侧的长度上限统一按 Unicode code point 计数。JS 的 `.slice()` 与 `maxLength` 按 UTF-16 code
+  unit 计数，emoji 占两个单位且可能被切出孤立代理项，与 Rust `.chars()`、Python 字符串切片不一致。
 
 ### 实施步骤
 

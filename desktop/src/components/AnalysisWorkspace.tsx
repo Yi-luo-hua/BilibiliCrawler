@@ -31,6 +31,7 @@ import {
   isCustomModuleKey,
   newCustomModuleId,
   normalizeAnalysisChartKeys,
+  truncateByCodePoint,
   resultCustomModules,
   resultModuleKeys,
   regionFill,
@@ -138,8 +139,8 @@ export function AnalysisWorkspace({ config, setConfig, llmApiKey, setLlmApiKey, 
 
   const saveModuleDraft = () => {
     if (!moduleDraft) return;
-    const title = moduleDraft.title.trim().slice(0, CUSTOM_MODULE_TITLE_LIMIT);
-    const prompt = moduleDraft.prompt.trim().slice(0, CUSTOM_MODULE_PROMPT_LIMIT);
+    const title = truncateByCodePoint(moduleDraft.title.trim(), CUSTOM_MODULE_TITLE_LIMIT);
+    const prompt = truncateByCodePoint(moduleDraft.prompt.trim(), CUSTOM_MODULE_PROMPT_LIMIT);
     if (!title || !prompt) return;
     const existing = customModules.some((item) => item.id === moduleDraft.id);
     if (!existing && customModules.length >= CUSTOM_MODULE_SAVED_LIMIT) return;
@@ -282,19 +283,27 @@ export function AnalysisWorkspace({ config, setConfig, llmApiKey, setLlmApiKey, 
             <input
               type="text"
               value={moduleDraft.title}
-              maxLength={CUSTOM_MODULE_TITLE_LIMIT}
               placeholder="模块标题，例如：传播路径"
-              onChange={(event) => setModuleDraft({ ...moduleDraft, title: event.target.value })}
+              onChange={(event) =>
+                setModuleDraft({
+                  ...moduleDraft,
+                  title: truncateByCodePoint(event.target.value, CUSTOM_MODULE_TITLE_LIMIT),
+                })
+              }
             />
             <textarea
               value={moduleDraft.prompt}
-              maxLength={CUSTOM_MODULE_PROMPT_LIMIT}
               rows={4}
               placeholder="描述希望从什么角度分析，例如：分析争议是如何扩散的，谁在推动"
-              onChange={(event) => setModuleDraft({ ...moduleDraft, prompt: event.target.value })}
+              onChange={(event) =>
+                setModuleDraft({
+                  ...moduleDraft,
+                  prompt: truncateByCodePoint(event.target.value, CUSTOM_MODULE_PROMPT_LIMIT),
+                })
+              }
             />
             <div className="module-editor-actions">
-              <small>{moduleDraft.prompt.length}/{CUSTOM_MODULE_PROMPT_LIMIT}</small>
+              <small>{Array.from(moduleDraft.prompt).length}/{CUSTOM_MODULE_PROMPT_LIMIT}</small>
               <button type="button" onClick={() => setModuleDraft(null)}>取消</button>
               <button
                 type="button"
@@ -311,7 +320,7 @@ export function AnalysisWorkspace({ config, setConfig, llmApiKey, setLlmApiKey, 
             type="button"
             className="module-add"
             disabled={customModules.length >= CUSTOM_MODULE_SAVED_LIMIT}
-            onClick={() => setModuleDraft({ id: newCustomModuleId(), title: "", prompt: "", enabled: true })}
+            onClick={() => setModuleDraft({ id: newCustomModuleId(customIds), title: "", prompt: "" })}
           >
             {customModules.length >= CUSTOM_MODULE_SAVED_LIMIT
               ? `最多保存 ${CUSTOM_MODULE_SAVED_LIMIT} 个自定义模块`

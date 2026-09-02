@@ -133,11 +133,34 @@ export function isCustomModuleKey(key: AnalysisModuleKey): key is CustomAnalysis
   return CUSTOM_MODULE_ID_PATTERN.test(key);
 }
 
-export function newCustomModuleId(): CustomAnalysisModuleId {
+/** Six hex digits is only 24 bits, so a fresh id is checked against the ones
+ * already saved: a collision would make the editor treat a new module as an
+ * edit and overwrite the existing one without saying so. */
+export function newCustomModuleId(existing: readonly string[] = []): CustomAnalysisModuleId {
+  const taken = new Set(existing);
+  let candidate: CustomAnalysisModuleId = randomCustomModuleId();
+  // With at most CUSTOM_MODULE_SAVED_LIMIT ids in a 16.7M space, exhausting
+  // this many draws is not reachable in practice; the bound just refuses to
+  // spin forever if that assumption ever stops holding.
+  for (let attempt = 0; attempt < 64 && taken.has(candidate); attempt += 1) {
+    candidate = randomCustomModuleId();
+  }
+  return candidate;
+}
+
+function randomCustomModuleId(): CustomAnalysisModuleId {
   const bytes = new Uint8Array(3);
   crypto.getRandomValues(bytes);
   const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
   return `custom_${hex}`;
+}
+
+/** Truncate by Unicode code point, matching the Rust and Python limits.
+ * `String.prototype.slice` counts UTF-16 units, so an emoji would cost two
+ * and could be cut into a lone surrogate. */
+export function truncateByCodePoint(value: string, limit: number): string {
+  const points = Array.from(value);
+  return points.length <= limit ? value : points.slice(0, limit).join("");
 }
 
 /** Drop entries that cannot round-trip. A malformed id would orphan its
@@ -151,11 +174,11 @@ export function normalizeCustomModules(value: unknown): CustomAnalysisModule[] {
     const raw = item as Partial<CustomAnalysisModule>;
     const id = String(raw.id ?? "").trim().toLowerCase();
     if (!CUSTOM_MODULE_ID_PATTERN.test(id) || seen.has(id)) continue;
-    const title = String(raw.title ?? "").trim().slice(0, CUSTOM_MODULE_TITLE_LIMIT);
-    const prompt = String(raw.prompt ?? "").trim().slice(0, CUSTOM_MODULE_PROMPT_LIMIT);
+    const title = truncateByCodePoint(String(raw.title ?? "").trim(), CUSTOM_MODULE_TITLE_LIMIT);
+    const prompt = truncateByCodePoint(String(raw.prompt ?? "").trim(), CUSTOM_MODULE_PROMPT_LIMIT);
     if (!title || !prompt) continue;
     seen.add(id);
-    modules.push({ id: id as CustomAnalysisModuleId, title, prompt, enabled: raw.enabled === true });
+    modules.push({ id: id as CustomAnalysisModuleId, title, prompt });
     if (modules.length >= CUSTOM_MODULE_SAVED_LIMIT) break;
   }
   return modules;
