@@ -36,8 +36,26 @@ export interface UIConfig {
   analysis_strategy: AnalysisStrategy;
   analysis_sample_size: number;
   analysis_batch_size: number;
-  analysis_chart_keys: AnalysisChartKey[];
+  analysis_chart_keys: AnalysisModuleKey[];
+  analysis_custom_modules: CustomAnalysisModule[];
 }
+
+/** A user-authored free-text analysis angle. The id indexes results and
+ * historical reports, so it is generated once and never rewritten. */
+export interface CustomAnalysisModule {
+  id: CustomAnalysisModuleId;
+  title: string;
+  prompt: string;
+  enabled: boolean;
+}
+
+/** Custom module ids are `custom_` plus six hex digits. Kept as a template
+ * literal type so the union below does not collapse into plain `string` and
+ * lose discrimination on the built-in keys. */
+export type CustomAnalysisModuleId = `custom_${string}`;
+
+/** Either a built-in chart key or a custom module id. */
+export type AnalysisModuleKey = AnalysisChartKey | CustomAnalysisModuleId;
 
 export interface Stats {
   total?: number;
@@ -98,6 +116,7 @@ export interface AnalysisResult {
   content_type_counts: ChartDatum[];
   engagement_items: ChartDatum[];
   deep_analysis: DeepAnalysis;
+  custom_results?: Record<string, string>;
   report_markdown: string;
   meta: {
     source: AnalysisSource;
@@ -107,7 +126,10 @@ export interface AnalysisResult {
     analyzed_records: number;
     batch_count: number;
     generated_at: string;
-    chart_keys: AnalysisChartKey[];
+    chart_keys: AnalysisModuleKey[];
+    /** Definition snapshot taken when the analysis ran, so a report still
+     * renders its titles after the module is renamed or deleted. */
+    custom_modules?: Array<{ id: CustomAnalysisModuleId; title: string; prompt: string }>;
   };
 }
 

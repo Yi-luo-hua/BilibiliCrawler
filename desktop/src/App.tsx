@@ -21,6 +21,7 @@ import {
   buildAnalysisChartAssets,
   getAutoAnalysisSource,
   normalizeAnalysisChartKeys,
+  normalizeCustomModules,
 } from "./lib/analysisCharts";
 import { parseDynamicTarget } from "./lib/dynamicTarget";
 import {
@@ -97,6 +98,7 @@ export function App() {
     analysis_sample_size: 300,
     analysis_batch_size: 80,
     analysis_chart_keys: [...DEFAULT_ANALYSIS_CHART_KEYS],
+    analysis_custom_modules: [],
   });
   const [logs, setLogs] = useState<string[]>(["桌面壳已就绪，等待任务。"]);
   const [loggedIn, setLoggedIn] = useState(false);
@@ -359,6 +361,7 @@ export function App() {
           return;
         }
         setAnalysisResult(null);
+        const customModules = normalizeCustomModules(config.analysis_custom_modules);
         await sendSidecarWithTimeout("analysis.start", {
           source: analysisSource,
           strategy: config.analysis_strategy,
@@ -367,6 +370,16 @@ export function App() {
           chart_keys: normalizeAnalysisChartKeys(
             config.analysis_chart_keys,
             analysisSource,
+            customModules.map((item): string => item.id),
+          ),
+          // Only the selected definitions travel with the request; the id list
+          // above decides which of them actually run.
+          custom_modules: customModules.filter((item) =>
+            normalizeAnalysisChartKeys(
+              config.analysis_chart_keys,
+              analysisSource,
+              customModules.map((entry): string => entry.id),
+            ).includes(item.id),
           ),
           llm_config: {
             base_url: config.llm_base_url,

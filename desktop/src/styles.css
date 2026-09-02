@@ -544,6 +544,99 @@ button {
 .module-option input {
   margin-top: 3px;
 }
+/* A custom module carries edit/delete beside its checkbox, so its row is a
+   flex container rather than the plain label the built-in options use. */
+.module-option > label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+.module-option-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.module-option-actions button {
+  border: none;
+  background: none;
+  padding: 2px 4px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 6px;
+}
+.module-option-actions button:hover {
+  color: var(--text);
+  background: rgba(30, 115, 214, 0.12);
+}
+.module-add {
+  margin-top: 10px;
+  width: 100%;
+  padding: 10px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+}
+.module-add:hover:not(:disabled) {
+  color: var(--text);
+  border-color: rgba(30, 115, 214, 0.36);
+}
+.module-add:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.module-editor {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(30, 115, 214, 0.36);
+  border-radius: 12px;
+  background: rgba(30, 115, 214, 0.06);
+}
+.module-editor input,
+.module-editor textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+.module-editor-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.module-editor-actions small {
+  margin-right: auto;
+  color: var(--muted);
+}
+.module-editor-actions button {
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+.module-editor-actions button.primary {
+  border-color: rgba(30, 115, 214, 0.4);
+  background: rgba(30, 115, 214, 0.16);
+}
+.module-editor-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
 .module-option span {
   min-width: 0;
 }

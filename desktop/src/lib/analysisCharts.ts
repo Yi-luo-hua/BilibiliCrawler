@@ -1,6 +1,15 @@
 import chinaMap from "@svg-maps/china";
 import taiwanMainMap from "@svg-maps/taiwan.main";
-import type { AnalysisChartKey, AnalysisResult, AnalysisSource, ChartAsset, ChartDatum } from "../types";
+import type {
+  AnalysisChartKey,
+  AnalysisModuleKey,
+  AnalysisResult,
+  AnalysisSource,
+  ChartAsset,
+  ChartDatum,
+  CustomAnalysisModule,
+  CustomAnalysisModuleId,
+} from "../types";
 
 export interface ChinaMapLocation {
   id: string;
@@ -114,24 +123,90 @@ export function getAnalysisChartOptionsForSource(source: AnalysisSource | null) 
   return analysisChartOptions.filter((item) => !unsupported.has(item.key));
 }
 
-export function normalizeAnalysisChartKeys(value: unknown, source?: AnalysisSource | null): AnalysisChartKey[] {
-  const allowed = getAnalysisChartOptionsForSource(source ?? null).map((item) => item.key);
-  if (!Array.isArray(value)) return [...allowed];
-  const valid = new Set(allowed);
-  const selected = value.filter((item): item is AnalysisChartKey => typeof item === "string" && valid.has(item as AnalysisChartKey));
-  return selected.length ? selected : [...allowed];
+export const CUSTOM_MODULE_ID_PATTERN = /^custom_[0-9a-f]{6}$/;
+export const CUSTOM_MODULE_TITLE_LIMIT = 24;
+export const CUSTOM_MODULE_PROMPT_LIMIT = 500;
+export const CUSTOM_MODULE_SAVED_LIMIT = 8;
+export const CUSTOM_MODULE_ACTIVE_LIMIT = 3;
+
+export function isCustomModuleKey(key: AnalysisModuleKey): key is CustomAnalysisModuleId {
+  return CUSTOM_MODULE_ID_PATTERN.test(key);
+}
+
+export function newCustomModuleId(): CustomAnalysisModuleId {
+  const bytes = new Uint8Array(3);
+  crypto.getRandomValues(bytes);
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `custom_${hex}`;
+}
+
+/** Drop entries that cannot round-trip. A malformed id would orphan its
+ * results, and an empty title or prompt has nothing to run. */
+export function normalizeCustomModules(value: unknown): CustomAnalysisModule[] {
+  if (!Array.isArray(value)) return [];
+  const modules: CustomAnalysisModule[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const raw = item as Partial<CustomAnalysisModule>;
+    const id = String(raw.id ?? "").trim().toLowerCase();
+    if (!CUSTOM_MODULE_ID_PATTERN.test(id) || seen.has(id)) continue;
+    const title = String(raw.title ?? "").trim().slice(0, CUSTOM_MODULE_TITLE_LIMIT);
+    const prompt = String(raw.prompt ?? "").trim().slice(0, CUSTOM_MODULE_PROMPT_LIMIT);
+    if (!title || !prompt) continue;
+    seen.add(id);
+    modules.push({ id: id as CustomAnalysisModuleId, title, prompt, enabled: raw.enabled === true });
+    if (modules.length >= CUSTOM_MODULE_SAVED_LIMIT) break;
+  }
+  return modules;
+}
+
+export function normalizeAnalysisChartKeys(
+  value: unknown,
+  source?: AnalysisSource | null,
+  customIds: readonly string[] = [],
+): AnalysisModuleKey[] {
+  const builtin = getAnalysisChartOptionsForSource(source ?? null).map((item) => item.key);
+  // Custom modules are never part of the default selection: falling back to
+  // "everything" must not silently start spending tokens on them.
+  if (!Array.isArray(value)) return [...builtin];
+  const valid = new Set<string>([...builtin, ...customIds]);
+  const selected = value.filter((item): item is AnalysisModuleKey => typeof item === "string" && valid.has(item));
+  return selected.length ? selected : [...builtin];
 }
 
 export function hasAnalysisChart(result: AnalysisResult, key: AnalysisChartKey) {
-  const keys = normalizeAnalysisChartKeys(result.meta?.chart_keys, result.meta?.source);
+  const keys = resultModuleKeys(result);
   return keys.includes(key);
 }
 
+/** Module keys for a finished analysis, custom ids resolved from the snapshot
+ * the run recorded rather than from current configuration. */
+export function resultModuleKeys(result: AnalysisResult): AnalysisModuleKey[] {
+  const snapshot = result.meta?.custom_modules ?? [];
+  return normalizeAnalysisChartKeys(
+    result.meta?.chart_keys,
+    result.meta?.source,
+    snapshot.map((item) => item.id),
+  );
+}
+
+/** Titles as they were when the analysis ran, so a renamed or deleted module
+ * still labels its own historical result. */
+export function resultCustomModules(result: AnalysisResult): Array<{ id: CustomAnalysisModuleId; title: string; text: string }> {
+  const snapshot = result.meta?.custom_modules ?? [];
+  const byId = new Map(snapshot.map((item) => [item.id, item.title]));
+  return resultModuleKeys(result)
+    .filter(isCustomModuleKey)
+    .map((id) => ({ id, title: byId.get(id) ?? id, text: String(result.custom_results?.[id] ?? "").trim() }));
+}
+
 export async function buildAnalysisChartAssets(result: AnalysisResult): Promise<ChartAsset[]> {
-  const keys = normalizeAnalysisChartKeys(result.meta?.chart_keys, result.meta?.source);
+  const keys = resultModuleKeys(result);
   const assets: ChartAsset[] = [];
   for (const key of keys) {
-    if (key === "deep_analysis") continue;
+    // Text-shaped modules have no chart asset to export.
+    if (key === "deep_analysis" || isCustomModuleKey(key)) continue;
     if (key === "word_cloud") {
       if (result.word_cloud_image_path) {
         assets.push({

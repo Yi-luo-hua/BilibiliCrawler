@@ -313,6 +313,7 @@ class Sidecar:
                 chart_keys=params.get("chart_keys"),
                 batch_size=params.get("batch_size"),
                 credentials=credentials,
+                custom_modules=params.get("custom_modules"),
             )
             self._active_agent_task_id = started.task_id
             if self._agent_analysis_cancel.is_set():
@@ -456,6 +457,11 @@ class Sidecar:
             "report_markdown": "",
             "meta": meta,
         }
+        # Added only when a custom module actually ran, so a payload without
+        # them stays byte-identical to the pinned RPC shape.
+        custom_results = cls._custom_results(result.get("custom_results"))
+        if custom_results:
+            payload["custom_results"] = custom_results
         if image_data_url:
             payload["word_cloud_image"] = image_data_url
         if image_path:
@@ -565,6 +571,21 @@ class Sidecar:
             "psychology": cls._truncate_text(value.get("psychology"), 800),
             "philosophy": cls._truncate_text(value.get("philosophy"), 800),
         }
+
+    @classmethod
+    def _custom_results(cls, value: Any) -> dict[str, str]:
+        """Project custom module text with the same caps as the built-in ones."""
+        if not isinstance(value, dict):
+            return {}
+        projected: dict[str, str] = {}
+        for module_id, text in value.items():
+            key = str(module_id)
+            if not LLMAnalysisProcessor.CUSTOM_MODULE_ID_PATTERN.match(key):
+                continue
+            projected[key] = cls._truncate_text(text, 800)
+            if len(projected) >= LLMAnalysisProcessor.CUSTOM_MODULE_ACTIVE_LIMIT:
+                break
+        return projected
 
     def _start_qr_login(self, request_id: Any) -> None:
         if self._qr_thread and self._qr_thread.is_alive():

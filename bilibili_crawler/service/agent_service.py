@@ -469,12 +469,13 @@ class AgentService:
         chart_keys: list[str] | None = None,
         batch_size: int | None = None,
         credentials: LLMCredentials | None = None,
+        custom_modules: list[dict[str, str]] | None = None,
     ) -> TaskSnapshot:
         # Validate the run and its data before claiming the single task slot,
         # so a bad run_id cannot make the service look busy.
         self._store.run_dir(run_id)
         self._store.load_comments(run_id)
-        params = self._analysis_params(sample_size, strategy, chart_keys, batch_size, credentials)
+        params = self._analysis_params(sample_size, strategy, chart_keys, batch_size, credentials, custom_modules)
         task = self._begin(TaskKind.ANALYZE, run_id)
         # Carry the crawl's counts and artifacts forward so the snapshot for a
         # re-analysis still reports how many comments the run holds.
@@ -499,9 +500,11 @@ class AgentService:
         chart_keys: list[str] | None = None,
         batch_size: int | None = None,
         credentials: LLMCredentials | None = None,
+        custom_modules: list[dict[str, str]] | None = None,
     ) -> TaskSnapshot:
         crawl_params = self._crawl_params(url, max_pages, include_replies, sort_mode)
-        analysis_params = self._analysis_params(sample_size, strategy, chart_keys, batch_size, credentials)
+        analysis_params = self._analysis_params(sample_size, strategy, chart_keys, batch_size, credentials,
+                                                custom_modules)
         task = self._begin(TaskKind.CRAWL_AND_ANALYZE, new_run_id())
         self._create_run_or_release(
             task, TaskKind.CRAWL_AND_ANALYZE, {**crawl_params, **_public(analysis_params)}
@@ -927,6 +930,7 @@ class AgentService:
         chart_keys: Any = None,
         batch_size: Any = None,
         credentials: LLMCredentials | None = None,
+        custom_modules: Any = None,
     ) -> dict[str, Any]:
         """Build one analysis request.
 
@@ -955,6 +959,11 @@ class AgentService:
             params["chart_keys"] = selected
         if batch_size is not None:
             params["batch_size"] = _clamp(batch_size, 80, 20, 200)
+        # Normalised here so a malformed module never reaches the processor and
+        # so the id list handed to chart_keys matches what actually runs.
+        modules = LLMAnalysisProcessor._normalize_custom_modules(custom_modules)
+        if modules:
+            params["custom_modules"] = modules
         return params
 
     def _snapshot_from_manifest(self, run_id: str) -> TaskSnapshot:

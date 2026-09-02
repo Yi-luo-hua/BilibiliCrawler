@@ -46,6 +46,22 @@ struct UiConfig {
     analysis_batch_size: u64,
     #[serde(default)]
     analysis_chart_keys: Vec<String>,
+    #[serde(default)]
+    analysis_custom_modules: Vec<CustomModule>,
+}
+
+/// A user-authored analysis angle. The id indexes results and historical
+/// reports, so it is generated once by the UI and never rewritten here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CustomModule {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    prompt: String,
+    #[serde(default)]
+    enabled: bool,
 }
 
 impl SidecarState {
@@ -72,6 +88,7 @@ fn default_ui_config() -> UiConfig {
         analysis_sample_size: 300,
         analysis_batch_size: 80,
         analysis_chart_keys: default_analysis_chart_keys(),
+        analysis_custom_modules: Vec::new(),
     }
 }
 
@@ -311,8 +328,52 @@ fn normalize_ui_config(mut config: UiConfig) -> UiConfig {
     }
     config.analysis_sample_size = config.analysis_sample_size.clamp(20, 2000);
     config.analysis_batch_size = config.analysis_batch_size.clamp(20, 200);
-    config.analysis_chart_keys = normalize_analysis_chart_keys(config.analysis_chart_keys);
+    config.analysis_custom_modules = normalize_custom_modules(config.analysis_custom_modules);
+    let custom_ids: Vec<String> = config
+        .analysis_custom_modules
+        .iter()
+        .map(|item| item.id.clone())
+        .collect();
+    config.analysis_chart_keys = normalize_analysis_chart_keys(config.analysis_chart_keys, &custom_ids);
     config
+}
+
+const CUSTOM_MODULE_TITLE_LIMIT: usize = 24;
+const CUSTOM_MODULE_PROMPT_LIMIT: usize = 500;
+const CUSTOM_MODULE_SAVED_LIMIT: usize = 8;
+
+fn is_custom_module_id(value: &str) -> bool {
+    let rest = match value.strip_prefix("custom_") {
+        Some(rest) => rest,
+        None => return false,
+    };
+    rest.len() == 6 && rest.chars().all(|ch| ch.is_ascii_digit() || ('a'..='f').contains(&ch))
+}
+
+fn truncate_chars(value: &str, limit: usize) -> String {
+    value.chars().take(limit).collect()
+}
+
+/// Drop entries that could not round-trip: a malformed id would orphan its
+/// results, and an empty title or prompt has nothing to run.
+fn normalize_custom_modules(modules: Vec<CustomModule>) -> Vec<CustomModule> {
+    let mut normalized: Vec<CustomModule> = Vec::new();
+    for module in modules {
+        let id = module.id.trim().to_ascii_lowercase();
+        if !is_custom_module_id(&id) || normalized.iter().any(|item| item.id == id) {
+            continue;
+        }
+        let title = truncate_chars(module.title.trim(), CUSTOM_MODULE_TITLE_LIMIT);
+        let prompt = truncate_chars(module.prompt.trim(), CUSTOM_MODULE_PROMPT_LIMIT);
+        if title.is_empty() || prompt.is_empty() {
+            continue;
+        }
+        normalized.push(CustomModule { id, title, prompt, enabled: module.enabled });
+        if normalized.len() >= CUSTOM_MODULE_SAVED_LIMIT {
+            break;
+        }
+    }
+    normalized
 }
 
 fn default_analysis_chart_keys() -> Vec<String> {
@@ -330,11 +391,15 @@ fn default_analysis_chart_keys() -> Vec<String> {
     .collect()
 }
 
-fn normalize_analysis_chart_keys(keys: Vec<String>) -> Vec<String> {
+fn normalize_analysis_chart_keys(keys: Vec<String>, custom_ids: &[String]) -> Vec<String> {
     let defaults = default_analysis_chart_keys();
     let mut normalized = Vec::new();
     for key in keys {
-        if defaults.iter().any(|item| item == &key) && !normalized.iter().any(|item| item == &key) {
+        // Custom ids pass only when the module still exists: a deleted module
+        // must not keep a selection alive that nothing can render.
+        let allowed = defaults.iter().any(|item| item == &key)
+            || custom_ids.iter().any(|item| item == &key);
+        if allowed && !normalized.iter().any(|item| item == &key) {
             normalized.push(key);
         }
     }
@@ -466,4 +531,85 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn module(id: &str, title: &str, prompt: &str) -> CustomModule {
+        CustomModule {
+            id: id.to_string(),
+            title: title.to_string(),
+            prompt: prompt.to_string(),
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn custom_ids_survive_the_whitelist_round_trip() {
+        let ids = vec!["custom_a1b2c3".to_string()];
+        let keys = vec!["topic_ranking".to_string(), "custom_a1b2c3".to_string()];
+        assert_eq!(normalize_analysis_chart_keys(keys.clone(), &ids), keys);
+    }
+
+    #[test]
+    fn a_custom_id_without_its_module_is_dropped() {
+        // Nothing can render a selection whose module is gone, so it must not
+        // survive in the saved configuration.
+        let keys = vec!["topic_ranking".to_string(), "custom_a1b2c3".to_string()];
+        assert_eq!(
+            normalize_analysis_chart_keys(keys, &[]),
+            vec!["topic_ranking".to_string()]
+        );
+    }
+
+    #[test]
+    fn an_empty_selection_falls_back_to_built_ins_only() {
+        let ids = vec!["custom_a1b2c3".to_string()];
+        assert_eq!(
+            normalize_analysis_chart_keys(Vec::new(), &ids),
+            default_analysis_chart_keys()
+        );
+    }
+
+    #[test]
+    fn malformed_modules_are_dropped_rather_than_repaired() {
+        let modules = vec![
+            module("custom_A1B2C3", " 标题 ", " 提示 "),
+            module("custom_zzzzzz", "标题", "提示"),
+            module("custom_a1b2c", "标题", "提示"),
+            module("deep_analysis", "标题", "提示"),
+            module("custom_b2c3d4", "", "提示"),
+            module("custom_c3d4e5", "标题", "  "),
+        ];
+        let normalized = normalize_custom_modules(modules);
+        let ids: Vec<&str> = normalized.iter().map(|item| item.id.as_str()).collect();
+        assert_eq!(ids, vec!["custom_a1b2c3"]);
+        assert_eq!(normalized[0].title, "标题");
+        assert_eq!(normalized[0].prompt, "提示");
+    }
+
+    #[test]
+    fn fields_are_truncated_by_characters_not_bytes() {
+        let long_title = "标".repeat(60);
+        let long_prompt = "提".repeat(900);
+        let normalized = normalize_custom_modules(vec![module("custom_a1b2c3", &long_title, &long_prompt)]);
+        assert_eq!(normalized[0].title.chars().count(), CUSTOM_MODULE_TITLE_LIMIT);
+        assert_eq!(normalized[0].prompt.chars().count(), CUSTOM_MODULE_PROMPT_LIMIT);
+    }
+
+    #[test]
+    fn duplicate_ids_keep_only_the_first_and_the_count_is_capped() {
+        let mut modules = vec![
+            module("custom_a1b2c3", "先来的", "提示"),
+            module("custom_a1b2c3", "后来的", "提示"),
+        ];
+        for index in 0..10 {
+            modules.push(module(&format!("custom_00000{index}"), "标题", "提示"));
+        }
+        let normalized = normalize_custom_modules(modules);
+        assert_eq!(normalized[0].title, "先来的");
+        assert_eq!(normalized.len(), CUSTOM_MODULE_SAVED_LIMIT);
+    }
 }
