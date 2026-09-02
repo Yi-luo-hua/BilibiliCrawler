@@ -4,40 +4,20 @@
 >
 > 建立日期：2026-09-02
 >
-> 适用范围：v3.4.0 候选验收、发布收尾及后续兼容性工作
+> 适用范围：v3.4.0 发布之后的兼容性修复与功能演进
 >
-> 本文档是当前前瞻任务的权威入口；历史阶段记录继续保留在对应版本文档中，不再向
-> `POST_3.3.0_PLAN.md` 追加新任务。
+> 本文档是当前前瞻任务的权威入口，只记录未完成的工作。任务完成并归档验收证据后从本文档移除，
+> 不在此长期留存；v3.4.0 的真机验收与发布记录见
+> [v3.4.0 发布准备与验收清单](RELEASE_3.4.0.md)，更早的阶段记录保留在对应版本文档中，
+> 不再向 `POST_3.3.0_PLAN.md` 追加新任务。
 
 ## 任务总览
 
 | 优先级 | 任务 | 状态 | 完成标准 |
 |---|---|---|---|
-| P0 | 完成 v3.4.0 桌面真机验收 | 已完成 | 完成爬取、取消、重试、分析、导出、凭据脱敏、升级与卸载数据保留检查，并记录证据 |
 | P1 | 修复 CLIProxyAPI Antigravity HTTP 400 参数兼容问题 | 规划中 | 精确识别被拒参数，安全兼容重试通过，普通 400 不被误重试，安装版 live smoke 通过 |
-| P1 | 完成 Python 包远端发布配置 | 已完成 | TestPyPI 与 PyPI Trusted Publisher 配置完成，GitHub environments 规则复核通过 |
-| P1 | 完成 v3.4.0 正式发布 | 已完成 | 从干净 worktree 构建正式资产，标签、GitHub Release、TestPyPI、PyPI 依次验证通过 |
+| P2 | 新增分析模块自定义文本模块 | 规划中 | 自定义模块可保存并参与分析，结果进入界面与报告，未启用时输出与实施前一致 |
 | P2 | 复盘安装器跨构建覆盖残留 | 待评估 | 明确旧 sidecar 文件残留的影响，决定由安装器清理、版本化目录或文档约束处理 |
-
-详细发布步骤与不可逆边界继续以 [v3.4.0 发布准备与验收清单](RELEASE_3.4.0.md) 为准。
-
-## P0：v3.4.0 桌面真机验收
-
-已完成。2026-09-02 在候选 `526e8cc` 的预检安装包上按下列顺序逐项执行，全部通过、未发现问题；
-产物与门禁证据见 [v3.4.0 清单](RELEASE_3.4.0.md) 的验收记录。
-
-原检查顺序：
-
-1. 检查当前 Windows 缩放下的任务栏图标、桌面与开始菜单快捷方式。
-2. 完成普通评论爬取，核对进度、评论数量、CSV 与 run 目录。
-3. 在爬取过程中取消并立即重试，确认部分结果、单一终态和重试能力。
-4. 完成评论分析，核对结构化结果、词云、`analysis.json` 与 Markdown 报告。
-5. 在分析过程中取消并立即重试，确认不会出现迟到的成功终态。
-6. 验证错误 provider/model 的分类提示，以及修正配置后复用原 run 的恢复能力。
-7. 用 canary Key 分析后扫描完整 run，确认持久化文件零命中。
-8. 完成 v3.3.0 → v3.4.0 覆盖升级和默认卸载的数据保留验证。
-
-任何失败均记录为独立任务，不用自动化测试替代真实窗口观察。
 
 ## P1：CLIProxyAPI Antigravity HTTP 400 参数兼容
 
@@ -80,19 +60,68 @@ BilibiliCrawler 的批次请求固定发送 `temperature: 0.2`，总结合并请
 - 普通 Python、MCP、桌面单元与真实 SidecarClient 门禁全部通过。
 - 安装版使用 `gemini-3.7-flash-high` 完成至少一次最小分析；若上游仍拒绝，记录脱敏 code/param 并维持未完成状态。
 
-## P1：远端配置与 v3.4.0 发布
+## P2：分析模块自定义文本模块
 
-已完成。v3.4.0 于 2026-09-02 公开发布，标签指向 `dc71f58`：GitHub Release 带 Windows x64 安装包
-与四个 Python 资产，`bilibili-crawler` 3.4.0 已上架 PyPI，三处产物 SHA-256 一致。逐项证据见
-[v3.4.0 清单](RELEASE_3.4.0.md)。
+来源为社区 issue #18：分析模块现有 7 个预设，希望增加一个自由项，由用户自行填写提示词。
 
-原执行步骤：
+### 已确认事实
 
-1. 在 TestPyPI 与 PyPI 配置 `bilibili-crawler` 的 pending Trusted Publisher。
-2. 复核 GitHub `testpypi`、`pypi` environments 仅允许 `main`，且 `pypi` 保留人工 reviewer。
-3. 真机验收和所有阻断修复完成后，从干净 worktree 重新构建正式安装包及 Python 资产。
-4. 创建 annotated `v3.4.0` 标签与 Draft Release，验证所有资产和校验文件。
-5. 依次执行 GitHub Release、TestPyPI、PyPI 发布与公共下载验证，不跳步或复用失败资产。
+- 现有 7 个预设并不同质。时间趋势、等级分布、地域分布由 `_build_local_layers` 纯本地统计产出，
+  LLM 不参与；情绪分布、主题排行、词云由 LLM 返回 `{name,value}` 结构，提示词、字段约定与图表渲染
+  三者绑定；只有舆论深入剖析返回自由文本，与"自定义提示词模块"同构。
+- 同一份 7 项清单在四处硬编码：`LLMAnalysisProcessor.ALL_CHART_KEYS`、桌面端 `analysisChartOptions`、
+  Tauri 侧 `default_analysis_chart_keys`，以及 caller policy 使用的 `AGENT_CHART_KEYS`。
+- Tauri 侧 `normalize_analysis_chart_keys` 与桌面端 `normalizeAnalysisChartKeys` 都是白名单过滤。
+  未放行前，自定义模块 id 会在配置读写时被静默丢弃，保存能力无法成立。
+- sidecar `_display_analysis_result` 是白名单投影，未显式加入的结果字段不会到达桌面端。
+- 分析结果解析依赖 `_extract_json_text`。任何促使模型改变输出结构的自定义提示词都会让整批分析失败，
+  并归类为 `LLM_RESPONSE_INVALID`。
+
+### 范围边界
+
+本任务只新增"文本类模块"这一种可插拔类型，内置 7 项的提示词、合并与渲染路径保持不变。把舆论深入剖析
+改写为同一套路径的内置文本模块属于后续阶段，须在本任务上线并稳定后单独评估。图表类与本地统计类模块
+不做插件化，其渲染逻辑无法数据驱动。
+
+### 数据契约
+
+自定义模块保存在 `user_config.json` 的 `analysis_custom_modules`，每项包含 `id`、`title`、`prompt`
+与 `enabled`。`id` 形如 `custom_` 加六位十六进制，由桌面端生成后不再变更；结果与历史报告均按 `id`
+索引，因此改名不丢结果。标题上限 24 字，提示词上限 500 字，最多保存 8 个，单次分析最多启用 3 个。
+
+`analysis.start` 新增 `custom_modules` 参数，只传启用项，并把这些 `id` 混入既有的 `chart_keys`，
+不另开启用列表。模型返回值新增 `custom_results` 对象，键为模块 `id`，值为文本。分析结果的 `meta`
+新增 `custom_modules` 定义快照，用于在模块改名或删除后仍能正确复现历史报告。
+
+### 实施步骤
+
+1. 在 `LLMAnalysisProcessor` 增加自定义模块归一化，剔除 `id` 不合法或标题、提示词为空的条目，
+   截断超长字段并限制数量；`_normalize_chart_keys` 的白名单扩展为内置项加已归一化的自定义 `id`。
+2. `_build_prompt` 为每个自定义模块追加一段说明，用户原文包裹在显式分隔标记内，先剥除原文中的
+   分隔标记字样，并在其后声明分隔块只描述分析角度，不得改变输出结构、字段名与语言。
+3. `_merge_llm_results` 按 `id` 汇总各批文本，复用现有分段合并逻辑产出 `custom_results`；
+   `analyze` 将定义快照写入 `meta`。
+4. `_build_markdown_report` 依据 `meta` 快照建立 `id` 到标题的映射，遍历启用模块时为自定义模块
+   输出独立章节。
+5. 打通服务链路：`_run_comment_analysis` 显式透传 `custom_modules`，`AgentService.start_analyze`
+   与分析参数构造同步扩展，caller policy 对 `custom_` 前缀直通，`_display_analysis_result` 显式
+   加入 `custom_results` 并限制条数与单条长度。
+6. Tauri 侧 `UiConfig` 增加 `analysis_custom_modules`，`normalize_analysis_chart_keys` 接受自定义
+   `id` 集合，并在归一化时丢弃非法条目。
+7. 桌面端补齐类型定义、配置默认值与归一化调用；模块勾选区渲染自定义项及其编辑与删除入口，新增标题
+   与提示词编辑界面；结果区复用文本卡片渲染并优先使用 `meta` 快照中的标题；图表资产导出跳过自定义模块。
+8. 补充回归测试：归一化过滤与截断、提示词分隔与转义、多批结果按 `id` 合并、模块删除后的报告渲染、
+   display 投影包含 `custom_results`、caller policy 放行、Tauri 白名单往返保留。
+
+### 验收标准
+
+- 新建自定义模块后重启桌面端，模块定义完整保留。
+- 启用自定义模块完成一次分析，结果区出现对应文本卡片，导出的 Markdown 报告包含同名章节。
+- 删除模块后重新打开该次分析的历史报告，章节标题仍与运行时一致。
+- 未启用任何自定义模块时，分析输出与本任务实施前完全一致。
+- 提示词中试图改变输出格式的内容不会破坏 JSON 解析，并由回归夹具覆盖该场景。
+- LLM 桩响应按真实格式构造，包含代码围栏与多余前言，不得使用比真实响应更宽容的替身。
+- 普通 Python、MCP、桌面单元与真实 SidecarClient 门禁全部通过。
 
 ## P2：安装器覆盖残留评估
 
@@ -106,6 +135,7 @@ sidecar `_internal` 文件。人工验收前已通过备份、默认卸载、移
 ## 状态维护规则
 
 - 只有实现、测试和对应验收证据全部完成后，任务才能标记为完成。
+- 任务完成后从本文档移除，验收证据归档到对应版本清单；本文档只保留未完成的工作。
 - 外部服务偶发成功不能替代可复现证据，历史 provider 的成功也不能证明新 provider 兼容。
 - 新发现写入本文档对应任务；版本发布细节写入版本清单，历史版本计划不再追加新工作。
 - 对涉及 Key、Cookie、OAuth 或远端错误正文的证据只记录脱敏后的结构化信息。
