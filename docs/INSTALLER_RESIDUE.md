@@ -160,7 +160,49 @@ start"，`RELEASE_3.3.0.md` 的验收记录也明确写着"旧源仍保留"。�
 - **风险**：把正确性外包给用户操作，而升级路径在 update 模式下本就跳过卸载，用户未必看得到提示。
 - 结论：不足以单独作为方案，但适合作为 A′ 落地前的过渡说明。
 
-## 五、建议
+## 五、落地实现（v3.5.0）
+
+方案 A′ 已实现，`desktop/src-tauri/installer-hooks.nsh` 经 `tauri.conf.json` 的
+`nsis.installerHooks` 接入。两个未决问题都不再需要在文档列出的选项之间取舍：
+
+**问题 1 的解法不是"跳过整次清理"，而是"排除两个目录"。** 钩子用 `FindFirst` / `FindNext` 枚举
+`_internal`，逐条删除，只跳过 `analysis-runs` 与 `analysis-assets`。因此遗留用户数据原地保留等应用
+迁移，而其余残留照常清理——清理不会对任何用户永久失效，第四节里那两个选项（接受限制 / 另立退役
+任务）都不必选。迁移仍是复制不删除，这批用户的这两个目录会一直被跳过，仅此而已。
+
+**问题 2 的解法分两层：提前进程检查，再直接验证目录未被占用。**
+
+第一层是把 `!insertmacro CheckIfAppIsRunning` 放在钩子第一条语句。该宏由 `utils.nsh` 提供且在钩子
+之前引入，因此"应用正在运行"的提示与取消都发生在任何删除之前，模板自己在其后的调用变成 no-op。
+
+但**只关主程序不够**，这是 review 指出、经核实成立的一条：
+
+- `MAINBINARYNAME` 是 `bilibilicrawler_desktop`，而 Python sidecar 是另一个进程名。
+- `main.rs` 的 `child.kill()` 只挂在 `WindowEvent::CloseRequested` 上，强制终止主程序不会触发它；
+  sidecar 又是以 `DETACHED_PROCESS` 启动的，因此会被孤儿化。
+- 孤儿 sidecar 要等 stdin EOF 才退出，而它在启动时先同步预热 wordcloud —— 源码注释写明冷字体缓存
+  下需要 **30–120 秒**。这段时间它既不读 stdin，也一直映射着 `_internal` 里的 DLL。
+
+按进程名杀 `sidecar.exe` 不是答案：所用的 nsis-process 插件只按名字匹配，而这个名字足够通用，可能
+误杀无关程序。因此第二层**不猜进程，直接验证条件**：尝试重命名 `_internal`，成功即证明其中没有被
+打开的文件。失败则最多等待 10 秒（孤儿 sidecar 通常在此期间完成预热并因 EOF 退出）后**整次跳过
+清理**——即与今天的行为完全相同。
+
+**一个必须撤回的保证。** 本文早前写着"钩子之后安装不再有提示，所以被部分清理的产物总会被补齐"，
+这是错的：NSIS 解压失败会弹出重试/取消对话框，用户仍可取消。预清理本质上把失败形态从"残留旧文件"
+变成"缺少文件"，这一点无法完全消除。可做的是消除它最主要的诱因——占用中的文件——这正是上面那个
+探测所保证的：只有在确认无占用后才开始删除。
+
+实现中踩到的一个坑记录在此：`${__LINE__}` 在宏体内是**逐行求值**的，直接用它拼标签会让定义处与
+`Goto` 处得到不同名字，makensis 报 `could not resolve label`。改为开头 `!define` 一次、结尾
+`!undef`，与 Tauri 自己的 `CheckIfAppIsRunning` 写法一致。**这类错误只有真正构建才会暴露**，静态
+检查和 CI 都看不到。
+
+配套的检测手段也已实现：`scripts/check_installer_payload.py` 生成打包清单并与上一版比对，
+`build_installer.ps1` 在产出安装包后一并生成 `installer-payload-manifest.json`，随 Release 发布供
+下一版使用。v3.4.0 → v3.5.0 实测为 0 removed / 0 added / 3 changed，本次发布不遗留任何文件。
+
+## 六、建议
 
 1. **方向采纳 A′，但设计尚不完整**：落地 PR 必须同时给出问题 1 的取舍（接受限制或另立退役任务）
    与问题 2 的处理（进程退出、失败策略、取消回归）。

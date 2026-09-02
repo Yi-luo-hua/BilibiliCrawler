@@ -185,6 +185,19 @@ try {
     $Target = Join-Path $BundleDirFull "BilibiliCrawler-Setup-$ReleaseVersion-x64.exe"
     Move-Item -LiteralPath $InstallerPath -Destination $Target
     Write-Host "Installer ready: $Target"
+
+    # Record what this build actually packaged. Residue on upgrade is exactly
+    # the set of paths a previous installer shipped and this one does not, and
+    # nothing in the dependency locks can predict it - collection depends on the
+    # build machine. Comparing manifests is the only reliable detection, so the
+    # manifest ships beside the installer and the next release diffs against it.
+    $PayloadManifest = Join-Path $BundleDirFull "installer-payload-manifest.json"
+    & $Python (Join-Path $Root "scripts\check_installer_payload.py") `
+        --tree (Join-Path $Root "desktop\src-tauri\resources\backend") `
+        --version $ReleaseVersion --out $PayloadManifest
+    if ($LASTEXITCODE -ne 0) {
+        throw "payload manifest generation failed with exit code $LASTEXITCODE"
+    }
 } finally {
     if ($LocationPushed) {
         Pop-Location
