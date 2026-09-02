@@ -11,12 +11,18 @@
 ;
 ; Three properties this has to preserve:
 ;
-; 1. Legacy user data. Builds up to v3.2.0 wrote runs into
-;    _internal\analysis-runs, and the app migrates them to stable storage on
-;    first launch. The installer runs before the app, so those directories are
-;    skipped and left for that migration. They are excluded by name rather than
-;    by skipping the whole cleanup, so a machine still holding them does not
-;    lose cleanup forever - the migration copies but never deletes its source.
+; 1. User data is never moved, never deleted, never at risk. Builds up to
+;    v3.2.0 wrote runs into _internal\analysis-runs, and the app migrates them
+;    on first launch - the installer runs before that. If either legacy data
+;    directory is present, this hook does nothing at all: the payload is left
+;    exactly as it is today, and cleanup waits for a later upgrade.
+;
+;    An earlier revision instead renamed _internal aside, excluded those two
+;    directories while deleting, and renamed it back. That put user data under
+;    a second name for the duration, and an interruption in that window left it
+;    there for a later run to delete. Cleaning stale DLLs is not worth any path
+;    that can lose a user's runs, so the whole window is gone: once the guard
+;    above passes, everything under _internal is program payload.
 ;
 ; 2. Nothing is deleted while the payload is in use. Closing the main binary is
 ;    not enough: the Python sidecar is a separate process name, is spawned
@@ -28,18 +34,18 @@
 ;    Killing "sidecar.exe" by name is not the answer either: the bundled
 ;    nsis-process plugin matches on name alone, and that name is generic enough
 ;    that another program's process could be terminated. So this tests the
-;    condition directly instead of guessing at processes - if the directory can
-;    be renamed, nothing inside it is held open. A failed probe means the
-;    cleanup is skipped entirely, which is exactly today's behaviour.
+;    condition directly - if the directory can be renamed, nothing inside it is
+;    held open. A failed probe means the cleanup is skipped, which is exactly
+;    today's behaviour. Renaming is also the deletion: the payload is deleted
+;    under the temporary name, so there is no rename-back step to interrupt.
 ;
 ; 3. No half-deleted install. The template inserts this hook *before* its own
 ;    CheckIfAppIsRunning, so a running app would have its files deleted and the
 ;    user could then cancel at that prompt. The check is invoked here first, so
 ;    cancelling aborts before anything is removed and the template's later call
-;    is a no-op. Deletion only starts once the probe has shown the tree is free,
-;    which removes the main reason extraction would fail afterwards. It does not
-;    make extraction infallible: a pre-clean necessarily turns "stale files
-;    remain" into "files are missing" if extraction fails and the user cancels.
+;    is a no-op. It does not make extraction infallible: a pre-clean turns
+;    "stale files remain" into "files are missing" if extraction fails and the
+;    user cancels there.
 
 !macro NSIS_HOOK_PREINSTALL
   ; One id for every label below. ${__LINE__} is evaluated per line, so
@@ -53,64 +59,37 @@
   Push $R4
   Push $R5
   Push $R6
-  Push $R7
-  Push $R8
 
   StrCpy $R4 "$INSTDIR\resources\backend\sidecar\_internal"
-  StrCpy $R7 "$INSTDIR\resources\backend\sidecar\_internal.cleanup-probe"
+  StrCpy $R5 "$INSTDIR\resources\backend\sidecar\_internal.old-payload"
   IfFileExists "$R4\*.*" 0 preinstall_done_${BCC_PREINSTALL_ID}
 
-  ; A stale probe directory means a previous run died between the two renames.
-  ; Put it back rather than leaving the payload split across two names.
-  IfFileExists "$R7\*.*" 0 preinstall_probe_${BCC_PREINSTALL_ID}
-    RMDir /r "$R7"
+  ; Unmigrated user data from v3.2.0 and earlier. Leave everything alone; the
+  ; app's migration has to run first. Cleanup resumes on a later upgrade.
+  IfFileExists "$R4\analysis-runs\*.*" preinstall_done_${BCC_PREINSTALL_ID}
+  IfFileExists "$R4\analysis-assets\*.*" preinstall_done_${BCC_PREINSTALL_ID}
 
-  ; Probe for open handles by renaming the directory. A mapped DLL inside it
-  ; makes this fail, which is the signal that the sidecar is still alive.
-  ; Give an orphaned sidecar time to reach EOF and exit before giving up.
+  ; Past this point _internal holds only program payload, so a leftover copy
+  ; from an interrupted run carries no user data and is safe to remove.
+  RMDir /r "$R5"
+
+  ; Probe for open handles by renaming, then delete under the temporary name.
+  ; A mapped DLL makes the rename fail, which is the signal that the sidecar is
+  ; still alive; give an orphaned one time to reach EOF and exit.
+  StrCpy $R6 0
   preinstall_probe_${BCC_PREINSTALL_ID}:
-  StrCpy $R8 0
-  preinstall_probe_loop_${BCC_PREINSTALL_ID}:
     ClearErrors
-    Rename "$R4" "$R7"
-    IfErrors 0 preinstall_probe_ok_${BCC_PREINSTALL_ID}
-    IntOp $R8 $R8 + 1
-    IntCmp $R8 20 preinstall_done_${BCC_PREINSTALL_ID} 0 preinstall_done_${BCC_PREINSTALL_ID}
+    Rename "$R4" "$R5"
+    IfErrors 0 preinstall_delete_${BCC_PREINSTALL_ID}
+    IntOp $R6 $R6 + 1
+    IntCmp $R6 20 preinstall_done_${BCC_PREINSTALL_ID} 0 preinstall_done_${BCC_PREINSTALL_ID}
     Sleep 500
-    Goto preinstall_probe_loop_${BCC_PREINSTALL_ID}
+    Goto preinstall_probe_${BCC_PREINSTALL_ID}
 
-  preinstall_probe_ok_${BCC_PREINSTALL_ID}:
-  ClearErrors
-  Rename "$R7" "$R4"
-  IfErrors 0 preinstall_clean_${BCC_PREINSTALL_ID}
-    ; Nothing holds a handle, so this should not happen. Stop rather than leave
-    ; the payload - including unmigrated user data - under the probe name.
-    DetailPrint "Could not restore $R7; aborting to avoid a split payload."
-    Abort
+  preinstall_delete_${BCC_PREINSTALL_ID}:
+  RMDir /r "$R5"
 
-  preinstall_clean_${BCC_PREINSTALL_ID}:
-  FindFirst $R5 $R6 "$R4\*"
-  preinstall_loop_${BCC_PREINSTALL_ID}:
-    StrCmp $R6 "" preinstall_close_${BCC_PREINSTALL_ID}
-    StrCmp $R6 "." preinstall_next_${BCC_PREINSTALL_ID}
-    StrCmp $R6 ".." preinstall_next_${BCC_PREINSTALL_ID}
-    ; Unmigrated user data from v3.2.0 and earlier.
-    StrCmp $R6 "analysis-runs" preinstall_next_${BCC_PREINSTALL_ID}
-    StrCmp $R6 "analysis-assets" preinstall_next_${BCC_PREINSTALL_ID}
-    IfFileExists "$R4\$R6\*.*" 0 preinstall_file_${BCC_PREINSTALL_ID}
-      RMDir /r "$R4\$R6"
-      Goto preinstall_next_${BCC_PREINSTALL_ID}
-    preinstall_file_${BCC_PREINSTALL_ID}:
-      Delete "$R4\$R6"
-    preinstall_next_${BCC_PREINSTALL_ID}:
-      FindNext $R5 $R6
-      Goto preinstall_loop_${BCC_PREINSTALL_ID}
-  preinstall_close_${BCC_PREINSTALL_ID}:
-  FindClose $R5
   preinstall_done_${BCC_PREINSTALL_ID}:
-
-  Pop $R8
-  Pop $R7
   Pop $R6
   Pop $R5
   Pop $R4
