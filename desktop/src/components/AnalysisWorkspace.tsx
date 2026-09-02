@@ -1,5 +1,6 @@
 import { useEffect, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import { AlertTriangle, BrainCircuit, Database, FileText, Gauge, MapPinned, Tags } from "lucide-react";
 import {
   Bar,
@@ -135,6 +136,17 @@ export function AnalysisWorkspace({ config, setConfig, llmApiKey, setLlmApiKey, 
     // running at once is capped rather than left to the user to discover.
     if (isCustomModuleKey(key) && selected.filter(isCustomModuleKey).length >= CUSTOM_MODULE_ACTIVE_LIMIT) return;
     patch({ analysis_chart_keys: [...selected, key] });
+  };
+
+  const startModuleDraft = () => {
+    const id = newCustomModuleId(customIds);
+    // No free id means creating would overwrite an existing module, so the
+    // creation is refused outright rather than silently reusing one.
+    if (!id) {
+      toast.error("无法生成新的模块 ID，请先删除部分自定义模块后重试");
+      return;
+    }
+    setModuleDraft({ id, title: "", prompt: "" });
   };
 
   const saveModuleDraft = () => {
@@ -320,7 +332,7 @@ export function AnalysisWorkspace({ config, setConfig, llmApiKey, setLlmApiKey, 
             type="button"
             className="module-add"
             disabled={customModules.length >= CUSTOM_MODULE_SAVED_LIMIT}
-            onClick={() => setModuleDraft({ id: newCustomModuleId(customIds), title: "", prompt: "" })}
+            onClick={() => startModuleDraft()}
           >
             {customModules.length >= CUSTOM_MODULE_SAVED_LIMIT
               ? `最多保存 ${CUSTOM_MODULE_SAVED_LIMIT} 个自定义模块`

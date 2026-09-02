@@ -133,24 +133,36 @@ export function isCustomModuleKey(key: AnalysisModuleKey): key is CustomAnalysis
   return CUSTOM_MODULE_ID_PATTERN.test(key);
 }
 
+export const CUSTOM_MODULE_ID_ATTEMPTS = 64;
+
+/** Source of the three random bytes behind an id. Injectable so the exhausted
+ * branch can be covered deterministically. */
+export type RandomBytes = (length: number) => Uint8Array;
+
+const cryptoRandomBytes: RandomBytes = (length) => crypto.getRandomValues(new Uint8Array(length));
+
 /** Six hex digits is only 24 bits, so a fresh id is checked against the ones
  * already saved: a collision would make the editor treat a new module as an
- * edit and overwrite the existing one without saying so. */
-export function newCustomModuleId(existing: readonly string[] = []): CustomAnalysisModuleId {
+ * edit and overwrite the existing one without saying so.
+ *
+ * Returns null when no free id turned up, rather than handing back a colliding
+ * one - that would reintroduce the very overwrite this guards against. With at
+ * most CUSTOM_MODULE_SAVED_LIMIT ids in a 16.7M space the caller should never
+ * see null, so it is surfaced as a refusal instead of being papered over. */
+export function newCustomModuleId(
+  existing: readonly string[] = [],
+  randomBytes: RandomBytes = cryptoRandomBytes,
+): CustomAnalysisModuleId | null {
   const taken = new Set(existing);
-  let candidate: CustomAnalysisModuleId = randomCustomModuleId();
-  // With at most CUSTOM_MODULE_SAVED_LIMIT ids in a 16.7M space, exhausting
-  // this many draws is not reachable in practice; the bound just refuses to
-  // spin forever if that assumption ever stops holding.
-  for (let attempt = 0; attempt < 64 && taken.has(candidate); attempt += 1) {
-    candidate = randomCustomModuleId();
+  for (let attempt = 0; attempt < CUSTOM_MODULE_ID_ATTEMPTS; attempt += 1) {
+    const candidate = randomCustomModuleId(randomBytes);
+    if (!taken.has(candidate)) return candidate;
   }
-  return candidate;
+  return null;
 }
 
-function randomCustomModuleId(): CustomAnalysisModuleId {
-  const bytes = new Uint8Array(3);
-  crypto.getRandomValues(bytes);
+function randomCustomModuleId(randomBytes: RandomBytes): CustomAnalysisModuleId {
+  const bytes = randomBytes(3);
   const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
   return `custom_${hex}`;
 }

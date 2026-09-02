@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  CUSTOM_MODULE_ID_ATTEMPTS,
   CUSTOM_MODULE_PROMPT_LIMIT,
   CUSTOM_MODULE_SAVED_LIMIT,
   CUSTOM_MODULE_TITLE_LIMIT,
@@ -13,6 +14,7 @@ import {
   resultModuleKeys,
   truncateByCodePoint,
 } from "../src/lib/analysisCharts.ts";
+import type { RandomBytes } from "../src/lib/analysisCharts.ts";
 import type { AnalysisResult } from "../src/types.ts";
 
 const MODULE = { id: "custom_a1b2c3", title: "传播路径", prompt: "分析扩散" };
@@ -107,6 +109,35 @@ test("a fresh id avoids the ids already saved", () => {
   for (let attempt = 0; attempt < 300; attempt += 1) {
     assert.ok(!taken.includes(newCustomModuleId(taken)));
   }
+});
+
+/** A random source that yields the given ids in order, then repeats the last. */
+function fixedBytes(...ids: string[]): RandomBytes {
+  let index = 0;
+  return () => {
+    const hex = ids[Math.min(index, ids.length - 1)];
+    index += 1;
+    return Uint8Array.from([0, 2, 4].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16)));
+  };
+}
+
+test("an id is refused rather than reused when every draw collides", () => {
+  // Returning the colliding candidate would put back the silent overwrite the
+  // collision check exists to prevent, so exhaustion has to be a refusal.
+  const always = fixedBytes("a1b2c3");
+  assert.equal(newCustomModuleId(["custom_a1b2c3"], always), null);
+});
+
+test("a draw that frees up within the budget still yields an id", () => {
+  const collisions = Array.from({ length: CUSTOM_MODULE_ID_ATTEMPTS - 1 }, () => "a1b2c3");
+  const source = fixedBytes(...collisions, "d4e5f6");
+  assert.equal(newCustomModuleId(["custom_a1b2c3"], source), "custom_d4e5f6");
+});
+
+test("the budget is exclusive: one draw too many is still a refusal", () => {
+  const collisions = Array.from({ length: CUSTOM_MODULE_ID_ATTEMPTS }, () => "a1b2c3");
+  const source = fixedBytes(...collisions, "d4e5f6");
+  assert.equal(newCustomModuleId(["custom_a1b2c3"], source), null);
 });
 
 test("a generated id round-trips through the key guard and normalizer", () => {
