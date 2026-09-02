@@ -160,7 +160,30 @@ start"，`RELEASE_3.3.0.md` 的验收记录也明确写着"旧源仍保留"。�
 - **风险**：把正确性外包给用户操作，而升级路径在 update 模式下本就跳过卸载，用户未必看得到提示。
 - 结论：不足以单独作为方案，但适合作为 A′ 落地前的过渡说明。
 
-## 五、建议
+## 五、落地实现（v3.5.0）
+
+方案 A′ 已实现，`desktop/src-tauri/installer-hooks.nsh` 经 `tauri.conf.json` 的
+`nsis.installerHooks` 接入。两个未决问题都不再需要在文档列出的选项之间取舍：
+
+**问题 1 的解法不是"跳过整次清理"，而是"排除两个目录"。** 钩子用 `FindFirst` / `FindNext` 枚举
+`_internal`，逐条删除，只跳过 `analysis-runs` 与 `analysis-assets`。因此遗留用户数据原地保留等应用
+迁移，而其余残留照常清理——清理不会对任何用户永久失效，第四节里那两个选项（接受限制 / 另立退役
+任务）都不必选。迁移仍是复制不删除，这批用户的这两个目录会一直被跳过，仅此而已。
+
+**问题 2 的解法是把进程检查提前。** 钩子第一条语句就 `!insertmacro CheckIfAppIsRunning`。该宏由
+`utils.nsh` 提供且在钩子之前引入，因此"应用正在运行"的提示与取消都发生在任何删除之前；模板自己在
+其后的调用变成 no-op。钩子之后安装不再有任何提示，所以被部分清理的产物总会被紧接着的安装补齐。
+
+实现中踩到的一个坑记录在此：`${__LINE__}` 在宏体内是**逐行求值**的，直接用它拼标签会让定义处与
+`Goto` 处得到不同名字，makensis 报 `could not resolve label`。改为开头 `!define` 一次、结尾
+`!undef`，与 Tauri 自己的 `CheckIfAppIsRunning` 写法一致。**这类错误只有真正构建才会暴露**，静态
+检查和 CI 都看不到。
+
+配套的检测手段也已实现：`scripts/check_installer_payload.py` 生成打包清单并与上一版比对，
+`build_installer.ps1` 在产出安装包后一并生成 `installer-payload-manifest.json`，随 Release 发布供
+下一版使用。v3.4.0 → v3.5.0 实测为 0 removed / 0 added / 3 changed，本次发布不遗留任何文件。
+
+## 六、建议
 
 1. **方向采纳 A′，但设计尚不完整**：落地 PR 必须同时给出问题 1 的取舍（接受限制或另立退役任务）
    与问题 2 的处理（进程退出、失败策略、取消回归）。
