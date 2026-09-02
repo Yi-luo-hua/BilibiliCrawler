@@ -264,6 +264,26 @@ jobs:
               --verify-repository "$repository"; then exit 0; fi
           done
           exit 1
+      # The JSON API and the simple index propagate independently, and the step
+      # below installs from the simple index. Waiting only on the JSON API left
+      # it ungated: v3.5.0 failed this way on both TestPyPI and PyPI, uploads
+      # intact, and passed on a re-run once the index caught up.
+      - name: Wait for the simple index to list the version
+        env:
+          DESTINATION: ${{ inputs.destination }}
+          NAME: ${{ needs.build.outputs.name }}
+          WHEEL: ${{ needs.build.outputs.wheel }}
+        run: |
+          if [ "$DESTINATION" = testpypi ]; then index=https://test.pypi.org/simple; else index=https://pypi.org/simple; fi
+          for delay in 0 5 10 20 30 60 60; do
+            sleep "$delay"
+            if curl -fsSL "$index/$NAME/" | grep -qF "$WHEEL"; then
+              echo "$WHEEL is listed on $index"
+              exit 0
+            fi
+            echo "not listed yet on $index"
+          done
+          exit 1
       - name: Install the published wheel and run MCP smoke
         env:
           DESTINATION: ${{ inputs.destination }}

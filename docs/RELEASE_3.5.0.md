@@ -1,7 +1,8 @@
 # v3.5.0 发布准备与验收清单
 
-> 状态：Release Candidate 准备中。清单未逐项勾选前不得创建标签、上传 Release 资产或向
-> TestPyPI / PyPI 发布。面向用户的说明见 [v3.5.0 发布说明](RELEASE_NOTES_3.5.0.md)，
+> 状态：**v3.5.0 已于 2026-09-03 公开发布**，标签指向 `16a7b4a`。下文保留原发布准备清单；
+> 未勾选项中，部分是执行时按顺序完成的模板项，另有两类验收由维护者决定跳过——具体见末尾验收记录的
+> 「未执行的验收项」。面向用户的说明见 [v3.5.0 发布说明](RELEASE_NOTES_3.5.0.md)，
 > 安装器残留的机制与方案依据见 [安装器跨构建覆盖残留评估](INSTALLER_RESIDUE.md)。
 
 ## 发布边界
@@ -159,3 +160,56 @@ Python 资产 → 反向核验 → 公开 → `testpypi` → `pypi`。
 ## 验收记录
 
 > 每完成一节在此追加：执行时间、环境、命令、结果与日志路径（`.runlogs/` 不纳入提交）。
+
+### 2026-09-03：v3.5.0 已发布
+
+**候选**：`16a7b4a`。干净 worktree 位于仓库同级短路径，`git status --porcelain` 仅有 `Cargo.toml`
+的行尾重写（两侧 blob 均为 `961462de…`，`git diff` 为空，内容未变）。
+
+**第 2 节门禁**（全部在该 worktree 内重跑）：无 MCP 318 项 OK（3 项预期跳过）、MCP 2.1.0 349/349、
+desktop `install --frozen-lockfile` / `audit`（无告警）/ `typecheck` / `build` / `test:unit` 27/27、
+`build_backend.ps1` 后 `cargo check --locked`、`cargo test --locked` 7/7、`git diff --check` 干净。
+
+**第 3 节产物清单**：以 v3.4.0 安装包解出的 `resources\backend` 重建基线，比对结果
+**0 removed / 0 added / 3 changed**（`base_library.zip`、`sidecar.exe`、numpy 的 `RECORD`），
+本次发布不遗留任何文件。
+
+**产物**：`BilibiliCrawler-Setup-3.5.0-x64.exe`，53,515,796 字节，
+SHA-256 `f254bc95c4a3bdd222d26b4cd0e425edde2f148a9ce9d2efb5f75e8222121b8a`，
+构建完成 2026-09-02T22:24:01+08:00。`.sha256` 已反向解析核对。
+
+**安装器清理的隔离回归**（静默安装至隔离目录 `/S /D=`，不涉及正式安装；测试前备份并于测试后还原了
+HKCU 卸载项与桌面快捷方式，真实 3.4.0 安装与其 10 个 run 目录经确认完好）：
+
+| 场景 | 断言 | 结果 |
+|---|---|---|
+| 清理生效 | 陈旧文件与陈旧目录被删、产物重建 | 通过（1295 文件重建，主程序完好） |
+| 遗留数据守卫 | `analysis-runs`、`analysis-assets` **与另置的标记文件**全部保留 | 通过（三者皆在，数据内容未改写） |
+| 占用时跳过 | 独占锁住 `python313.dll` 后标记文件保留 | 通过（耗时 16.6s vs 正常 8.1s，与 10s 探测预算吻合） |
+| 解锁后恢复 | 释放句柄后清理恢复 | 通过（标记被删，无残留 `.old-payload`） |
+
+**发布链路**：annotated tag `v3.5.0` → `16a7b4a`（远端 peeled SHA 已核）→ Draft（安装包 + 校验文件 +
+产物清单）→ 工作流 `github-release` 附加四个 Python 资产 → 下载全部资产反向核验（manifest 的
+`source_commit` 等于标签指向的提交，manifest = `SHA256SUMS` = 实算，安装包哈希三处一致）→ 公开 →
+`testpypi` → `pypi`（经人工审批）。PyPI / TestPyPI / GitHub Release 三处产物哈希一致。
+
+**发布后验证**：干净 venv 从 PyPI 安装 `bilibili-crawler[mcp]==3.5.0`，`pip check` 无破损，
+`--help` 与只读 `doctor` 正常（`ok:true`，识别 MCP 2.1.0），`bilibili-crawler-mcp` stdio 握手成功，
+协议 `2025-11-25`，发现 7 个工具。
+
+#### 未执行的验收项
+
+以下为维护者决定跳过，**不是通过**：
+
+- 第 5 节安装器验收的「运行中升级并取消」与「运行中升级并继续」。隔离回归覆盖了清理、守卫、占用
+  跳过与解锁恢复，但「进程检查前置是否真的关闭了半删除窗口」需要真实窗口交互，未验证。
+- 第 5 节的常规功能真机验收（快捷方式与图标、爬取、空结果、停止重试、分析与词云、导出、canary
+  零命中、v3.4.0 覆盖升级、卸载后用户数据保留）。这些代码路径相对 v3.4.0 未改动，但本版未复验。
+
+#### 发布过程中发现的问题
+
+- **工作流的等待步骤 gate 错了对象**：`Wait for exact repository hashes` 轮询 JSON API，而其后的
+  安装步骤从 `/simple` 索引下载，两者传播速度不同。TestPyPI 与 PyPI 各因此失败一次（上传均已成功，
+  索引同步后重跑失败 job 即通过，未重复上传）。已在收尾提交中增加针对 `/simple` 的等待步骤。
+- 本机首次从 PyPI 安装失败，原因是 pip 的用户级 HTTP 缓存中存有旧索引页；`--no-cache-dir` 后正常。
+  与发布产物无关。
