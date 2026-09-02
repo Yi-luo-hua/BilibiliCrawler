@@ -4,6 +4,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   DEFAULT_ANALYSIS_CHART_KEYS,
   normalizeAnalysisChartKeys,
+  normalizeCustomModules,
 } from "./analysisCharts";
 import { SidecarClient } from "./sidecarClient";
 import type {
@@ -100,16 +101,21 @@ export async function readConfig(): Promise<UIConfig> {
     analysis_sample_size: 300,
     analysis_batch_size: 80,
     analysis_chart_keys: [...DEFAULT_ANALYSIS_CHART_KEYS],
+    analysis_custom_modules: [],
   };
   if (isTauri()) {
     const loaded = {
       ...defaults,
       ...(await invoke<UIConfig>("read_ui_config")),
     };
+    const customModules = normalizeCustomModules(loaded.analysis_custom_modules);
     return {
       ...loaded,
+      analysis_custom_modules: customModules,
       analysis_chart_keys: normalizeAnalysisChartKeys(
         loaded.analysis_chart_keys,
+        undefined,
+        customModules.map((item): string => item.id),
       ),
     };
   }
@@ -117,10 +123,14 @@ export async function readConfig(): Promise<UIConfig> {
   if (!raw) return defaults;
   try {
     const loaded = { ...defaults, ...JSON.parse(raw) };
+    const customModules = normalizeCustomModules(loaded.analysis_custom_modules);
     return {
       ...loaded,
+      analysis_custom_modules: customModules,
       analysis_chart_keys: normalizeAnalysisChartKeys(
         loaded.analysis_chart_keys,
+        undefined,
+        customModules.map((item): string => item.id),
       ),
     };
   } catch {

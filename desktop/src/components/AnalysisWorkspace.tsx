@@ -1,5 +1,6 @@
 import { useEffect, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import { AlertTriangle, BrainCircuit, Database, FileText, Gauge, MapPinned, Tags } from "lucide-react";
 import {
   Bar,
@@ -18,19 +19,37 @@ import {
 import {
   analysisChartOptions,
   analysisSourceLabel,
+  CUSTOM_MODULE_ACTIVE_LIMIT,
+  CUSTOM_MODULE_PROMPT_LIMIT,
+  CUSTOM_MODULE_SAVED_LIMIT,
+  CUSTOM_MODULE_TITLE_LIMIT,
   chinaMapLocations,
   chinaMapViewBox,
   getAnalysisChartOptionsForSource,
   getMapLocationPaths,
   getRegionValueByMapId,
   hasAnalysisChart,
+  isCustomModuleKey,
+  newCustomModuleId,
   normalizeAnalysisChartKeys,
+  truncateByCodePoint,
+  resultCustomModules,
+  resultModuleKeys,
   regionFill,
   regionStroke,
   regionStrokeWidth,
   unmappedDomesticRegions
 } from "../lib/analysisCharts";
-import type { AnalysisChartKey, AnalysisResult, AnalysisSource, AnalysisStrategy, ChartDatum, UIConfig } from "../types";
+import type {
+  AnalysisChartKey,
+  AnalysisModuleKey,
+  AnalysisResult,
+  AnalysisSource,
+  AnalysisStrategy,
+  ChartDatum,
+  CustomAnalysisModule,
+  UIConfig,
+} from "../types";
 
 interface Props {
   config: UIConfig;
@@ -57,8 +76,12 @@ const colors = ["#1e73d6", "#fb7299", "#29bf73", "#f5a524", "#7c6ff6", "#16a3a8"
 const axisTick = { fontSize: 11, fill: "var(--muted)" };
 
 export function AnalysisWorkspace({ config, setConfig, llmApiKey, setLlmApiKey, hasComments, hasDynamics, analysisSource, analysisResult, analysisStats }: Props) {
-  const selectedKeys = normalizeAnalysisChartKeys(config.analysis_chart_keys, analysisSource);
+  const customModules = config.analysis_custom_modules ?? [];
+  const customIds = customModules.map((item): string => item.id);
+  const selectedKeys = normalizeAnalysisChartKeys(config.analysis_chart_keys, analysisSource, customIds);
   const availableChartOptions = getAnalysisChartOptionsForSource(analysisSource);
+  const activeCustomCount = selectedKeys.filter(isCustomModuleKey).length;
+  const [moduleDraft, setModuleDraft] = useState<CustomAnalysisModule | null>(null);
   const patch = (data: Partial<UIConfig>) => setConfig((prev) => ({ ...prev, ...data }));
   const canAnalyzeSource = Boolean(analysisSource);
   const [sampleSizeInput, setSampleSizeInput] = useState(String(config.analysis_sample_size));
@@ -102,14 +125,54 @@ export function AnalysisWorkspace({ config, setConfig, llmApiKey, setLlmApiKey, 
     }
   };
 
-  const toggleChart = (key: AnalysisChartKey) => {
-    const selected = normalizeAnalysisChartKeys(config.analysis_chart_keys, analysisSource);
+  const toggleChart = (key: AnalysisModuleKey) => {
+    const selected = normalizeAnalysisChartKeys(config.analysis_chart_keys, analysisSource, customIds);
     if (selected.includes(key)) {
       if (selected.length === 1) return;
       patch({ analysis_chart_keys: selected.filter((item) => item !== key) });
       return;
     }
+    // Each custom module costs prompt budget in every batch, so the number
+    // running at once is capped rather than left to the user to discover.
+    if (isCustomModuleKey(key) && selected.filter(isCustomModuleKey).length >= CUSTOM_MODULE_ACTIVE_LIMIT) return;
     patch({ analysis_chart_keys: [...selected, key] });
+  };
+
+  const startModuleDraft = () => {
+    const id = newCustomModuleId(customIds);
+    // No free id means creating would overwrite an existing module, so the
+    // creation is refused outright rather than silently reusing one.
+    if (!id) {
+      toast.error("无法生成新的模块 ID，请先删除部分自定义模块后重试");
+      return;
+    }
+    setModuleDraft({ id, title: "", prompt: "" });
+  };
+
+  const saveModuleDraft = () => {
+    if (!moduleDraft) return;
+    const title = truncateByCodePoint(moduleDraft.title.trim(), CUSTOM_MODULE_TITLE_LIMIT);
+    const prompt = truncateByCodePoint(moduleDraft.prompt.trim(), CUSTOM_MODULE_PROMPT_LIMIT);
+    if (!title || !prompt) return;
+    const existing = customModules.some((item) => item.id === moduleDraft.id);
+    if (!existing && customModules.length >= CUSTOM_MODULE_SAVED_LIMIT) return;
+    const saved = { ...moduleDraft, title, prompt };
+    patch({
+      analysis_custom_modules: existing
+        ? customModules.map((item) => (item.id === saved.id ? saved : item))
+        : [...customModules, saved],
+    });
+    setModuleDraft(null);
+  };
+
+  const deleteModule = (id: string) => {
+    // The selection is cleaned up with the module: a key nothing can render
+    // must not survive in the saved configuration.
+    patch({
+      analysis_custom_modules: customModules.filter((item) => item.id !== id),
+      analysis_chart_keys: selectedKeys.filter((item) => item !== id),
+    });
+    if (moduleDraft?.id === id) setModuleDraft(null);
   };
 
   return (
@@ -202,7 +265,80 @@ export function AnalysisWorkspace({ config, setConfig, llmApiKey, setLlmApiKey, 
               </label>
             );
           })}
+          {customModules.map((item) => {
+            const checked = selectedKeys.includes(item.id);
+            const atCap = !checked && activeCustomCount >= CUSTOM_MODULE_ACTIVE_LIMIT;
+            return (
+              <div className={checked ? "module-option selected" : "module-option"} key={item.id}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleChart(item.id)}
+                    disabled={atCap || (checked && selectedKeys.length === 1)}
+                  />
+                  <span>
+                    <strong>{item.title}</strong>
+                    <small>{atCap ? `最多同时启用 ${CUSTOM_MODULE_ACTIVE_LIMIT} 个自定义模块` : "自定义文本模块"}</small>
+                  </span>
+                </label>
+                <span className="module-option-actions">
+                  <button type="button" onClick={() => setModuleDraft({ ...item })}>编辑</button>
+                  <button type="button" onClick={() => deleteModule(item.id)}>删除</button>
+                </span>
+              </div>
+            );
+          })}
         </div>
+        {moduleDraft ? (
+          <div className="module-editor">
+            <input
+              type="text"
+              value={moduleDraft.title}
+              placeholder="模块标题，例如：传播路径"
+              onChange={(event) =>
+                setModuleDraft({
+                  ...moduleDraft,
+                  title: truncateByCodePoint(event.target.value, CUSTOM_MODULE_TITLE_LIMIT),
+                })
+              }
+            />
+            <textarea
+              value={moduleDraft.prompt}
+              rows={4}
+              placeholder="描述希望从什么角度分析，例如：分析争议是如何扩散的，谁在推动"
+              onChange={(event) =>
+                setModuleDraft({
+                  ...moduleDraft,
+                  prompt: truncateByCodePoint(event.target.value, CUSTOM_MODULE_PROMPT_LIMIT),
+                })
+              }
+            />
+            <div className="module-editor-actions">
+              <small>{Array.from(moduleDraft.prompt).length}/{CUSTOM_MODULE_PROMPT_LIMIT}</small>
+              <button type="button" onClick={() => setModuleDraft(null)}>取消</button>
+              <button
+                type="button"
+                className="primary"
+                disabled={!moduleDraft.title.trim() || !moduleDraft.prompt.trim()}
+                onClick={saveModuleDraft}
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="module-add"
+            disabled={customModules.length >= CUSTOM_MODULE_SAVED_LIMIT}
+            onClick={() => startModuleDraft()}
+          >
+            {customModules.length >= CUSTOM_MODULE_SAVED_LIMIT
+              ? `最多保存 ${CUSTOM_MODULE_SAVED_LIMIT} 个自定义模块`
+              : "+ 添加自定义模块"}
+          </button>
+        )}
       </div>
 
       <div className="analysis-data-row">
@@ -218,8 +354,9 @@ export function AnalysisWorkspace({ config, setConfig, llmApiKey, setLlmApiKey, 
 }
 
 function AnalysisDashboard({ result }: { result: AnalysisResult }) {
-  const activeLabels = normalizeAnalysisChartKeys(result.meta.chart_keys, result.meta.source)
-    .map((key) => analysisChartOptions.find((item) => item.key === key)?.label)
+  const customTitles = new Map((result.meta.custom_modules ?? []).map((item) => [item.id as string, item.title]));
+  const activeLabels = resultModuleKeys(result)
+    .map((key) => customTitles.get(key) ?? analysisChartOptions.find((item) => item.key === key)?.label)
     .filter(Boolean)
     .join(" / ");
   const overviewCards = [
@@ -351,6 +488,7 @@ function AnalysisDashboard({ result }: { result: AnalysisResult }) {
         ) : null}
       </div>
       {hasAnalysisChart(result, "deep_analysis") ? <DeepAnalysisBlock result={result} /> : null}
+      <CustomModuleBlocks result={result} />
       <StackedAnalysisCards
         title="分析要点"
         cards={[
@@ -459,6 +597,17 @@ function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: 
         );
       })}
     </div>
+  );
+}
+
+function CustomModuleBlocks({ result }: { result: AnalysisResult }) {
+  const modules = resultCustomModules(result);
+  if (!modules.length) return null;
+  return (
+    <StackedAnalysisCards
+      title="自定义分析"
+      cards={modules.map((item) => ({ title: item.title, items: [item.text], empty: "暂无分析" }))}
+    />
   );
 }
 

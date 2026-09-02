@@ -1,6 +1,15 @@
 import chinaMap from "@svg-maps/china";
 import taiwanMainMap from "@svg-maps/taiwan.main";
-import type { AnalysisChartKey, AnalysisResult, AnalysisSource, ChartAsset, ChartDatum } from "../types";
+import type {
+  AnalysisChartKey,
+  AnalysisModuleKey,
+  AnalysisResult,
+  AnalysisSource,
+  ChartAsset,
+  ChartDatum,
+  CustomAnalysisModule,
+  CustomAnalysisModuleId,
+} from "../types";
 
 export interface ChinaMapLocation {
   id: string;
@@ -114,24 +123,125 @@ export function getAnalysisChartOptionsForSource(source: AnalysisSource | null) 
   return analysisChartOptions.filter((item) => !unsupported.has(item.key));
 }
 
-export function normalizeAnalysisChartKeys(value: unknown, source?: AnalysisSource | null): AnalysisChartKey[] {
-  const allowed = getAnalysisChartOptionsForSource(source ?? null).map((item) => item.key);
-  if (!Array.isArray(value)) return [...allowed];
-  const valid = new Set(allowed);
-  const selected = value.filter((item): item is AnalysisChartKey => typeof item === "string" && valid.has(item as AnalysisChartKey));
-  return selected.length ? selected : [...allowed];
+export const CUSTOM_MODULE_ID_PATTERN = /^custom_[0-9a-f]{6}$/;
+export const CUSTOM_MODULE_TITLE_LIMIT = 24;
+export const CUSTOM_MODULE_PROMPT_LIMIT = 500;
+export const CUSTOM_MODULE_SAVED_LIMIT = 8;
+export const CUSTOM_MODULE_ACTIVE_LIMIT = 3;
+
+export function isCustomModuleKey(key: AnalysisModuleKey): key is CustomAnalysisModuleId {
+  return CUSTOM_MODULE_ID_PATTERN.test(key);
+}
+
+export const CUSTOM_MODULE_ID_ATTEMPTS = 64;
+
+/** Source of the three random bytes behind an id. Injectable so the exhausted
+ * branch can be covered deterministically. */
+export type RandomBytes = (length: number) => Uint8Array;
+
+const cryptoRandomBytes: RandomBytes = (length) => crypto.getRandomValues(new Uint8Array(length));
+
+/** Six hex digits is only 24 bits, so a fresh id is checked against the ones
+ * already saved: a collision would make the editor treat a new module as an
+ * edit and overwrite the existing one without saying so.
+ *
+ * Returns null when no free id turned up, rather than handing back a colliding
+ * one - that would reintroduce the very overwrite this guards against. With at
+ * most CUSTOM_MODULE_SAVED_LIMIT ids in a 16.7M space the caller should never
+ * see null, so it is surfaced as a refusal instead of being papered over. */
+export function newCustomModuleId(
+  existing: readonly string[] = [],
+  randomBytes: RandomBytes = cryptoRandomBytes,
+): CustomAnalysisModuleId | null {
+  const taken = new Set(existing);
+  for (let attempt = 0; attempt < CUSTOM_MODULE_ID_ATTEMPTS; attempt += 1) {
+    const candidate = randomCustomModuleId(randomBytes);
+    if (!taken.has(candidate)) return candidate;
+  }
+  return null;
+}
+
+function randomCustomModuleId(randomBytes: RandomBytes): CustomAnalysisModuleId {
+  const bytes = randomBytes(3);
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `custom_${hex}`;
+}
+
+/** Truncate by Unicode code point, matching the Rust and Python limits.
+ * `String.prototype.slice` counts UTF-16 units, so an emoji would cost two
+ * and could be cut into a lone surrogate. */
+export function truncateByCodePoint(value: string, limit: number): string {
+  const points = Array.from(value);
+  return points.length <= limit ? value : points.slice(0, limit).join("");
+}
+
+/** Drop entries that cannot round-trip. A malformed id would orphan its
+ * results, and an empty title or prompt has nothing to run. */
+export function normalizeCustomModules(value: unknown): CustomAnalysisModule[] {
+  if (!Array.isArray(value)) return [];
+  const modules: CustomAnalysisModule[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const raw = item as Partial<CustomAnalysisModule>;
+    const id = String(raw.id ?? "").trim().toLowerCase();
+    if (!CUSTOM_MODULE_ID_PATTERN.test(id) || seen.has(id)) continue;
+    const title = truncateByCodePoint(String(raw.title ?? "").trim(), CUSTOM_MODULE_TITLE_LIMIT);
+    const prompt = truncateByCodePoint(String(raw.prompt ?? "").trim(), CUSTOM_MODULE_PROMPT_LIMIT);
+    if (!title || !prompt) continue;
+    seen.add(id);
+    modules.push({ id: id as CustomAnalysisModuleId, title, prompt });
+    if (modules.length >= CUSTOM_MODULE_SAVED_LIMIT) break;
+  }
+  return modules;
+}
+
+export function normalizeAnalysisChartKeys(
+  value: unknown,
+  source?: AnalysisSource | null,
+  customIds: readonly string[] = [],
+): AnalysisModuleKey[] {
+  const builtin = getAnalysisChartOptionsForSource(source ?? null).map((item) => item.key);
+  // Custom modules are never part of the default selection: falling back to
+  // "everything" must not silently start spending tokens on them.
+  if (!Array.isArray(value)) return [...builtin];
+  const valid = new Set<string>([...builtin, ...customIds]);
+  const selected = value.filter((item): item is AnalysisModuleKey => typeof item === "string" && valid.has(item));
+  return selected.length ? selected : [...builtin];
 }
 
 export function hasAnalysisChart(result: AnalysisResult, key: AnalysisChartKey) {
-  const keys = normalizeAnalysisChartKeys(result.meta?.chart_keys, result.meta?.source);
+  const keys = resultModuleKeys(result);
   return keys.includes(key);
 }
 
+/** Module keys for a finished analysis, custom ids resolved from the snapshot
+ * the run recorded rather than from current configuration. */
+export function resultModuleKeys(result: AnalysisResult): AnalysisModuleKey[] {
+  const snapshot = result.meta?.custom_modules ?? [];
+  return normalizeAnalysisChartKeys(
+    result.meta?.chart_keys,
+    result.meta?.source,
+    snapshot.map((item) => item.id),
+  );
+}
+
+/** Titles as they were when the analysis ran, so a renamed or deleted module
+ * still labels its own historical result. */
+export function resultCustomModules(result: AnalysisResult): Array<{ id: CustomAnalysisModuleId; title: string; text: string }> {
+  const snapshot = result.meta?.custom_modules ?? [];
+  const byId = new Map(snapshot.map((item) => [item.id, item.title]));
+  return resultModuleKeys(result)
+    .filter(isCustomModuleKey)
+    .map((id) => ({ id, title: byId.get(id) ?? id, text: String(result.custom_results?.[id] ?? "").trim() }));
+}
+
 export async function buildAnalysisChartAssets(result: AnalysisResult): Promise<ChartAsset[]> {
-  const keys = normalizeAnalysisChartKeys(result.meta?.chart_keys, result.meta?.source);
+  const keys = resultModuleKeys(result);
   const assets: ChartAsset[] = [];
   for (const key of keys) {
-    if (key === "deep_analysis") continue;
+    // Text-shaped modules have no chart asset to export.
+    if (key === "deep_analysis" || isCustomModuleKey(key)) continue;
     if (key === "word_cloud") {
       if (result.word_cloud_image_path) {
         assets.push({
