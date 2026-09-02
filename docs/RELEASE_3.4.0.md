@@ -122,7 +122,24 @@
 
 #### 候选产物真机证据
 
-> 发布执行时在此记录候选提交 SHA、安装包大小、构建环境、SHA-256 与实际观察结果。
+2026-09-02 在候选 `526e8cc` 上完成预检构建与真机验收。
+
+- 预检安装包：`BilibiliCrawler-Setup-3.4.0-x64.exe`，53,497,031 字节，
+  SHA-256 `4FE2306E5C58C5CF41D3E8E600963CA5C6A0FF26DEBD9E36C24280B786BD3921`，
+  构建完成 2026-09-02T02:58:26+08:00，`build_installer.ps1` 耗时 4.77 分钟。
+  **这是预检哈希，不是发布哈希**；第 6 节的最终构建另行记录。
+- 构建环境：CPython 3.13.15 x64（GUID 命名的新建 venv）、rustc/cargo 1.95.0、
+  pnpm 10.28.0、Windows 11 x64 10.0.26100。worktree 位于仓库同级的
+  `BilibiliCommentsCrawler-worktrees\release-v3.4.0-final`。
+- 自动化门禁（同一候选）：无 MCP 全量 299 项 OK（3 项预期跳过）；MCP 2.1.0 全量 330/330；
+  desktop `install --frozen-lockfile`、`audit`（无告警）、`typecheck`、`build`、
+  `test:unit` 13/13 均 exit 0；`build_backend.ps1` 后 `cargo check --locked` exit 0；
+  `git diff --check 526e8cc^1 526e8cc` exit 0。
+- 真机验收由维护者在本机 Windows 11 x64 上按本节及前瞻计划 P0 的顺序逐项执行，报告全部通过、
+  未发现问题。本文不代为记录每一项的具体数值，逐项观察以维护者的验收记录为准。
+- 已知偏差：安装包构建期间 Tauri CLI 以 LF 重写了 `desktop/src-tauri/Cargo.toml`，
+  `git status` 因此显示 ` M`。该文件经 clean filter 的对象哈希为 `513c3717…`，与
+  `526e8cc` 的 blob 逐字节相同，`git diff` 为空，属于行尾差异而非源码改动。
 
 ### 6. 发布
 
@@ -142,7 +159,10 @@
   只有这次构建生成的安装包才是最终 Release 资产。
 - [ ] 设置 `$Installer = Resolve-Path 'desktop/src-tauri/target/release/bundle/nsis/BilibiliCrawler-Setup-3.4.0-x64.exe'`，
   记录文件大小、构建时间、构建主机环境、SHA-256 与 `$CandidateSha`，并再次断言 worktree HEAD 未变化、
-  工作区仍干净（忽略的构建产物除外）。
+  工作区仍干净（忽略的构建产物除外）。判据是**无内容变更**而不是 `git status` 输出为空：Tauri CLI
+  会在构建中以 LF 重写 `desktop/src-tauri/Cargo.toml`，`core.autocrlf=true` 下会出现 ` M`。
+  用 `git diff` 为空且 `git hash-object <file>` 等于 `git rev-parse HEAD:<file>` 判定内容未变；
+  任何真实内容差异仍然作废本次构建。
 - [ ] 生成校验文件：
   `$ChecksumFile = "$Installer.sha256"; $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Installer).Hash.ToLowerInvariant(); "$Hash  $([IO.Path]::GetFileName($Installer))" | Set-Content -Encoding ascii -LiteralPath $ChecksumFile`，
   并在本地反向解析校验文件确认文件名与哈希匹配。
@@ -189,3 +209,17 @@
 ## 验收记录
 
 > 每完成一节在此追加：执行时间、环境、命令、结果与日志路径（`.runlogs/` 不纳入提交）。
+
+### 2026-09-02
+
+- 第 1–2 节：在候选 `526e8cc` 上通过。两个隔离 venv 均由 CPython 3.13.15 x64 创建，
+  分别校验 `mcp` 不可导入与 `mcp==2.1.0`。日志 `.runlogs/gate-{no-mcp,mcp}.log`。
+- 第 3 节：GitHub `testpypi` / `pypi` environments 复核通过，均只允许 `main`，`pypi` 保留
+  人工 reviewer。TestPyPI 与 PyPI 的 pending Trusted Publisher 由维护者配置完成；
+  站点侧配置无公开只读接口，首次真正验证发生在发布工作流的 `testpypi` 阶段。
+- 第 4 节：`build_backend.ps1` 与 `build_installer.ps1` 均 exit 0，
+  日志 `.runlogs/build-{backend,installer}.log`。NSIS 3.11 工具链命中本地缓存。
+- 第 5 节：真机验收由维护者执行并报告通过，详见上文候选产物真机证据。
+- 过程中修正的两处清单缺陷：`cargo check` 缺少「sidecar 构建之后」的顺序前提（`5bd7440`），
+  以及 worktree 干净判据应为无内容变更而非 `git status` 为空（本次）。
+  另有一处依赖告警在候选中修复：`browserslist` 经 pnpm overrides 锁到 4.28.8（`cfd9601`）。
