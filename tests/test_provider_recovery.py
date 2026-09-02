@@ -106,6 +106,63 @@ class ProviderTests(unittest.TestCase):
             self.assertEqual(self.call(url)["summary"], "recovered")
             self.assertEqual(len(calls), 2)
 
+    def test_request_invalid_surfaces_only_sanitized_identifiers(self):
+        with provider([(400, error_body("unsupported_parameter", "top_p"), {})]) as (url, calls):
+            with self.assertRaises(AnalysisError) as raised:
+                self.call(url)
+            message = str(raised.exception)
+            self.assertIn("code=unsupported_parameter", message)
+            self.assertIn("param=top_p", message)
+            self.assertEqual(len(calls), 1)
+            self.assertNotIn(KEY, message)
+            self.assertNotIn(BODY_MARKER, message)
+
+    def test_google_style_status_is_surfaced_without_the_remote_message(self):
+        # Shape observed from CLIProxyAPI/Antigravity: the actionable detail is
+        # `status`, while `code` duplicates the HTTP status and `message` is
+        # remote free text that must not be reflected.
+        body = {"error": {"code": 400, "status": "FAILED_PRECONDITION",
+                          "message": f"User location is not supported. {KEY} {BODY_MARKER}"}}
+        with provider([(400, body, {})]) as (url, calls):
+            with self.assertRaises(AnalysisError) as raised:
+                self.call(url)
+            message = str(raised.exception)
+            self.assertEqual(raised.exception.code, "LLM_REQUEST_INVALID")
+            self.assertEqual(len(calls), 1)
+            self.assertIn("status=failed_precondition", message)
+            self.assertNotIn("User location", message)
+            self.assertNotIn(KEY, message)
+            self.assertNotIn(BODY_MARKER, message)
+            self.assertNotIn("code=400", message)
+
+    def test_unsafe_identifiers_are_omitted_rather_than_reflected(self):
+        unsafe = [f"sk-leak {KEY}", BODY_MARKER + " with spaces", "x" * 80,
+                  "值不安全", "<script>", 12345, {"nested": "object"}, ["list"]]
+        for value in unsafe:
+            body = {"error": {"code": value, "param": value, "status": value,
+                              "message": f"{KEY} {BODY_MARKER}"}}
+            with self.subTest(value=repr(value)), provider([(400, body, {})]) as (url, calls):
+                with self.assertRaises(AnalysisError) as raised:
+                    self.call(url)
+                message = str(raised.exception)
+                self.assertEqual(raised.exception.code, "LLM_REQUEST_INVALID")
+                self.assertEqual(len(calls), 1)
+                self.assertNotIn(KEY, message)
+                self.assertNotIn(BODY_MARKER, message)
+                self.assertNotIn("script", message)
+                self.assertNotIn("不安全", message)
+
+    def test_absent_identifiers_leave_the_message_unadorned(self):
+        for body in [{"error": {"message": f"{KEY} {BODY_MARKER}"}}, {"error": {}}, {}]:
+            with self.subTest(body=json.dumps(body)), provider([(400, body, {})]) as (url, _):
+                with self.assertRaises(AnalysisError) as raised:
+                    self.call(url)
+                message = str(raised.exception)
+                self.assertNotIn("code=", message)
+                self.assertNotIn("param=", message)
+                self.assertNotIn("status=", message)
+                self.assertNotIn(KEY, message)
+
     def test_transient_response_recovers_with_bounded_retries(self):
         for status in (429, 500, 502, 503, 504):
             with self.subTest(status=status), provider([(status, error_body(), {"Retry-After": "0"}),

@@ -44,6 +44,43 @@ def retry_after_seconds(value: str | None) -> float | None:
     return max(0.0, seconds) if math.isfinite(seconds) else None
 
 
+_SAFE_TOKEN = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,39}$")
+
+
+def _safe_token(value: object) -> str:
+    """Return a provider-supplied identifier only when it cannot carry payload.
+
+    Codes, params and statuses are remote text like any other field, so they
+    are echoed only when they look like a bare identifier: a string, ASCII,
+    bounded, no whitespace. Anything else is dropped rather than truncated or
+    escaped, which keeps a single rule instead of per-field sanitising.
+    """
+    if not isinstance(value, str):
+        return ""
+    token = value.strip().lower()
+    return token if _SAFE_TOKEN.match(token) else ""
+
+
+def _error_detail(error: dict) -> str:
+    """Name what the provider refused, without reflecting its message.
+
+    OpenAI-compatible services identify the failure through `code`/`type` and
+    `param`; Google-style ones put an enum in `status` and repeat the HTTP
+    status in `code`, which is why a numeric `code` contributes nothing here.
+    """
+    parts = []
+    code = _safe_token(error.get("code")) or _safe_token(error.get("type"))
+    if code:
+        parts.append(f"code={code}")
+    param = _safe_token(error.get("param"))
+    if param:
+        parts.append(f"param={param}")
+    state = _safe_token(error.get("status"))
+    if state and state != code:
+        parts.append(f"status={state}")
+    return f"（{'，'.join(parts)}）" if parts else ""
+
+
 def classify_http_error(response: requests.Response) -> ProviderError:
     status = response.status_code
     # Auth status wins over all attacker-controlled fields in the body.
@@ -77,7 +114,8 @@ def classify_http_error(response: requests.Response) -> ProviderError:
                 message,
             ))
         )
-        return ProviderError(ErrorCode.LLM_REQUEST_INVALID, f"LLM 请求配置不被接受（HTTP {status}），请核对服务支持的参数。",
+        return ProviderError(ErrorCode.LLM_REQUEST_INVALID,
+                             f"LLM 请求配置不被接受（HTTP {status}），请核对服务支持的参数。{_error_detail(error)}",
                              drop_response_format=format_rejected)
     if status in {404, 405} or 300 <= status < 400:
         return ProviderError(ErrorCode.LLM_ENDPOINT, f"LLM 端点或路由不可用（HTTP {status}），请核对 base_url 与模型配置。")

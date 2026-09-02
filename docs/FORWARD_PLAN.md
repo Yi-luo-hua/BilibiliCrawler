@@ -15,50 +15,8 @@
 
 | 优先级 | 任务 | 状态 | 完成标准 |
 |---|---|---|---|
-| P1 | 修复 CLIProxyAPI Antigravity HTTP 400 参数兼容问题 | 规划中 | 精确识别被拒参数，安全兼容重试通过，普通 400 不被误重试，安装版 live smoke 通过 |
 | P2 | 新增分析模块自定义文本模块 | 规划中 | 自定义模块可保存并参与分析，结果进入界面与报告，未启用时输出与实施前一致 |
 | P2 | 复盘安装器跨构建覆盖残留 | 待评估 | 明确旧 sidecar 文件残留的影响，决定由安装器清理、版本化目录或文档约束处理 |
-
-## P1：CLIProxyAPI Antigravity HTTP 400 参数兼容
-
-### 已确认事实
-
-- 复现环境为 CLIProxyAPI `7.2.145`、commit `d9cea890`，监听 `127.0.0.1:8317`。
-- BilibiliCrawler Base URL 应为 `http://127.0.0.1:8317/v1`；客户端会追加 `/chat/completions`。
-- 模型 `gemini-3.7-flash-high` 出现在已认证模型列表中，`owned_by` 为 `antigravity`。
-- 正确的 `POST /v1/chat/completions` 多次在约 0.3–1.8 秒内返回 HTTP 400，不是连接或读取超时。
-- `/chat/completions` 与 `/v1/chat/completions/chat/completions` 的 404 来自错误 Base URL，不是产品故障。
-- 诊断产生的 `/v1/models` 401→200 和 Management API 404 不计入产品故障。
-- 先前显示第 3/4 批的进度使用的是 DeepSeek API，不能作为 CLIProxyAPI 已成功完成前两批的证据。
-- 失败只影响新的 analysis attempt；原 run、评论和上一份有效报告仍然保留。
-
-### 当前假设与边界
-
-BilibiliCrawler 的批次请求固定发送 `temperature: 0.2`，总结合并请求发送 `temperature: 0.18`，
-两者均发送 `response_format: {"type":"json_object"}`。Antigravity 上游存在拒绝采样字段并返回 400
-的同类记录，因此 `temperature` 是首要嫌疑，`response_format` 是次要嫌疑。
-
-当前安全错误表面不会展示远端响应正文，CLIProxyAPI 请求错误日志也未提供本次具体字段，因此上述判断仍是
-待验证假设。不得把任意 HTTP 400 直接认定为同一种兼容问题。
-
-### 实施步骤
-
-1. 扩展 provider 错误解析，只提取并传递脱敏后的 HTTP status、error code 与 param。
-2. 保持远端正文、API Key、prompt、评论内容不进入日志、快照、manifest、分析 JSON 或报告。
-3. 仅当结构化错误明确指出 `temperature` 不受支持时，移除该字段并占用共享重试预算重新请求。
-4. 保留现有的 `response_format` 精确降级、最多三次请求、取消和退避语义。
-5. 任意 400、模糊错误或其他参数错误继续 fail closed，不自动删字段或重放请求。
-6. 修复完成后重建 sidecar 与安装包，以相同 CLIProxyAPI/Antigravity 配置执行 live smoke。
-
-### 验收标准
-
-- 显式 `temperature` unsupported 错误先由回归夹具复现，修复后只重试一次且第二次请求不含该字段。
-- `response_format` 的既有兼容降级继续通过。
-- 无关参数错误、空错误体和普通 HTTP 400 均不重试。
-- 重试预算、取消、超时与旧报告保留语义不变。
-- 合成凭据与远端正文 canary 在 stdout、stderr、日志、快照和完整 run 目录中零命中。
-- 普通 Python、MCP、桌面单元与真实 SidecarClient 门禁全部通过。
-- 安装版使用 `gemini-3.7-flash-high` 完成至少一次最小分析；若上游仍拒绝，记录脱敏 code/param 并维持未完成状态。
 
 ## P2：分析模块自定义文本模块
 
