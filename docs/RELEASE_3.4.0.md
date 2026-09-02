@@ -1,7 +1,8 @@
 # v3.4.0 发布准备与验收清单
 
-> 状态：Release Candidate 准备中。清单未逐项勾选前不得创建标签、上传 Release 资产或向
-> TestPyPI / PyPI 发布。批次进度见 [v3.3.0 后续实施计划](POST_3.3.0_PLAN.md)，包发布治理见
+> 状态：**v3.4.0 已于 2026-09-02 公开发布**，标签指向 `dc71f58`。下文保留原始发布准备清单与
+> 验收记录；未勾选项是执行时按顺序完成的模板项，不代表当前发布状态。后续版本另建清单，本文不再
+> 追加新任务。批次进度见 [v3.3.0 后续实施计划](POST_3.3.0_PLAN.md)，包发布治理见
 > [Python 包发布治理](PYTHON_PACKAGE_RELEASE.md)，面向用户的说明见
 > [v3.4.0 发布说明](RELEASE_NOTES_3.4.0.md)。
 
@@ -223,3 +224,19 @@
 - 过程中修正的两处清单缺陷：`cargo check` 缺少「sidecar 构建之后」的顺序前提（`5bd7440`），
   以及 worktree 干净判据应为无内容变更而非 `git status` 为空（本次）。
   另有一处依赖告警在候选中修复：`browserslist` 经 pnpm overrides 锁到 4.28.8（`cfd9601`）。
+- 第 6 节在最终候选 `dc71f58` 上完成，门禁全部重跑通过（无 MCP 299/3 跳过、MCP 330/330、
+  desktop 五项、`build_backend.ps1` 后 `cargo check --locked`）。正式产物：
+  `BilibiliCrawler-Setup-3.4.0-x64.exe`，53,480,344 字节，
+  SHA-256 `60202e26bc29799104f3eb610fa1e196219f469f05467bd2215046277978d715`，
+  构建完成 2026-09-02T14:50:38+08:00。`.sha256` 校验文件已反向解析核对。
+- 标签 `v3.4.0` 为 annotated，远端 peeled SHA 等于 `dc71f58`。
+- Python 产物：wheel 110,270 字节 `1d6e514e…50cc90`；sdist 108,792 字节 `8a9aedf4…4ce8b0`；
+  `python-package-manifest.json` 的 `source_commit` 等于标签指向的提交。
+  GitHub Release、TestPyPI 与 PyPI 三处哈希一致，全程复用同一份不可变产物。
+- 发布顺序按第 6 节执行：Draft（安装包 + 校验文件）→ 工作流 `github-release` 附加四个 Python 资产 →
+  下载全部资产反向核验 → 公开 Release → `testpypi` → `pypi`（经 `pypi` environment 人工审批）。
+  每个阶段的工作流均为 success，含六分片干净安装与索引下载安装 smoke。
+- 发布后本机独立验证：CPython 3.13.15 新建 venv 从 PyPI 安装
+  `bilibili-crawler[mcp]==3.4.0`，`pip check` 无破损；`--help` 与只读 `doctor` 正常且无凭据泄露；
+  `bilibili-crawler-mcp` stdio 握手成功，协议 `2025-11-25`，发现 7 个工具。
+- Release 说明已补充构建提交、三个产物的大小与 SHA-256，以及未代码签名的 SmartScreen 提示。

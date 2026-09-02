@@ -188,6 +188,11 @@ manifest 中的 artifacts 路径相对于 run 目录存储（拷贝到其他机�
 - JSON：完整分析结构，包含可视化图表数据层和元信息（含 `schema_version` 与 `elapsed_seconds` 耗时）。
 - Markdown 图表资源会写入报告同级的 assets 目录；词云图直接复用 sidecar 生成的 PNG 文件。
 
+## 项目规划
+
+当前候选验收、兼容性修复、发布任务和后续工程工作见
+[BilibiliCrawler 前瞻计划](docs/FORWARD_PLAN.md)。历史版本计划仅保留对应阶段记录，不再追加新任务。
+
 ## 源码开发
 
 ### 环境要求
@@ -350,7 +355,7 @@ BilibiliCrawler/
 
 ## 更新日志
 
-### v3.4.0（待发布）
+### v3.4.0 (2026.09.02)
 - 新增可安装的 `bilibili-crawler` Python 包与 `bilibili-crawler`、`bilibili-crawler-mcp` 稳定命令，支持 Python 3.10–3.13；旧源码入口保留为薄兼容层。
 - 桌面端、CLI 与 MCP 统一按同一个 profile 解析 provider、model 与 API Key，避免把凭据发往错误端点。
 - 新增只读 `doctor` 诊断，展示配置来源、有效 provider/model、运行目录与 MCP 状态；只有显式要求联网检查时才访问 provider。
@@ -360,7 +365,8 @@ BilibiliCrawler/
 - 补齐真实 MCP stdio 子进程验收，覆盖中文内容、Windows 编码、进程重启复用 run 与可选 live smoke。
 - Windows 上目录发布遇到短暂共享锁（WinError 5/32）时按有限退避重试；持续锁与目标冲突仍 fail-closed。
 - 新增 Python 包 CI 门禁与手工发布链路：产物哈希锁定、源码逐字节绑定，GitHub Release → TestPyPI → PyPI 顺序发布并使用 OIDC Trusted Publishing。
-- 发布前仍须完成 `docs/RELEASE_3.4.0.md` 中的 Tauri 真机验收与包发布门禁；完成后再填写发布日期并创建标签。
+- 已按 `docs/RELEASE_3.4.0.md` 完成真机验收与发布门禁。标签 `v3.4.0` 指向 `dc71f58`；Windows x64 安装包随
+  GitHub Release 发布，`bilibili-crawler` 3.4.0 已上架 PyPI，两处与 Release 资产的 SHA-256 一致。
 
 ### v3.3.0 (2026.08.30)
 - 桌面评论爬取与 `source == "comments"` 的分析已迁入共享 `AgentService`，同时保留既有 RPC、事件、取消、空结果和 source 回退契约。
