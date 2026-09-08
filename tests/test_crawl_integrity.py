@@ -3,6 +3,7 @@ import copy
 import os
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -88,6 +89,36 @@ class CrawlIntegrityTests(unittest.TestCase):
                 started = service.start_crawl("av1", include_replies=False)
                 self.assertTrue(service.wait_until_finished(started.task_id, 5))
                 self.assertEqual(service.get_status(task_id=started.task_id).status, expected)
+
+    def test_cancel_during_partial_save_wins_over_crawl_failure(self):
+        writing = threading.Event()
+        release = threading.Event()
+
+        class BlockingStore(RunStore):
+            def save_comments(inner, run_id, comments):
+                artifacts = super().save_comments(run_id, comments)
+                writing.set()
+                if not release.wait(5):
+                    raise TimeoutError("test did not release the save")
+                return artifacts
+
+        store = BlockingStore(Path(self.temp.name))
+        service = AgentService(store=store, api=PagedAPI([page([1]), None]))
+        started = service.start_crawl("av1", include_replies=False)
+        try:
+            self.assertTrue(writing.wait(5))
+            self.assertEqual(service.stop(started.task_id).status, "cancelling")
+        finally:
+            release.set()
+            service.wait_until_finished(started.task_id, 5)
+        snapshot = service.get_status(task_id=started.task_id)
+        self.assertEqual(snapshot.status, "cancelled")
+        self.assertEqual(snapshot.error_code, "CANCELLED")
+        self.assertIsNone(snapshot.error)
+        self.assertEqual(snapshot.counts["comments"], 1)
+        self.assertTrue(Path(snapshot.artifacts["comments_csv"]).is_file())
+        restarted = AgentService(store=RunStore(Path(self.temp.name)))
+        self.assertEqual(restarted.get_status(run_id=started.run_id).status, "cancelled")
 
     def test_incomplete_crawl_does_not_automatically_call_llm(self):
         service = AgentService(store=RunStore(Path(self.temp.name)), api=PagedAPI([page([1]), None]))

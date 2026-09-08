@@ -159,13 +159,20 @@ class _Task:
         self.stop_crawler()
         return True
 
-    def settle(self, completed_stage: str, cancelled_stage: str, changes: dict[str, Any]) -> None:
+    def settle(
+        self, completed_stage: str, cancelled_stage: str, changes: dict[str, Any],
+        failure: tuple[str, str] | None = None,
+    ) -> None:
         """Atomically choose the terminal status and record results."""
         with self._lock:
             if self.cancel_event.is_set():
                 self.status = RunStatus.CANCELLED
                 self.stage = cancelled_stage
                 self.error_code = ErrorCode.CANCELLED
+            elif failure is not None:
+                self.status = RunStatus.FAILED
+                self.stage = completed_stage
+                self.error_code, self.error = failure
             else:
                 self.status = RunStatus.COMPLETED
                 self.stage = completed_stage
@@ -371,6 +378,7 @@ class AgentService:
         task: _Task,
         completed_stage: str,
         cancelled_stage: str = "任务已取消",
+        failure: tuple[str, str] | None = None,
         **changes: Any,
     ) -> None:
         """Record results, choosing the terminal status by cancellation state.
@@ -379,7 +387,7 @@ class AgentService:
         the export would let the completion update overwrite `cancelling`, so a
         stopped task must be resolved here, after the writes.
         """
-        task.settle(completed_stage, cancelled_stage, changes)
+        task.settle(completed_stage, cancelled_stage, changes, failure)
         self._persist(task)
 
     def _persist(self, task: _Task) -> None:
@@ -692,8 +700,12 @@ class AgentService:
             return
 
         if crawl_error is not None:
-            task.update(**self._crawl_results(task, cleaned))
-            raise ServiceError(ErrorCode.CRAWL_FAILED, str(crawl_error))
+            self._settle(
+                task, "评论爬取失败",
+                failure=(ErrorCode.CRAWL_FAILED, scrub(str(crawl_error))),
+                **self._crawl_results(task, cleaned),
+            )
+            return
 
         if not cleaned and not self._policy.empty_crawl_is_success:
             raise ServiceError(
