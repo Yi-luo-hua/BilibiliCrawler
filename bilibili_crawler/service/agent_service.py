@@ -24,6 +24,7 @@ from typing import Any, Callable
 
 from bilibili_crawler.api.bilibili_api import BilibiliAPI
 from bilibili_crawler.crawler.comment_crawler import CommentCrawler
+from bilibili_crawler.crawler.errors import CrawlError
 from bilibili_crawler.processor.analysis_processor import AnalysisCancelled, AnalysisError, LLMAnalysisProcessor
 from bilibili_crawler.processor.data_processor import DataProcessor
 from bilibili_crawler.service.credentials import LLMCredentials, resolve_llm_credentials, scrub
@@ -664,12 +665,17 @@ class AgentService:
             self._settle(task, "评论爬取完成", **changes)
             return
 
-        comments = crawler.crawl_comments(
-            str(params["url"]),
-            include_replies=bool(params["include_replies"]),
-            max_pages=max_pages,
-            mode=int(params["sort_mode"]),
-        )
+        crawl_error = None
+        try:
+            comments = crawler.crawl_comments(
+                str(params["url"]),
+                include_replies=bool(params["include_replies"]),
+                max_pages=max_pages,
+                mode=int(params["sort_mode"]),
+            )
+        except CrawlError as exc:
+            comments = exc.records
+            crawl_error = exc
         # Captured while the crawler still exists: the title/owner it learned
         # resolving the target belongs in the manifest next to the comments.
         target_info = getattr(crawler, "target_info", None)
@@ -684,6 +690,10 @@ class AgentService:
             # Persisting them is what makes "partial data is kept" true.
             self._settle(task, "评论爬取完成", **self._crawl_results(task, cleaned))
             return
+
+        if crawl_error is not None:
+            task.update(**self._crawl_results(task, cleaned))
+            raise ServiceError(ErrorCode.CRAWL_FAILED, str(crawl_error))
 
         if not cleaned and not self._policy.empty_crawl_is_success:
             raise ServiceError(
@@ -805,16 +815,10 @@ class AgentService:
                 if word_cloud.startswith("data:image/")
                 else []
             )
-            source_url, target = self._report_context(task.run_id)
             report_context = {
+                **self.report_context(task.run_id, comments),
                 "chart_assets": chart_assets,
                 "asset_dir_name": "assets" if chart_assets else "",
-                "source_url": source_url,
-                "source_title": str(target.get("title") or ""),
-                "source_owner": str(target.get("owner") or ""),
-                "source_pubdate": _format_pubdate(target.get("pubdate")),
-                "run_id": task.run_id,
-                "records": comments,
             }
             try:
                 parameters = inspect.signature(build_report).parameters
@@ -893,6 +897,18 @@ class AgentService:
         )
 
     # -- helpers -----------------------------------------------------------
+    def report_context(self, run_id: str, records: list[dict[str, Any]]) -> dict[str, Any]:
+        """Snapshot provenance for both persisted and desktop-exported reports."""
+        source_url, target = self._report_context(run_id)
+        return {
+            "source_url": source_url,
+            "source_title": str(target.get("title") or ""),
+            "source_owner": str(target.get("owner") or ""),
+            "source_pubdate": _format_pubdate(target.get("pubdate")),
+            "run_id": run_id,
+            "records": [dict(record) for record in records],
+        }
+
     def _report_context(self, run_id: str) -> tuple[str, dict[str, Any]]:
         """The crawl's source URL and target metadata, for the report header.
 

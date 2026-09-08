@@ -25,6 +25,7 @@ import {
   CUSTOM_MODULE_TITLE_LIMIT,
   chinaMapLocations,
   chinaMapViewBox,
+  compactChartLabel,
   getAnalysisChartOptionsForSource,
   getMapLocationPaths,
   getRegionValueByMapId,
@@ -691,11 +692,6 @@ function renderPieLabel(props: { name?: string; value?: number; percent?: number
 
 function onlyDigits(value: string) {
   return value.replace(/\D/g, "");
-}
-
-function compactChartLabel(value: unknown, limit: number) {
-  const text = String(value ?? "");
-  return text.length <= limit ? text : `${text.slice(0, limit - 1)}…`;
 }
 
 function numberValue(item: ChartDatum) {

@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import List, Dict, Optional, Callable
 
 from bilibili_crawler.api.bilibili_api import BilibiliAPI
+from bilibili_crawler.crawler.errors import CrawlError
 from bilibili_crawler.config.config import MAX_DYNAMICS_PAGES, MAX_REPLY_WORKERS
 
 logger = logging.getLogger(__name__)
@@ -128,7 +129,11 @@ class DynamicCrawler:
 
             data = fetch_page(offset)
             if not data or not data.get('data'):
-                raise RuntimeError(failure_message)
+                partial = self._enrich_and_filter(all_dynamics, keyword, start_time, end_time)
+                raise CrawlError(
+                    f"{failure_message}（第 {page} 页）；已保留 {len(partial)} 条，结果不完整",
+                    partial,
+                )
 
             items = data['data'].get('items', [])
             if not items:

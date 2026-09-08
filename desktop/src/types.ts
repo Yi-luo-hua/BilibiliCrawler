@@ -158,6 +158,7 @@ export interface SidecarBroadcastEvent {
     | "analysis.progress"
     | "analysis.result"
     | "stats"
+    | "partial"
     | "finished"
     | "cancelled"
     | "error"

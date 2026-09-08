@@ -241,7 +241,16 @@ export function App() {
           }));
         }
         break;
+      case "partial":
       case "stats":
+        if (event.event === "partial") {
+          if (event.mode === "comments") setHasComments(Boolean(event.count));
+          if (event.mode === "dynamics") setHasDynamics(Boolean(event.count));
+          if (event.count && (event.mode === "comments" || event.mode === "dynamics")) {
+            setLatestAnalysisSource(event.mode);
+          }
+          pushLog(`已保留 ${event.count ?? 0} 条部分数据，可导出或分析；抓取结果不完整。`);
+        }
         setStatsByMode((prev) => ({
           ...prev,
           [event.mode || "comments"]: event.stats || {},

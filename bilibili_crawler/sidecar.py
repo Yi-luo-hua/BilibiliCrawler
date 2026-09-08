@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
+import inspect
 import json
 import logging
 import os
@@ -29,6 +30,7 @@ import qrcode
 from bilibili_crawler.api.bilibili_api import BilibiliAPI
 from bilibili_crawler.crawler.comment_crawler import CommentCrawler
 from bilibili_crawler.crawler.dynamic_crawler import DynamicCrawler
+from bilibili_crawler.crawler.errors import CrawlError
 from bilibili_crawler.exporter.csv_exporter import CSVExporter
 from bilibili_crawler.processor.analysis_processor import AnalysisCancelled, AnalysisError, LLMAnalysisProcessor
 from bilibili_crawler.processor.data_processor import DataProcessor
@@ -87,6 +89,7 @@ class Sidecar:
         self._last_comments: list[dict[str, Any]] = []
         self._last_dynamics: list[dict[str, Any]] = []
         self._last_analysis: dict[str, Any] | None = None
+        self._last_analysis_report_context: dict[str, Any] = {}
         self._last_comment_context: dict[str, str] = {}
         self._last_comment_run_id = ""
         self._active_agent_task_id = ""
@@ -239,10 +242,15 @@ class Sidecar:
             while not self._agent_service.wait_until_finished(started.task_id, timeout=0.1):
                 pass
             snapshot = self._agent_service.get_status(task_id=started.task_id)
+            outcome = self._agent_service.take_outcome(started.task_id)
             if snapshot.status == RunStatus.FAILED:
+                if outcome is not None and outcome.comments:
+                    self._last_comments = list(outcome.comments)
+                    self._last_comment_run_id = started.run_id
+                    self._last_comment_context = self._comment_context(target_input)
+                    self.emit("partial", mode="comments", count=len(outcome.comments), stats=dict(outcome.stats))
                 raise RuntimeError(snapshot.error or "评论任务失败")
 
-            outcome = self._agent_service.take_outcome(started.task_id)
             if outcome is None:
                 raise RuntimeError("评论任务完成但结果不可用")
             comments = list(outcome.comments)
@@ -287,6 +295,10 @@ class Sidecar:
             stats = {"total": len(dynamics)}
             self.emit("stats", mode="dynamics", stats=stats)
             self.emit("finished", mode="dynamics", count=len(dynamics), stats=stats)
+        except CrawlError as exc:
+            self._last_dynamics = exc.records
+            self.emit("partial", mode="dynamics", count=len(exc.records), stats={"total": len(exc.records)})
+            self.emit("error", mode="dynamics", message=str(exc))
         except Exception as exc:
             logger.exception("dynamics task failed")
             self.emit("error", mode="dynamics", message=str(exc))
@@ -334,6 +346,9 @@ class Sidecar:
                 raise AnalysisError("分析任务完成但结果不可用")
             result = outcome.analysis
             result["_asset_context"] = self._analysis_asset_context(params)
+            self._last_analysis_report_context = self._agent_service.report_context(
+                self._last_comment_run_id, self._last_comments,
+            )
             self._last_analysis = result
             display_result = self._display_analysis_result(result)
             self.emit(
@@ -371,6 +386,7 @@ class Sidecar:
             if self._analysis_cancel.is_set():
                 raise AnalysisCancelled("分析已被取消")
             result["_asset_context"] = self._analysis_asset_context(params)
+            self._last_analysis_report_context = {}
             self._last_analysis = result
             display_result = self._display_analysis_result(result)
             self.emit(
@@ -668,10 +684,18 @@ class Sidecar:
                         (asset_dir / asset["filename"]).write_text(asset["svg"], encoding="utf-8")
                     elif asset.get("data"):
                         (asset_dir / asset["filename"]).write_bytes(asset["data"])
-            report = self._services.analysis_processor._build_markdown_report(
+            build_report = self._services.analysis_processor._build_markdown_report
+            parameters = inspect.signature(build_report).parameters
+            accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values())
+            context = {
+                key: value for key, value in self._last_analysis_report_context.items()
+                if accepts_kwargs or key in parameters
+            }
+            report = build_report(
                 self._last_analysis,
                 chart_assets=chart_assets,
                 asset_dir_name=asset_dir_name if chart_assets else "",
+                **context,
             )
             target.write_text(scrub(report), encoding="utf-8")
         else:

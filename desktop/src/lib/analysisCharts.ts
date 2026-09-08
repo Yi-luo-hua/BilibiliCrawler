@@ -315,7 +315,7 @@ async function buildChartSvg(result: AnalysisResult, key: Exclude<AnalysisChartK
     case "sentiment_distribution":
       return donutSvg("情绪分布", result.sentiment_counts);
     case "topic_ranking":
-      return horizontalBarSvg("主题排行", result.topic_counts, 820, 74);
+      return horizontalBarSvg("主题排行", result.topic_counts);
     case "time_trend":
       return lineSvg("时间趋势", result.time_series);
     case "level_distribution":
@@ -368,13 +368,17 @@ function donutSvg(title: string, data: ChartDatum[]) {
   return wrapSvg(title, 620, 310, content);
 }
 
-function horizontalBarSvg(title: string, data: ChartDatum[], width = 820, labelWidth = 180) {
+function horizontalBarSvg(title: string, data: ChartDatum[]) {
   const items = normalizeData(data).slice(0, 12);
   if (!items.length) return emptySvg(title);
+  const width = 820;
+  // 10 CJK glyphs at 14px fit between x=28 and x=200, including an ellipsis.
+  const labelWidth = 200;
   const max = Math.max(...items.map(numberValue), 1);
-  const rowHeight = 34;
+  const rowHeight = 36;
   const top = 80;
-  const chartWidth = width - labelWidth - 80;
+  const valueWidth = Math.max(56, ...items.map((item) => String(numberValue(item)).length * 8 + 20));
+  const chartWidth = width - labelWidth - valueWidth - 28;
   const height = Math.max(260, top + items.length * rowHeight + 36);
   const rows = items
     .map((item, index) => {
@@ -382,7 +386,7 @@ function horizontalBarSvg(title: string, data: ChartDatum[], width = 820, labelW
       const barWidth = (value / max) * chartWidth;
       const y = top + index * rowHeight;
       return [
-        `<text x="28" y="${y + 19}" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14" fill="${text}">${escapeXml(compactText(item.name, 22))}</text>`,
+        `<text x="28" y="${y + 19}" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14" fill="${text}"><title>${escapeXml(item.name)}</title>${escapeXml(compactChartLabel(item.name, 10))}</text>`,
         `<rect x="${labelWidth}" y="${y}" width="${barWidth}" height="22" rx="8" fill="${palette[index % palette.length]}"/>`,
         `<text x="${labelWidth + barWidth + 10}" y="${y + 17}" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="13" fill="${muted}">${value}</text>`
       ].join("");
@@ -506,8 +510,9 @@ function numberValue(item: Partial<ChartDatum> | undefined) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-function compactText(value: string, limit: number) {
-  return value.length <= limit ? value : `${value.slice(0, limit - 1)}…`;
+export function compactChartLabel(value: unknown, limit: number) {
+  const chars = Array.from(String(value ?? ""));
+  return chars.length <= limit ? chars.join("") : `${chars.slice(0, limit - 1).join("")}…`;
 }
 
 function formatNumber(value: number) {
