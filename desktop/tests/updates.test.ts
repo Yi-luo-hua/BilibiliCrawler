@@ -23,6 +23,14 @@ test("only offers uploaded installers from the expected repository and tag", () 
   assert.equal(parseRelease(foreign).downloadUrl, null);
   assert.equal(parseRelease({ ...release(), assets: [] }).downloadUrl, null);
   assert.equal(parseRelease({ ...release(), assets: [null, {}] }).downloadUrl, null);
+  // An asset that matches by name but is still being uploaded would hand the
+  // user a broken download, so it must not produce a link either.
+  const uploading = release();
+  uploading.assets[0].state = "starter";
+  assert.equal(parseRelease(uploading).downloadUrl, null);
+  const empty = release();
+  empty.assets[0].size = 0;
+  assert.equal(parseRelease(empty).downloadUrl, null);
   assert.throws(() => parseRelease({ ...release(), prerelease: true }));
   assert.throws(() => parseRelease({ ...release(), draft: true }));
   assert.throws(() => parseRelease(null));
