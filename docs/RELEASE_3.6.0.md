@@ -1,6 +1,8 @@
 # v3.6.0 发布准备与验收清单
 
-> 状态：**候选，未发布。** 面向用户的说明见 [v3.6.0 桌面候选版说明](RELEASE_NOTES_3.6.0.md)。
+> 状态：**候选，未发布。第 1、2 节已完成（2026-09-10），第 3–6 节未开始。**
+> 下一步全部以 CPython 3.13.15 x64 的发布构建环境为前置，见末尾验收记录的「阻塞项」。
+> 面向用户的说明见 [v3.6.0 桌面候选版说明](RELEASE_NOTES_3.6.0.md)。
 > 本清单在标签推送前持续更新：**每有新工作合入候选，必须在第 5 节补上它自己的真机验收项**，
 > 否则不得进入第 6 节。
 
@@ -28,33 +30,35 @@
 
 ### 1. 仓库与版本预检
 
-- [ ] 发布分支基于最新 `origin/main`，工作区干净，没有待合并 PR 或阻断 Issue。
-- [ ] `desktop/src-tauri/Cargo.toml` 与 `Cargo.lock` 中的根包版本均为 `3.6.0`。
-- [ ] `python scripts/check_package_release.py` 通过，输出为 `bilibili-crawler` / `3.6.0`。
-- [ ] README 更新日志、`docs/RELEASE_NOTES_3.6.0.md` 与本清单一致；发布日期只在验收完成后填写。
-- [ ] `docs/FORWARD_PLAN.md` 中没有本版承诺但未完成的任务；已转入本清单的条目在那边已移除。
-- [ ] 用 `git ls-remote origin refs/tags/v3.6.0 'refs/tags/v3.6.0^{}'` 确认远端没有同名标签。
-- [ ] 记录候选提交 SHA：`$CandidateSha = git rev-parse HEAD`。
+- [x] 发布分支基于最新 `origin/main`，工作区干净，没有待合并 PR 或阻断 Issue。
+- [x] `desktop/src-tauri/Cargo.toml` 与 `Cargo.lock` 中的根包版本均为 `3.6.0`。
+- [x] `python scripts/check_package_release.py` 通过，输出为 `bilibili-crawler` / `3.6.0`。
+- [x] README 更新日志、`docs/RELEASE_NOTES_3.6.0.md` 与本清单一致；发布日期只在验收完成后填写。
+- [x] `docs/FORWARD_PLAN.md` 中没有本版承诺但未完成的任务；已转入本清单的条目在那边已移除。
+- [x] 用 `git ls-remote origin refs/tags/v3.6.0 'refs/tags/v3.6.0^{}'` 确认远端没有同名标签。
+- [x] 记录候选提交 SHA：`$CandidateSha = git rev-parse HEAD`。
 
 ### 2. 自动化门禁
 
-- [ ] 两个全新隔离 venv（GUID 命名，`assert sys.prefix != sys.base_prefix`）：无 MCP 环境只装
+- [x] 两个全新隔离 venv（GUID 命名，`assert sys.prefix != sys.base_prefix`）：无 MCP 环境只装
   `requirements.txt` 并断言 `mcp` 不可导入，MCP 环境装 `requirements-agent.txt` 并断言
   `mcp==2.1.0`；两者各跑 `python -X utf8 -m unittest discover -s tests -q`。
-- [ ] 桌面：`corepack pnpm@10.28.0 run test:unit`、`run typecheck`、`run build`、`audit`。
-- [ ] Rust：`cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml`。
+- [x] 桌面：`corepack pnpm@10.28.0 run test:unit`、`run typecheck`、`run build`、`audit`。
+- [x] Rust：`cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml`。
 - [ ] Rust 检查：**必须在 sidecar 构建完成之后**。先
   `powershell -ExecutionPolicy Bypass -File scripts/build_backend.ps1 -Python $ReleasePython`，
   再 `cargo check --locked --manifest-path desktop/src-tauri/Cargo.toml`。
-- [ ] 基础卫生：`git diff --check "$CandidateSha^1" $CandidateSha`。
-- [ ] GitHub Actions `Python package gate` 在候选提交对应的 `main` push 上为绿。
+- [x] 基础卫生：`git diff --check "$CandidateSha^1" $CandidateSha`。
+- [x] GitHub Actions `Python package gate` 在候选提交对应的 `main` push 上为绿。
 
 ### 3. 产物清单比对
 
 v3.5.0 起清单随 Release 提供，本版不必再从安装包重建基线。
 
-- [ ] 从 v3.5.0 的 Release 下载 `installer-payload-manifest.json` 作为基线，核对其中的
-  `source_commit` 等于标签 `v3.5.0` 指向的提交。
+- [x] 从 v3.5.0 的 Release 下载 `installer-payload-manifest.json` 作为基线，核对
+  `schema`、`root` 与 `version`。**它不含 `source_commit`**——按设计不带时间戳与提交，
+  这样内容相同的两次构建产出逐字节相同的清单，可以直接比对。与提交绑定的是同一 Release 里的
+  `python-package-manifest.json`，第 6 节的反向核验用它。
 - [ ] 比对本次构建：`python scripts/check_installer_payload.py --tree
   desktop/src-tauri/resources/backend --version 3.6.0 --baseline v350-payload-manifest.json`。
 - [ ] 若报告存在被移除的路径，逐条确认第 5 节的清理回归覆盖它们，再以 `--allow-removed` 记录结论。
@@ -62,7 +66,7 @@ v3.5.0 起清单随 Release 提供，本版不必再从安装包重建基线。
 
 ### 4. Python 包发布前置
 
-- [ ] 复核 GitHub `testpypi`、`pypi` environments 仍只允许 `main`，`pypi` 保留人工 reviewer。
+- [x] 复核 GitHub `testpypi`、`pypi` environments 仍只允许 `main`，`pypi` 保留人工 reviewer。
 - [ ] TestPyPI / PyPI 的 Trusted Publisher 仍然有效。
 - [ ] 本地身份门禁（在 `core.autocrlf=false` 的干净 checkout 或 `git archive` 产物中执行）：
   `python scripts/check_package_release.py --tag v3.6.0 --require-head-tag --require-ancestor-of origin/main`
@@ -216,14 +220,46 @@ Python 资产 → 反向核验 → 公开 → `testpypi` → `pypi`。
 
 > 每完成一节在此追加：执行时间、环境、命令、结果与日志路径（`.runlogs/` 不纳入提交）。
 
-### 尚未开始
+### 2026-09-10：第 1、2 节完成，第 3–6 节未开始
 
-候选内容已全部合入 `main`，未再有待合并分支。开发机上跑过 Python 363 passed / 214 subtests
-（排除 live smoke）、desktop `test:unit` 35/35、`tsc --noEmit`、`vite build`，构建产物中
-`__APP_VERSION__` 已替换为 `3.6.0`。
+**候选提交** `247b99da2adee9076f5d34b11670b5e5927f07f7`。`HEAD == origin/main`，工作区干净，
+0 个待合并 PR、0 个开放 Issue，远端无 `v3.6.0` 标签。
 
-**这些都不计入第 2 节。** 第 2 节要求在两个 GUID 命名的隔离 venv 与冻结锁文件下按发布口径重跑，
-并包含开发机上未执行的 Rust 与 `audit`。第 3–6 节一项未做，真机验收一项未做。
+**第 1 节**：`Cargo.toml` 与 `Cargo.lock` 根包版本均为 `3.6.0`；`check_package_release.py` 输出
+`bilibili-crawler` / `3.6.0`，`source_commit` 等于候选提交。README 更新日志、
+`RELEASE_NOTES_3.6.0.md` 与本清单已在同一提交中对齐；`FORWARD_PLAN.md` 无本版承诺而未完成的任务。
+
+**第 2 节**（环境：Windows 11 x64、**Python 3.13.0**、Node v24.11.1、pnpm 10.28.0、cargo 1.95.0）：
+
+| 门禁 | 结果 |
+|---|---|
+| ENV A 隔离 venv（`requirements.txt`） | 隔离断言通过；`mcp` 不可导入；**334 tests OK (skipped=3)** |
+| ENV B 隔离 venv（`requirements-agent.txt`） | 隔离断言通过；`mcp 2.1.0`；**365 tests OK**（无跳过） |
+| desktop | `install --frozen-lockfile` 锁文件最新；`test:unit` **35/35**；`typecheck` 干净；`build` 成功；`audit` 无已知漏洞 |
+| `cargo test --locked` | **7 passed; 0 failed** |
+| `git diff --check 247b99d^1 247b99d` | 干净 |
+| Actions `Python package gate` | 候选提交对应的 `main` push 为 **success**（run 34387386922） |
+
+两个 venv 均为 GUID 命名的全新环境。跳过数的差异是预期形状：ENV A 少的 3 项正是 MCP 相关用例，
+ENV B 装了 `mcp` 后全部执行，因此总数从 334 升到 365。
+
+**用的是 Python 3.13.0，不是发布构建固定的 3.13.15。** 第 2 节没有钉 Python 版本——3.13.15 只约束
+第 5 节的安装包构建。第 6 节要求在干净 worktree 中重跑第 2 节全部门禁，届时会与发布环境一并复核。
+
+**第 3 节**：已从 v3.5.0 的 Release 下载 `installer-payload-manifest.json` 作为基线并核对结构
+（`schema=1`、`root=backend`、`version=3.5.0`、1296 条目）。同 Release 的
+`python-package-manifest.json` 的 `source_commit` 等于标签 `v3.5.0` 的 peeled SHA
+`16a7b4a0bc544c80c178658db6d1ef55e9db7d86`。比对本次构建需要先产出新清单，未做。
+
+**第 4 节**：`testpypi` 与 `pypi` environments 复核通过——两者的部署分支策略均只允许 `main`，
+`pypi` 保留 `required_reviewers`（Yi-luo-hua）。Trusted Publisher 的有效性只能在 PyPI / TestPyPI
+的账户设置里确认，GitHub API 看不到，未复核。
+
+**阻塞项**：第 2 节的 `cargo check --locked` 必须在 `build_backend.ps1` 之后执行，而该脚本要求
+CPython 3.13.15 x64 的发布构建环境。`desktop/src-tauri/resources/backend` 下现存的 sidecar 产物
+是候选内容合入之前构建的，**不能用它代替**。第 3、5、6 节同样以此为前置。
+
+**尚未开始**：第 3 节的清单比对、第 5 节的构建与全部真机验收、第 6 节发布。
 
 本版进入候选的工作（用于核对第 5 节是否覆盖齐）：
 
