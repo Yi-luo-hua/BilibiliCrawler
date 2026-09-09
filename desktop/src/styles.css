@@ -260,8 +260,8 @@ button {
   cursor: pointer;
   transition: background-color 160ms ease, border-color 160ms ease;
 }
-.github-star-icon { color: #ffd54a; flex-shrink: 0; transition: transform 160ms ease; }
-.github-star-lettering { flex-shrink: 0; }
+.github-star-icon { width: 20px; height: 20px; color: #ffd54a; flex-shrink: 0; transition: transform 160ms ease; }
+.github-star-lettering { width: 46px; height: 24px; flex-shrink: 0; }
 .github-star-button:hover { background-color: #242320; border-color: #a68a39; }
 .github-star-button:hover .github-star-icon { transform: scale(1.08) rotate(-5deg); }
 .github-star-button:focus-visible { outline: 2px solid #ffd54a; outline-offset: 3px; }
