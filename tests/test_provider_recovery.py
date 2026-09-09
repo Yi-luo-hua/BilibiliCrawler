@@ -93,7 +93,7 @@ class ProviderTests(unittest.TestCase):
             self.assertNotIn("response_format", calls[1])
 
     def test_other_parameter_error_does_not_trigger_format_fallback(self):
-        for param in ("temperature", None):
+        for param in ("top_p", None):
             body = {"error": {"param": param, "code": "unsupported_parameter",
                               "message": "temperature is not supported; response_format is supported"}}
             with self.subTest(param=param), provider([(400, body, {})]) as (url, calls):
@@ -105,6 +105,91 @@ class ProviderTests(unittest.TestCase):
                        (200, SUCCESS, {})]) as (url, calls):
             self.assertEqual(self.call(url)["summary"], "recovered")
             self.assertEqual(len(calls), 2)
+
+    def test_both_observed_temperature_rejections_drop_only_that_field(self):
+        # Verbatim shapes returned by OpenAI's reasoning models. They differ in
+        # `code`/`type` and agree only on `param`, which is why the trigger
+        # reads `param` alone.
+        shapes = [
+            {"error": {"message": "Unsupported parameter: 'temperature' is not supported with this model.",
+                       "type": "invalid_request_error", "param": "temperature", "code": None}},
+            {"error": {"message": "Unsupported value: 'temperature' does not support 0.2 with this model."
+                                  " Only the default (1) value is supported.",
+                       "type": "invalid_request_error", "param": "temperature", "code": "unsupported_value"}},
+            # Some proxies forward `param` and drop the rest entirely.
+            {"error": {"message": f"{KEY} {BODY_MARKER}", "param": "temperature"}},
+        ]
+        for body in shapes:
+            with self.subTest(code=body["error"].get("code")), \
+                    provider([(400, body, {}), (200, SUCCESS, {})]) as (url, calls):
+                self.assertEqual(self.call(url)["summary"], "recovered")
+                self.assertEqual(len(calls), 2)
+                self.assertIn("temperature", calls[0])
+                self.assertNotIn("temperature", calls[1])
+                # Only the named field goes; the rest of the payload stands.
+                self.assertIn("response_format", calls[1])
+                self.assertEqual({k: v for k, v in calls[0].items() if k != "temperature"}, calls[1])
+
+    def test_temperature_is_kept_unless_the_provider_names_it(self):
+        bodies = [
+            # Free text alone never establishes which field was refused.
+            {"error": {"message": "Unsupported parameter: 'temperature' is not supported with this model."}},
+            {"error": {"code": "unsupported_parameter",
+                       "message": "temperature is not supported with this model"}},
+            # A structured rejection naming another field must not drop it.
+            {"error": {"code": "unsupported_value", "param": "top_p", "message": f"{KEY} {BODY_MARKER}"}},
+            {"error": {}},
+        ]
+        for body in bodies:
+            with self.subTest(body=json.dumps(body)), provider([(400, body, {})]) as (url, calls):
+                with self.assertRaises(AnalysisError) as raised:
+                    self.call(url)
+                self.assertEqual(raised.exception.code, "LLM_REQUEST_INVALID")
+                self.assertEqual(len(calls), 1)
+                self.assertNotIn(KEY, str(raised.exception))
+                self.assertNotIn(BODY_MARKER, str(raised.exception))
+
+    def test_google_style_precondition_failure_is_never_treated_as_a_parameter_problem(self):
+        # The shape CLIProxyAPI/Antigravity actually returns: an egress-region
+        # restriction, evaluated before any parameter is read. Dropping fields
+        # cannot help, so the crawler must not spend the budget trying.
+        body = {"error": {"code": 400, "status": "FAILED_PRECONDITION",
+                          "message": f"User location is not supported for the API use. {BODY_MARKER}"}}
+        with provider([(400, body, {})]) as (url, calls):
+            with self.assertRaises(AnalysisError) as raised:
+                self.call(url)
+            self.assertEqual(raised.exception.code, "LLM_REQUEST_INVALID")
+            self.assertEqual(len(calls), 1)
+            self.assertIn("temperature", calls[0])
+            self.assertIn("status=failed_precondition", str(raised.exception))
+            self.assertNotIn(BODY_MARKER, str(raised.exception))
+
+    def test_repeated_temperature_rejection_is_not_replayed_without_progress(self):
+        # The field is gone after the first drop, so a second identical
+        # rejection must end the attempt instead of looping on an unchanged
+        # payload.
+        with provider([(400, error_body("unsupported_value", "temperature"), {})]) as (url, calls):
+            with self.assertRaises(AnalysisError) as raised:
+                self.call(url)
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(raised.exception.code, "LLM_REQUEST_INVALID")
+            self.assertNotIn("temperature", calls[1])
+
+    def test_both_compatibility_drops_share_the_single_request_budget(self):
+        with provider([(400, error_body("unsupported_parameter", "response_format"), {}),
+                       (400, error_body("unsupported_value", "temperature"), {}),
+                       (200, SUCCESS, {})]) as (url, calls):
+            self.assertEqual(self.call(url)["summary"], "recovered")
+            self.assertEqual(len(calls), 3)
+            self.assertNotIn("response_format", calls[2])
+            self.assertNotIn("temperature", calls[2])
+        with provider([(503, error_body(), {"Retry-After": "0"}),
+                       (400, error_body("unsupported_value", "temperature"), {}),
+                       (503, error_body(), {"Retry-After": "0"})]) as (url, calls):
+            with self.assertRaises(AnalysisError) as raised:
+                self.call(url)
+            self.assertEqual(len(calls), 3)
+            self.assertEqual(raised.exception.code, "LLM_UNAVAILABLE")
 
     def test_request_invalid_surfaces_only_sanitized_identifiers(self):
         with provider([(400, error_body("unsupported_parameter", "top_p"), {})]) as (url, calls):

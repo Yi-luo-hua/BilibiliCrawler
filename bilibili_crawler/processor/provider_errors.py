@@ -24,11 +24,13 @@ class AnalysisCancelled(AnalysisError):
 
 class ProviderError(AnalysisError):
     def __init__(self, code: str, message: str, *, retryable: bool = False,
-                 retry_after: float | None = None, drop_response_format: bool = False):
+                 retry_after: float | None = None, drop_response_format: bool = False,
+                 drop_temperature: bool = False):
         super().__init__(message, code=code)
         self.retryable = retryable
         self.retry_after = retry_after
         self.drop_response_format = drop_response_format
+        self.drop_temperature = drop_temperature
 
 
 def retry_after_seconds(value: str | None) -> float | None:
@@ -114,9 +116,21 @@ def classify_http_error(response: requests.Response) -> ProviderError:
                 message,
             ))
         )
+        # `param` is the provider naming the field it refused, and that is the
+        # whole signal: the accompanying code varies by model family and says
+        # nothing extra about which field failed. OpenAI's reasoning models
+        # answer with `param: "temperature"` under both `code: null` /
+        # `type: invalid_request_error` and `code: "unsupported_value"`, so
+        # requiring an unsupported-class code would miss the commoner shape.
+        # Either reading -- the field is unsupported, or the value is out of
+        # range -- is repaired by dropping it and letting the default stand.
+        # Free text alone still proves nothing, and an absent `param` leaves
+        # the culprit unknown: both fail closed.
+        temperature_rejected = param == "temperature"
         return ProviderError(ErrorCode.LLM_REQUEST_INVALID,
                              f"LLM 请求配置不被接受（HTTP {status}），请核对服务支持的参数。{_error_detail(error)}",
-                             drop_response_format=format_rejected)
+                             drop_response_format=format_rejected,
+                             drop_temperature=temperature_rejected)
     if status in {404, 405} or 300 <= status < 400:
         return ProviderError(ErrorCode.LLM_ENDPOINT, f"LLM 端点或路由不可用（HTTP {status}），请核对 base_url 与模型配置。")
     if status in {500, 502, 503, 504}:
