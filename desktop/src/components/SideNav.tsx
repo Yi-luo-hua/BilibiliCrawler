@@ -1,6 +1,7 @@
 import { Activity, BrainCircuit, KeyRound, MessageCircle, Settings, UserRoundCheck } from "lucide-react";
 import clsx from "clsx";
 import type { Mode } from "../types";
+import { VersionPanel } from "./VersionPanel";
 
 interface Props {
   mode: Mode;
@@ -43,6 +44,7 @@ export function SideNav({ mode, running, loggedIn, onQrLogin, onModeChange }: Pr
           );
         })}
       </nav>
+      <VersionPanel running={running} />
     </aside>
   );
 }
