@@ -1255,7 +1255,8 @@ button:disabled {
   }
 
   .nav-item span,
-  .account-pill span {
+  .account-pill span,
+  .version-panel button {
     font-size: 13px;
   }
 
