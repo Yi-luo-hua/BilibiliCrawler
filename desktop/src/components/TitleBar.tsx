@@ -1,6 +1,7 @@
 import { useEffect, useState, type MouseEvent } from "react";
 import { Maximize2, Minimize2, Minus, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getVersion } from "@tauri-apps/api/app";
 import { toast } from "sonner";
 import { isTauri } from "../lib/tauri";
 import { handleTitleBarMouseDown } from "../lib/titleBarInteraction";
@@ -13,6 +14,19 @@ interface Props {
 export function TitleBar({ logo, onLog }: Props) {
   const appWindow = isTauri() ? getCurrentWindow() : null;
   const [maximized, setMaximized] = useState(false);
+  const [versionLabel, setVersionLabel] = useState(() =>
+    isTauri() ? "正在读取版本…" : `v${__APP_VERSION__}`,
+  );
+
+  useEffect(() => {
+    let active = true;
+    if (isTauri()) {
+      getVersion()
+        .then((version) => { if (active) setVersionLabel(`v${version}`); })
+        .catch(() => { if (active) setVersionLabel("版本读取失败"); });
+    }
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     appWindow
@@ -77,7 +91,7 @@ export function TitleBar({ logo, onLog }: Props) {
         <img src={logo} alt="" />
         <div>
           <h1>BilibiliCrawler</h1>
-          <p>评论 / 动态</p>
+          <p aria-label="当前版本">{versionLabel}</p>
         </div>
       </div>
       <div className="window-actions" onMouseDown={stopDrag}>

@@ -48,7 +48,6 @@ export function VersionPanel({ running }: { running: boolean }) {
   }
 
   return <section className="version-panel" aria-label="版本与更新">
-    <strong>{version ? `当前版本 v${version}` : "正在读取版本…"}</strong>
     {!isTauri() && <p>浏览器预览 · 更新请使用桌面版</p>}
     <button disabled={!isTauri() || !version || busy} onClick={() => void check()}>{busy ? "检查中…" : "检查更新"}</button>
     <p role="status">{message}</p>
