@@ -5,7 +5,7 @@ import { isTauri } from "../lib/tauri";
 import { checkForUpdate, isNewerVersion, RELEASES_URL, type DesktopRelease } from "../lib/updates";
 
 export function VersionPanel({ running }: { running: boolean }) {
-  const [version, setVersion] = useState<string | null>(null);
+  const [version, setVersion] = useState<string | null>(() => isTauri() ? null : __APP_VERSION__);
   const [busy, setBusy] = useState(false);
   const [release, setRelease] = useState<DesktopRelease | null>(null);
   const [message, setMessage] = useState("");
@@ -48,8 +48,9 @@ export function VersionPanel({ running }: { running: boolean }) {
   }
 
   return <section className="version-panel" aria-label="版本与更新">
-    <strong>{version ? `v${version}` : isTauri() ? "正在读取版本…" : "浏览器预览"}</strong>
-    <button disabled={!version || busy} onClick={() => void check()}>{busy ? "检查中…" : "检查更新"}</button>
+    <strong>{version ? `当前版本 v${version}` : "正在读取版本…"}</strong>
+    {!isTauri() && <p>浏览器预览 · 更新请使用桌面版</p>}
+    <button disabled={!isTauri() || !version || busy} onClick={() => void check()}>{busy ? "检查中…" : "检查更新"}</button>
     <p role="status">{message}</p>
     {release && <>
       <details><summary>更新说明</summary><pre>{release.notes}</pre></details>
