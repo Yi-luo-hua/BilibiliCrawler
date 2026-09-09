@@ -44,6 +44,12 @@ class CommentCrawler:
         # only the video resolver fills it, dynamics/articles resolve their
         # oid through differently-shaped responses.
         self.target_info: Dict = {}
+        # Root comments whose replies could not be fetched. The API layer
+        # collapses "this thread is gone" and "we were rate limited" into the
+        # same empty response, so a reply failure is reported rather than
+        # treated as proof the crawl is broken. Main-comment pages still fail
+        # the crawl: there, an empty response cannot mean anything benign.
+        self.reply_warnings: List[str] = []
 
     def _log(self, message: str):
         """统一日志输出（同时写 logging 和回调）"""
@@ -223,6 +229,7 @@ class CommentCrawler:
         """
         self._stop_flag = False
         all_comments = []
+        self.reply_warnings = []
 
         # 1. 解析用户输入
         target = self.resolve_target(url_or_id)
@@ -286,13 +293,12 @@ class CommentCrawler:
             # ---- 并发爬取子评论 ----
             if reply_tasks and not self._stop_flag:
                 self._log(f"  并发爬取 {len(reply_tasks)} 条评论的回复 (workers={MAX_REPLY_WORKERS})...")
-                try:
-                    sub_comments = self._crawl_replies_concurrent(oid, reply_tasks, type_id)
-                except CrawlError as exc:
-                    all_comments.extend(exc.records)
-                    raise CrawlError(str(exc), all_comments) from exc
+                sub_comments, failures = self._crawl_replies_concurrent(oid, reply_tasks, type_id)
                 all_comments.extend(sub_comments)
                 total_replies += len(sub_comments)
+                if failures:
+                    self.reply_warnings.extend(failures)
+                    self._log(f"  {len(failures)} 条评论的回复未能获取，其余结果继续保留")
 
             # 翻页
             cursor = comment_data['data'].get('cursor', {})
@@ -314,7 +320,7 @@ class CommentCrawler:
 
     def _crawl_replies_concurrent(
         self, oid: int, tasks: List[tuple], type_id: int = 1,
-    ) -> List[Dict]:
+    ) -> tuple[List[Dict], List[str]]:
         """
         并发爬取多条评论的回复
 
@@ -324,7 +330,12 @@ class CommentCrawler:
             type_id: 评论区类型
 
         Returns:
-            所有回复列表
+            (所有回复列表, 未能获取回复的说明列表)
+
+        A failed thread does not fail the crawl. The reply endpoint returns the
+        same empty response for a deleted or locked thread as it does for a
+        request that lost to rate limiting, so the reason is reported to the
+        caller instead of being asserted here.
         """
         all_replies = []
         errors = []
@@ -353,9 +364,7 @@ class CommentCrawler:
         finally:
             executor.shutdown(wait=not self._stop_flag, cancel_futures=self._stop_flag)
 
-        if errors and not self._stop_flag:
-            raise CrawlError(f"{errors[0]}；已保留可用评论，结果不完整", all_replies)
-        return all_replies
+        return all_replies, ([] if self._stop_flag else errors)
 
     def _crawl_single_reply(
         self, oid: int, root: int, type_id: int = 1,

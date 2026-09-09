@@ -689,7 +689,21 @@ class AgentService:
         target_info = getattr(crawler, "target_info", None)
         if isinstance(target_info, dict) and target_info:
             task.update(target=dict(target_info))
+        reply_failures = list(getattr(crawler, "reply_warnings", None) or [])
         task.attach_crawler(None)
+
+        if reply_failures:
+            # One line, not one per thread. A rate-limited crawl can lose
+            # hundreds of threads and the manifest keeps warnings forever.
+            # The count also lands in `counts` so a caller can act on the
+            # incompleteness without parsing prose.
+            task.add_warning(
+                f"{len(reply_failures)} 条评论的回复未能获取，主评论与其余回复完整；"
+                f"首个原因：{scrub(reply_failures[0])}"
+            )
+            # Set before _crawl_results, which folds task.counts into the
+            # terminal snapshot; every later path there goes through it.
+            task.update(counts={**task.counts, "reply_failures": len(reply_failures)})
 
         cleaned = self._data_processor.clean_comments(comments)
 
