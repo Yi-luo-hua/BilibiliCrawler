@@ -218,6 +218,28 @@ button {
   flex-direction: column;
   gap: 10px;
 }
+.version-panel {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+  font-size: 12px;
+  min-width: 0;
+}
+.version-panel button {
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--glass-control-soft);
+  color: var(--text);
+}
+.version-panel button:disabled { opacity: .5; cursor: not-allowed; }
+.version-panel p { margin: 0; color: var(--muted); overflow-wrap: anywhere; }
+.version-panel p:empty { display: none; }
+.version-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow-y: auto; font: inherit; }
+.version-panel summary { cursor: pointer; }
 .account-pill {
   height: 42px;
   border-radius: 14px;
