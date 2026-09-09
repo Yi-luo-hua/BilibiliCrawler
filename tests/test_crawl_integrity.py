@@ -129,7 +129,35 @@ class CrawlIntegrityTests(unittest.TestCase):
             self.assertEqual(service.get_status(task_id=started.task_id).status, "failed")
             analyze.assert_not_called()
 
-    def test_reply_failure_keeps_main_comments_and_reports_incomplete(self):
+    def test_reply_failure_completes_the_crawl_and_is_reported_as_a_warning(self):
+        # The reply endpoint answers a deleted or locked thread exactly as it
+        # answers a rate-limited request, so losing one must not fail the run.
+        # It must not pass silently either: the count is machine-readable and
+        # the warning reaches the desktop log.
+        response = page([1, 2], True)
+        for item in response["data"]["replies"]:
+            item["rcount"] = 2
+        api = PagedAPI([response])
+        api.get_replies = lambda oid, root, **kwargs: None if root == 1 else {
+            "data": {"replies": [reply(20)], "cursor": {"is_end": True}}}
+        service = AgentService(store=RunStore(Path(self.temp.name)), api=api)
+        started = service.start_crawl("av1", include_replies=True)
+        self.assertTrue(service.wait_until_finished(started.task_id, 5))
+        snapshot = service.get_status(task_id=started.task_id)
+        self.assertEqual(snapshot.status, "completed")
+        self.assertIsNone(snapshot.error)
+        self.assertEqual(snapshot.counts["reply_failures"], 1)
+        self.assertEqual(len(snapshot.warnings), 1)
+        self.assertIn("1 条评论的回复未能获取", snapshot.warnings[0])
+        # Comment 2's replies were never in doubt and must still be here.
+        self.assertCountEqual([row["comment_id"] for row in service.store.load_comments(started.run_id)],
+                              [1, 2, 20])
+        # The warning survives a restart, which is what makes the run's
+        # incompleteness discoverable later rather than only in this session.
+        restarted = AgentService(store=RunStore(Path(self.temp.name)))
+        self.assertEqual(restarted.get_status(run_id=started.run_id).warnings, snapshot.warnings)
+
+    def test_reply_failure_reaches_the_desktop_log_and_still_finishes(self):
         response = page([1], True)
         response["data"]["replies"][0]["rcount"] = 2
         api = PagedAPI([response])
@@ -137,7 +165,26 @@ class CrawlIntegrityTests(unittest.TestCase):
         sidecar = RecordingSidecar(api)
         sidecar._run_comments({"input": "av1"})
         self.assertEqual([c["comment_id"] for c in sidecar._last_comments], [1])
-        self.assertEqual([f["event"] for f in sidecar.frames if f["event"] in {"partial", "error", "finished"}], ["partial", "error"])
+        self.assertEqual([f["event"] for f in sidecar.frames if f["event"] in {"partial", "error", "finished"}],
+                         ["finished"])
+        # The crawler's own progress line also mentions the loss, so assert on
+        # the settled warning's wording -- that one can only come from the
+        # terminal snapshot, which is what survives into the manifest.
+        logs = [f["message"] for f in sidecar.frames if f["event"] == "log"]
+        self.assertTrue(any("主评论与其余回复完整" in message for message in logs), logs)
+
+    def test_main_page_failure_still_fails_even_when_replies_are_fine(self):
+        # The downgrade is scoped to replies. An empty main-comment page has no
+        # benign reading, so it must keep failing the run.
+        first = page([1], False)
+        first["data"]["replies"][0]["rcount"] = 1
+        service = AgentService(store=RunStore(Path(self.temp.name)), api=PagedAPI([first, None]))
+        started = service.start_crawl("av1", include_replies=True)
+        self.assertTrue(service.wait_until_finished(started.task_id, 5))
+        snapshot = service.get_status(task_id=started.task_id)
+        self.assertEqual(snapshot.status, "failed")
+        self.assertEqual(snapshot.error_code, "CRAWL_FAILED")
+        self.assertNotIn("reply_failures", snapshot.counts)
 
     def test_desktop_partial_comments_remain_exportable(self):
         sidecar = RecordingSidecar(PagedAPI([page([1, 2]), None]))
