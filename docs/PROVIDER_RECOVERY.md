@@ -1,6 +1,10 @@
 # Provider 错误与原 run 恢复契约
 
-C 批，基线 `326bf58`。不更改 MCP/RPC 字段、超时配置或 UI，不发布新版本。
+C 批，基线 `326bf58`。不更改 MCP/RPC 字段、超时配置或 UI。
+
+> 「不发布新版本」是 C 批当时的范围约束，已不再成立：`code`/`param`/`status` 的安全透出随 v3.5.0
+> 发布，`temperature` 降级随 v3.6.0 进入候选。本文档记录的是**当前生效的契约**，不是那一批的快照；
+> 修改这里的规则等于修改已发布行为。
 
 - 分析错误使用稳定 error_code：`LLM_AUTH`、`LLM_MODEL`、`LLM_ENDPOINT`、`LLM_NETWORK`、`LLM_TLS`、`LLM_TIMEOUT`、`LLM_RATE_LIMIT`、`LLM_UNAVAILABLE`、`LLM_RESPONSE_INVALID`、`LLM_REQUEST_INVALID`；非 provider 分析错误保留 `ANALYSIS_FAILED`。
 - 401/403 优先归为鉴权；仅结构化 error.code/type 或 param 明确指向模型时归为模型配置。普通 404 属于端点/路由待核对，不断言模型不存在。其余 400/422 是请求配置错误。
