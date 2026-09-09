@@ -231,6 +231,8 @@ powershell -ExecutionPolicy Bypass -File scripts\build_installer.ps1 -Python $Re
 
 应用版本以 `desktop/src-tauri/Cargo.toml` 的 `[package].version` 为唯一来源；Tauri 和构建脚本会自动读取该版本，`Cargo.lock` 由 Cargo 同步更新。构建流程使用锁定的 pnpm 版本、冻结锁文件和审核后的依赖构建脚本。
 
+桌面窗口左上角显示当前版本；侧栏“检查更新”查询 GitHub 最新正式版本，并提供更新说明和安装包下载入口。下载后退出应用，运行安装程序完成更新。浏览器预览显示项目版本，更新操作仅在桌面窗口可用。详见 [v3.6.0 桌面候选版说明](docs/RELEASE_NOTES_3.6.0.md)。
+
 产物位于：
 
 ```text
