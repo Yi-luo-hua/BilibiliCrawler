@@ -24,6 +24,7 @@ from typing import Any, Callable
 
 from bilibili_crawler.api.bilibili_api import BilibiliAPI
 from bilibili_crawler.crawler.comment_crawler import CommentCrawler
+from bilibili_crawler.crawler.errors import CrawlError
 from bilibili_crawler.processor.analysis_processor import AnalysisCancelled, AnalysisError, LLMAnalysisProcessor
 from bilibili_crawler.processor.data_processor import DataProcessor
 from bilibili_crawler.service.credentials import LLMCredentials, resolve_llm_credentials, scrub
@@ -158,13 +159,20 @@ class _Task:
         self.stop_crawler()
         return True
 
-    def settle(self, completed_stage: str, cancelled_stage: str, changes: dict[str, Any]) -> None:
+    def settle(
+        self, completed_stage: str, cancelled_stage: str, changes: dict[str, Any],
+        failure: tuple[str, str] | None = None,
+    ) -> None:
         """Atomically choose the terminal status and record results."""
         with self._lock:
             if self.cancel_event.is_set():
                 self.status = RunStatus.CANCELLED
                 self.stage = cancelled_stage
                 self.error_code = ErrorCode.CANCELLED
+            elif failure is not None:
+                self.status = RunStatus.FAILED
+                self.stage = completed_stage
+                self.error_code, self.error = failure
             else:
                 self.status = RunStatus.COMPLETED
                 self.stage = completed_stage
@@ -370,6 +378,7 @@ class AgentService:
         task: _Task,
         completed_stage: str,
         cancelled_stage: str = "任务已取消",
+        failure: tuple[str, str] | None = None,
         **changes: Any,
     ) -> None:
         """Record results, choosing the terminal status by cancellation state.
@@ -378,7 +387,7 @@ class AgentService:
         the export would let the completion update overwrite `cancelling`, so a
         stopped task must be resolved here, after the writes.
         """
-        task.settle(completed_stage, cancelled_stage, changes)
+        task.settle(completed_stage, cancelled_stage, changes, failure)
         self._persist(task)
 
     def _persist(self, task: _Task) -> None:
@@ -664,12 +673,17 @@ class AgentService:
             self._settle(task, "评论爬取完成", **changes)
             return
 
-        comments = crawler.crawl_comments(
-            str(params["url"]),
-            include_replies=bool(params["include_replies"]),
-            max_pages=max_pages,
-            mode=int(params["sort_mode"]),
-        )
+        crawl_error = None
+        try:
+            comments = crawler.crawl_comments(
+                str(params["url"]),
+                include_replies=bool(params["include_replies"]),
+                max_pages=max_pages,
+                mode=int(params["sort_mode"]),
+            )
+        except CrawlError as exc:
+            comments = exc.records
+            crawl_error = exc
         # Captured while the crawler still exists: the title/owner it learned
         # resolving the target belongs in the manifest next to the comments.
         target_info = getattr(crawler, "target_info", None)
@@ -683,6 +697,14 @@ class AgentService:
             # A stopped crawler still returns the pages it managed to fetch.
             # Persisting them is what makes "partial data is kept" true.
             self._settle(task, "评论爬取完成", **self._crawl_results(task, cleaned))
+            return
+
+        if crawl_error is not None:
+            self._settle(
+                task, "评论爬取失败",
+                failure=(ErrorCode.CRAWL_FAILED, scrub(str(crawl_error))),
+                **self._crawl_results(task, cleaned),
+            )
             return
 
         if not cleaned and not self._policy.empty_crawl_is_success:
@@ -805,16 +827,10 @@ class AgentService:
                 if word_cloud.startswith("data:image/")
                 else []
             )
-            source_url, target = self._report_context(task.run_id)
             report_context = {
+                **self.report_context(task.run_id, comments),
                 "chart_assets": chart_assets,
                 "asset_dir_name": "assets" if chart_assets else "",
-                "source_url": source_url,
-                "source_title": str(target.get("title") or ""),
-                "source_owner": str(target.get("owner") or ""),
-                "source_pubdate": _format_pubdate(target.get("pubdate")),
-                "run_id": task.run_id,
-                "records": comments,
             }
             try:
                 parameters = inspect.signature(build_report).parameters
@@ -893,6 +909,18 @@ class AgentService:
         )
 
     # -- helpers -----------------------------------------------------------
+    def report_context(self, run_id: str, records: list[dict[str, Any]]) -> dict[str, Any]:
+        """Snapshot provenance for both persisted and desktop-exported reports."""
+        source_url, target = self._report_context(run_id)
+        return {
+            "source_url": source_url,
+            "source_title": str(target.get("title") or ""),
+            "source_owner": str(target.get("owner") or ""),
+            "source_pubdate": _format_pubdate(target.get("pubdate")),
+            "run_id": run_id,
+            "records": [dict(record) for record in records],
+        }
+
     def _report_context(self, run_id: str) -> tuple[str, dict[str, Any]]:
         """The crawl's source URL and target metadata, for the report header.
 

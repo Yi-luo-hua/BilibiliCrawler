@@ -19,7 +19,7 @@ from pathlib import Path, PurePosixPath
 PACKAGE_FILES = {"bilibili_crawler/" + name for name in """
 __init__.py __main__.py agent.py mcp_server.py sidecar.py
 api/__init__.py api/bilibili_api.py config/__init__.py config/config.py
-crawler/__init__.py crawler/comment_crawler.py crawler/dynamic_crawler.py
+crawler/__init__.py crawler/comment_crawler.py crawler/dynamic_crawler.py crawler/errors.py
 exporter/__init__.py exporter/csv_exporter.py
 processor/__init__.py processor/analysis_processor.py processor/data_processor.py processor/provider_errors.py
 resources/__init__.py resources/stopwords.txt

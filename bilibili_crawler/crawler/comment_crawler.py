@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import List, Dict, Optional, Callable
 
 from bilibili_crawler.api.bilibili_api import BilibiliAPI
+from bilibili_crawler.crawler.errors import CrawlError
 from bilibili_crawler.config.config import MAX_REPLY_WORKERS
 from bilibili_crawler.utils.helpers import (
     parse_input, ParsedInput, ContentType,
@@ -226,8 +227,7 @@ class CommentCrawler:
         # 1. 解析用户输入
         target = self.resolve_target(url_or_id)
         if not target or target.oid is None:
-            self._log("错误: 无法解析目标内容的OID")
-            return all_comments
+            raise CrawlError("无法解析目标内容的OID，请检查链接或网络")
 
         oid = target.oid
         type_id = target.content_type
@@ -250,8 +250,7 @@ class CommentCrawler:
             )
 
             if not comment_data or not comment_data.get('data'):
-                self._log(f"第 {page} 页没有更多评论")
-                break
+                raise CrawlError(f"第 {page} 页评论获取失败，已保留 {len(all_comments)} 条，结果不完整", all_comments)
 
             replies = comment_data['data'].get('replies', [])
             if not replies:
@@ -264,7 +263,6 @@ class CommentCrawler:
                 self._log("检测到重复数据，已到达最后一页")
                 break
 
-            seen_comment_ids.update(current_page_ids)
             self._log(f"第 {page} 页获取到 {len(replies)} 条评论")
 
             # ---- 收集需要爬取子评论的主评论 ----
@@ -272,6 +270,11 @@ class CommentCrawler:
             for reply in replies:
                 if self._stop_flag:
                     break
+                rpid = reply.get('rpid')
+                if rpid in seen_comment_ids:
+                    continue
+                if rpid:
+                    seen_comment_ids.add(rpid)
                 comment = self._process_comment(reply, oid, is_reply=False)
                 all_comments.append(comment)
 
@@ -283,7 +286,11 @@ class CommentCrawler:
             # ---- 并发爬取子评论 ----
             if reply_tasks and not self._stop_flag:
                 self._log(f"  并发爬取 {len(reply_tasks)} 条评论的回复 (workers={MAX_REPLY_WORKERS})...")
-                sub_comments = self._crawl_replies_concurrent(oid, reply_tasks, type_id)
+                try:
+                    sub_comments = self._crawl_replies_concurrent(oid, reply_tasks, type_id)
+                except CrawlError as exc:
+                    all_comments.extend(exc.records)
+                    raise CrawlError(str(exc), all_comments) from exc
                 all_comments.extend(sub_comments)
                 total_replies += len(sub_comments)
 
@@ -320,6 +327,7 @@ class CommentCrawler:
             所有回复列表
         """
         all_replies = []
+        errors = []
 
         executor = ThreadPoolExecutor(max_workers=MAX_REPLY_WORKERS)
         try:
@@ -337,11 +345,16 @@ class CommentCrawler:
                 try:
                     replies = future.result()
                     all_replies.extend(replies)
-                except Exception as e:
-                    logger.error(f"爬取评论 {root_rpid} 的回复时出错: {e}")
+                except CrawlError as exc:
+                    all_replies.extend(exc.records)
+                    errors.append(str(exc))
+                except Exception:
+                    errors.append(f"评论 {root_rpid} 的回复获取失败")
         finally:
             executor.shutdown(wait=not self._stop_flag, cancel_futures=self._stop_flag)
 
+        if errors and not self._stop_flag:
+            raise CrawlError(f"{errors[0]}；已保留可用评论，结果不完整", all_replies)
         return all_replies
 
     def _crawl_single_reply(
@@ -365,7 +378,7 @@ class CommentCrawler:
             reply_data = self.api.get_replies(oid, root, page=page, type_id=type_id)
 
             if not reply_data or not reply_data.get('data'):
-                break
+                raise CrawlError(f"评论 {root} 的第 {page} 页回复获取失败", replies)
 
             reply_list = reply_data['data'].get('replies', [])
             if not reply_list:

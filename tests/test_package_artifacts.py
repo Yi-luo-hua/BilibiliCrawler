@@ -78,7 +78,7 @@ class PackageArtifactTests(unittest.TestCase):
         self.archives(payload=b"# https://api.bilibili.com and C:/Windows/Fonts/simhei.ttf and C:\\path\\python.exe\n")
         result = audit(self.wheel, self.sdist, VERSION)
         self.assertTrue(result["ok"])
-        self.assertEqual(result["runtime_files"], 30)
+        self.assertEqual(result["runtime_files"], 31)
         self.assertEqual(result["artifacts"][0]["sha256"], hashlib.sha256(self.wheel.read_bytes()).hexdigest())
 
     def test_rejects_sensitive_or_unplanned_members_in_both_artifacts(self):
