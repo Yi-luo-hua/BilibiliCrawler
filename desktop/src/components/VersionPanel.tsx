@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { isTauri } from "../lib/tauri";
-import { checkForUpdate, isNewerVersion, type DesktopRelease } from "../lib/updates";
+import { checkFailureMessage, checkForUpdate, isNewerVersion, type DesktopRelease } from "../lib/updates";
 
 export function VersionPanel({ running }: { running: boolean }) {
   const [version, setVersion] = useState<string | null>(() => isTauri() ? null : __APP_VERSION__);
@@ -34,7 +34,7 @@ export function VersionPanel({ running }: { running: boolean }) {
         setMessage(latest.downloadUrl ? `发现新版本 v${latest.version}` : `v${latest.version} 安装包尚未就绪，请稍后重试。`);
       } else setMessage("当前已是最新版本。");
     } catch (error) {
-      setMessage(controller.signal.aborted ? "检查超时或已取消，请重试。" : `无法检查更新：${error instanceof Error ? error.message : String(error)}`);
+      setMessage(checkFailureMessage(error, controller.signal.aborted));
     } finally {
       clearTimeout(timeout);
       pending.current = false;
