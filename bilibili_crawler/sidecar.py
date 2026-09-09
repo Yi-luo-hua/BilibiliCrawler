@@ -258,6 +258,10 @@ class Sidecar:
             self._last_comments = comments
             self._last_comment_run_id = started.run_id
             self._last_comment_context = self._comment_context(target_input)
+            # A crawl that lost some reply threads still completes. Without
+            # this the desktop would show it as unqualified success.
+            for warning in snapshot.warnings:
+                self.emit("log", message=warning)
             self.emit("stats", mode="comments", stats=stats)
             self.emit("finished", mode="comments", count=len(comments), stats=stats)
         except Exception as exc:
