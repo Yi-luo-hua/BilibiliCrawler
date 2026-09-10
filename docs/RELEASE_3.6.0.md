@@ -175,7 +175,7 @@ v3.5.0 起清单随 Release 提供，本版不必再从安装包重建基线。
 - [ ] 分析结果、词云、`analysis.json` 与 Markdown 报告均正确；分析中停止无迟到终态。
 - [ ] 从真实 UI 导出 CSV 与分析报告，路径可打开、内容完整。
   **CSV 半边已通过（见验收记录）；分析报告需 LLM 凭据，未做。**
-- [ ] canary API Key 分析后扫描该 run 全部文件，零命中。
+- [x] canary API Key 分析后扫描该 run 全部文件，零命中。
 - [x] 默认卸载后安装目录中的 `user-data`、`analysis-runs`、`analysis-assets` 仍保留。
 
 #### 安装器清理回归（行为未改动，v3.5.0 跳过的两条在此补做）
@@ -510,3 +510,34 @@ CSV，「开始任务」立即可再次点击。**终态是已取消而不是失
 仓库内 `.install-test\`（726 MB，7 个 smoke/验收安装目录）是既有的、非本会话产生，未处理。
 其中 `BilibiliCrawler-smoke-20260727-183100` 只剩 `user-data\`，是此前指向错误注册表项的那个目录，
 该注册表项已在本轮清除。
+
+### 2026-09-10：canary 凭据泄露验收通过
+
+在装好的 3.6.0 上实机执行。该安装包是候选构建（`591c7146…`）；候选构建源 `551ddb5` 与发布构建源
+`492b85f` 之间**只有 `docs/` 三个文件的差异**，可执行内容等价，因此结论适用于发布产物。
+
+**方法**：把 API Key 换成一个合成标记串（`sk-CANARY-<32 hex>-DONOTUSE`，51 字符，不对应任何真实
+凭据），对 351 条评论发起分析。请求打到 `https://api.deepseek.com/v1` 得到 **HTTP 401**——
+**这正是最该验的路径**：provider 在 401 响应体里回显 Key 是最常见的泄露形态，成功路径反而碰不到它。
+测试前 `credentials.json` 已备份，测试后按 SHA-256 还原，真实 Key（35 字符）完好。
+
+**结果**：
+
+| 位置 | 命中 |
+|---|---|
+| 本次 run 目录（`manifest.json` / `comments.json` / `comments.csv`） | **0** |
+| `%LOCALAPPDATA%\BilibiliCrawler` 全树 | 1，仅 `user-data\config\credentials.json` |
+| `%LOCALAPPDATA%\com.local.bilibilicrawler`（Tauri 应用数据） | 0 |
+| `%LOCALAPPDATA%\BilibiliCrawler\cache` | 0 |
+| 界面「运行日志」 | 0 |
+
+唯一命中是凭据存储文件本身，按设计如此，不是泄露。
+
+**这次测到了写入路径，不是空跑**：`manifest.json` 确实记录了本次失败——
+`status=failed`、`error_code=LLM_AUTH`、`error` 为固定安全说明
+「LLM 请求失败: LLM 鉴权或访问权限失败（HTTP 401），请检查 API Key 与服务权限。」。
+错误确实落了盘，落盘内容里没有 Key，也没有远端响应正文。界面日志显示同一句固定文案。
+
+**未覆盖**：成功分析所产出的 `analysis.json`、Markdown 报告与词云未参与本次扫描——它们需要一个
+可用的 provider。本次只证明了**失败路径**不泄露；成功路径的产物由 `scrub` 边界与回归测试覆盖，
+未经真机扫描。
