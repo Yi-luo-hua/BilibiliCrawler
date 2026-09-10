@@ -112,9 +112,9 @@ v3.5.0 起清单随 Release 提供，本版不必再从安装包重建基线。
 
 #### 版本显示与更新检查（本版新增功能）
 
-- [ ] 从快捷方式启动安装版，标题栏应用名下显示 `v3.6.0`，与安装包版本一致；不显示
+- [x] 从快捷方式启动安装版，标题栏应用名下显示 `v3.6.0`，与安装包版本一致；不显示
   「正在读取版本…」或「版本读取失败」。
-- [ ] 侧栏「检查更新」在 v3.6.0 尚未公开时点击，提示「当前已是最新版本」（此时线上最新为
+- [x] 侧栏「检查更新」在 v3.6.0 尚未公开时点击，提示「当前已是最新版本」（此时线上最新为
   v3.5.0，数字比较不提示降级），且**不出现下载按钮**。
 - [ ] **发现新版本与下载的完整路径**：这条无法用 v3.6.0 自身验证——线上没有比它更新的正式版。
   用临时候选验证：把 `Cargo.toml` 的版本改成 `3.4.0` 单独构建一个**不发布**的安装包，安装后
@@ -132,8 +132,8 @@ v3.5.0 起清单随 Release 提供，本版不必再从安装包重建基线。
 
 #### 常规项（v3.5.0 未复验，本版补做）
 
-- [ ] 全新安装与从 v3.5.0 覆盖升级均正常，currentUser 安装位置正确。
-- [ ] 解析开始菜单与桌面 `BilibiliCrawler.lnk`，`TargetPath` 与 `WorkingDirectory` 指向注册表
+- [x] 全新安装与从 v3.5.0 覆盖升级均正常，currentUser 安装位置正确。
+- [x] 解析开始菜单与桌面 `BilibiliCrawler.lnk`，`TargetPath` 与 `WorkingDirectory` 指向注册表
   `InstallLocation` 下的 v3.6.0 主程序；必须从快捷方式启动验收。
 - [ ] 任务栏图标实机检查并保存截图；升级后验证快捷方式目标与图标缓存刷新。
 - [ ] 既有登录状态与凭据发现路径正常。
@@ -143,7 +143,7 @@ v3.5.0 起清单随 Release 提供，本版不必再从安装包重建基线。
 - [ ] 分析结果、词云、`analysis.json` 与 Markdown 报告均正确；分析中停止无迟到终态。
 - [ ] 从真实 UI 导出 CSV 与分析报告，路径可打开、内容完整。
 - [ ] canary API Key 分析后扫描该 run 全部文件，零命中。
-- [ ] 默认卸载后安装目录中的 `user-data`、`analysis-runs`、`analysis-assets` 仍保留。
+- [x] 默认卸载后安装目录中的 `user-data`、`analysis-runs`、`analysis-assets` 仍保留。
 
 #### 安装器清理回归（行为未改动，v3.5.0 跳过的两条在此补做）
 
@@ -359,6 +359,44 @@ baseline 3.5.0 -> 3.6.0: 0 removed, 0 added, 3 changed
 
 后续若在日常使用中偶然遇到（日志出现「N 条评论的回复未能获取」），请把 `manifest.json` 的
 `counts.reply_failures` 与 `warnings` 记到这里，即可补上这条。
+
+### 2026-09-10：真实升级验收通过（GUI 全程实机）
+
+在开发机的正式安装位置 `%LOCALAPPDATA%\BilibiliCrawler` 上完成，全程看着安装程序页面操作。
+
+**先证实了本文档 §0.1 的判断。** 在**未清理**注册表的状态下启动 v3.5.0 安装程序：欢迎页之后出现
+「Already Installed — An older version of BilibiliCrawler is installed」（来自那条 3.1.1 的陈旧记录，
+默认选项会去运行早已不存在的 `uninstall.exe`），继续下一步，**安装目标目录显示
+`E:\Cache\11-temp\bcc-isolated-test\install1`**——正是那个不存在的隔离测试路径。取消，未安装任何
+东西。这条不是推断，是屏幕上读到的。
+
+清除 `HKCU\Software\local\BilibiliCrawler` 与 `HKCU\...\Uninstall\BilibiliCrawler` 之后重新执行：
+
+| 步骤 | 观察 | 结果 |
+|---|---|---|
+| v3.5.0 安装 | 不再出现 Already Installed 页；目标目录 `C:\Users\...\AppData\Local\BilibiliCrawler` | 通过 |
+| v3.5.0 启动 | 从**开始菜单快捷方式**启动，标题栏应用名下是「评论 / 动态」 | 基线成立 |
+| v3.6.0 升级 | 出现 Already Installed 页，正确识别为「older version」 | 通过 |
+| — 卸载阶段 | 卸载程序显示 `Uninstalling from: ...\AppData\Local\BilibiliCrawler`，「Delete the application data」**默认未勾选** | — |
+| — 卸载后 | `analysis-runs` 37 文件 / 5,135,277 字节、`analysis-assets` 7 / 1,408,336、`user-data` 4 / 2,223,284 **全部保留**，主程序已删除 | 通过 |
+| — 安装阶段 | 目标目录仍为 `%LOCALAPPDATA%\BilibiliCrawler` | 通过 |
+| v3.6.0 启动 | 从开始菜单快捷方式启动，标题栏显示 **`v3.6.0`**，非「正在读取版本…」或「版本读取失败」 | 通过 |
+| 检查更新 | 点击后提示「**当前已是最新版本。**」，**未出现下载按钮** | 通过 |
+
+升级后复核：注册表 `DisplayVersion` = 3.6.0、`InstallLocation` = `%LOCALAPPDATA%\BilibiliCrawler`；
+开始菜单与桌面两个 `BilibiliCrawler.lnk` 的 `TargetPath` / `WorkingDirectory` 均指向该位置；
+`analysis-runs` 仍是 8 个 run 目录、37 文件、5,135,277 字节，与升级前逐字节一致。
+（`user-data` 比最初备份多 33 字节，是 v3.5.0 启动时写入的窗口/配置状态，不是数据损失。）
+
+**一处清单措辞需要修正**：原来要求确认「升级提示显示的旧版本是 3.5.0」。NSIS 模板的
+Already Installed 页**只说 "An older version"，不打印版本号**，无法从该页读出 3.5.0。实际可核的是
+注册表 `DisplayVersion` 与该页把它归类为 older 而非 newer/same。手册已按此改写。
+
+**测试后的注册表状态是正确的，没有还原污染备份**：两个键现在都指向真实安装位置。备份仍保留在
+`E:\Cache\11-temp\bcc-backup-20260910-130104`，仅供追溯，不应重新导入。
+
+**机器现在装的是候选包，不是发布包。** 第 6 节的 Release 资产仍需在干净 worktree 中用全新构建
+环境重建。
 
 本版进入候选的工作（用于核对第 5 节是否覆盖齐）：
 
