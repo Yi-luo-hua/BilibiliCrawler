@@ -19,16 +19,16 @@
 
 BilibiliCrawler 是一个 B 站评论 / 动态爬取与舆论分析桌面工具。v2.00 起项目迁移为 **Tauri 2 + React + TypeScript** 桌面应用，Python 爬虫和分析逻辑作为本地 sidecar 后端运行，通过本地进程通信完成爬取、扫码登录、LLM 分析和导出。
 
-现已支持 MCP 调用，请阅读 [MCP 文档](docs/MCP.md)。本分支支持从 checkout 安装 CLI/MCP 包：
+现已支持 MCP 调用，请阅读 [MCP 文档](docs/MCP.md)。已发布到 PyPI：
 
 ```powershell
-python -m pip install ".[mcp,analysis]"
+python -m pip install "bilibili-crawler[mcp,analysis]"
 bilibili-crawler doctor
 bilibili-crawler-mcp
 ```
 
-省略 extras 的 `pip install .` 只装 CLI/文本分析核心；词云/分词选 `analysis`，MCP 选 `mcp`，
-源码桌面后端选 `desktop`。尚未发布到 PyPI，不要把本地分发名视为已注册的公共包。
+省略 extras 只装 CLI/文本分析核心；词云/分词选 `analysis`，MCP 选 `mcp`，源码桌面后端选 `desktop`。
+从 checkout 安装用 `pip install ".[mcp,analysis]"`。
 包边界、旧入口兼容及安装后的数据目录见 [Python 包说明](docs/PYTHON_PACKAGE_BOUNDARY.md)。
 
 > 旧版 Python GUI / 单 exe 代码保留在 `legacy-python-gui` 分支。主分支以后以 Windows 安装包桌面应用为主。
@@ -204,7 +204,7 @@ manifest 中的 artifacts 路径相对于 run 目录存储（拷贝到其他机�
 
 当前待完成的兼容性修复、功能演进和后续工程工作见
 [BilibiliCrawler 前瞻计划](docs/FORWARD_PLAN.md)；正在准备中的版本，其发布步骤与验收项见对应的
-版本清单，当前是 [v3.6.0 发布准备与验收清单](docs/RELEASE_3.6.0.md)。已完成任务的验收与发布证据保留在
+版本清单。最近一次是 [v3.6.0 发布准备与验收清单](docs/RELEASE_3.6.0.md)。已完成任务的验收与发布证据保留在
 对应版本清单中，历史版本计划仅保留对应阶段记录，不再追加新任务。
 
 ## 源码开发
@@ -243,7 +243,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build_installer.ps1 -Python $Re
 
 应用版本以 `desktop/src-tauri/Cargo.toml` 的 `[package].version` 为唯一来源；Tauri 和构建脚本会自动读取该版本，`Cargo.lock` 由 Cargo 同步更新。构建流程使用锁定的 pnpm 版本、冻结锁文件和审核后的依赖构建脚本。
 
-桌面窗口左上角显示当前版本；侧栏“检查更新”查询 GitHub 最新正式版本，并提供更新说明和安装包下载入口。下载后退出应用，运行安装程序完成更新。浏览器预览显示项目版本，更新操作仅在桌面窗口可用。详见 [v3.6.0 桌面候选版说明](docs/RELEASE_NOTES_3.6.0.md)。
+桌面窗口左上角显示当前版本；侧栏“检查更新”查询 GitHub 最新正式版本，并提供更新说明和安装包下载入口。下载后退出应用，运行安装程序完成更新。浏览器预览显示项目版本，更新操作仅在桌面窗口可用。详见 [v3.6.0 发布说明](docs/RELEASE_NOTES_3.6.0.md)。
 
 产物位于：
 
@@ -371,7 +371,7 @@ BilibiliCrawler/
 
 ## 更新日志
 
-### v3.6.0（候选，未发布）
+### v3.6.0 (2026.09.10)
 - **改变了爬取任务的成功/失败判定**：主评论或动态的分页请求失败不再被当作「已到最后一页」静默结束，任务判定为失败并提示结果不完整；已取得的部分评论写入 run 目录（`comments.json` 与 CSV）可跨重启读取，部分动态保留在当前会话可导出。
 - 子评论（回复）拉取失败按警告处理，不让整次爬取失败：回复接口对「该楼已删除 / 评论区已关闭」和「被风控限速」返回同样的空响应，无法区分。`manifest.json` 的 `warnings` 与 `counts.reply_failures` 记录丢失条数，主评论与其余回复完整保留。
 - 评论跨页重复改为按评论 ID 逐条去重；「爬取并分析」在爬取失败时不再继续调用 LLM。
@@ -381,7 +381,7 @@ BilibiliCrawler/
 - 侧栏新增手动检查更新与更新说明；只接受正式版本，按数字比较，不提示降级。失败提示只显示本应用自己的文案，不回显远端响应内容。
 - 仅当 GitHub Release 上存在名称、版本与下载地址完全匹配的已上传 Windows x64 安装包时才给出下载入口；下载在默认浏览器中进行，需用户退出应用后手动运行安装程序。
 - 侧栏新增 Star 按钮，点击打开项目 GitHub 页面，由用户自行点星。
-- 发布准备与验收清单见 `docs/RELEASE_3.6.0.md`，面向用户的说明见 `docs/RELEASE_NOTES_3.6.0.md`。
+- 已发布：标签 `v3.6.0` 指向 `492b85f`，Windows x64 安装包随 GitHub Release 发布，`bilibili-crawler` 3.6.0 已上架 PyPI，三处产物 SHA-256 一致。安装器清理与「运行中升级」两条经真机验收；**未执行的验收项见 `docs/RELEASE_3.6.0.md` 的验收记录**，其中分析成功路径的产物只由回归测试覆盖。
 
 ### v3.5.0 (2026.09.03)
 - 新增自定义分析文本模块（对应 Issue #18）：可自行填写标题与提示词，最多保存 8 个、单次分析最多启用 3 个，结果进入界面卡片与 Markdown 报告。

@@ -1,25 +1,25 @@
 # v3.6.0 发布准备与验收清单
 
-> 状态：**候选，未发布。32/70 已完成（2026-09-10）。**
-> 第 1、2、3 节全部完成；第 5 节的三条阻断项里两条通过、一条未触发记为跳过，另有一批真机项完成。
-> 剩下 38 项见下方「发布前剩余」。面向用户的说明见
-> [v3.6.0 桌面候选版说明](RELEASE_NOTES_3.6.0.md)，逐步操作见
+> 状态：**v3.6.0 已于 2026-09-10 公开发布**，标签指向 `492b85f`。
+> 33/70 已勾选；下文保留原清单。**未勾选项中有一批是维护者决定跳过的**，逐条见末尾验收记录的
+> 「未执行的验收项」——那些是跳过，不是通过。面向用户的说明见
+> [v3.6.0 发布说明](RELEASE_NOTES_3.6.0.md)，逐步操作见
 > [v3.6.0 真机验收操作手册](ACCEPTANCE_RUNBOOK_3.6.0.md)。
 > 本清单在标签推送前持续更新：**每有新工作合入候选，必须在第 5 节补上它自己的真机验收项**，
 > 否则不得进入第 6 节。
 
-## 发布前剩余
+## 发布后：未执行的验收项
 
-按能否继续推进分三类。**第 6 节的 14 项是发布动作本身，其余 24 项是它的前置。**
+以下为**维护者决定跳过**，不是通过。发布已于 2026-09-10 完成，这些路径当时只由回归测试覆盖。
 
 ### 一、必须有人做决定或提供凭据（24 项中的主要部分）
 
 | 项目 | 数量 | 卡在哪 |
 |---|---|---|
-| 分析相关全部（结果与词云、`analysis.json`、Markdown 报告、导出、canary 零命中、报告溯源、主题排行导出图、`temperature` 降级） | 8 | 需要 LLM 凭据；`temperature` 那条还需要一个会拒绝该字段的 provider |
+| 分析成功路径（结果与词云、`analysis.json`、Markdown 报告、导出、报告溯源、主题排行导出图、`temperature` 降级） | 7 | 需要 LLM 凭据；`temperature` 那条还需要一个会拒绝该字段的 provider。**canary 泄露验收已单独通过，但只覆盖失败路径** |
 | 「发现新版本 → 下载」及依赖它的「任务运行期间禁用下载入口」 | 2 | 需要用临时 3.4.0 构建实测，见手册 3.6 |
 | 断网检查更新 | 1 | 需要改动网络连通性 |
-| TestPyPI / PyPI Trusted Publisher 复核 | 1 | 只能在 PyPI 账户设置里看，GitHub API 看不到 |
+| TestPyPI / PyPI Trusted Publisher 复核 | 1 | 只能在 PyPI 账户设置里看；**两处发布均已实际成功，等价于验证了它有效** |
 | 真实 412 风控下的爬取 | 1 | 两次真实爬取未触发，已记为跳过；日常遇到时补录即可 |
 
 ### 二、可以直接继续做的（无额外前置）
@@ -28,15 +28,10 @@
 Star 按钮打开浏览器、动态爬取分页失败、主评论分页真实失败与「爬取并分析」不发 LLM 请求、
 默认卸载后数据保留的复验。
 
-### 三、第 6 节发布动作（14 项）
+### 三、第 6 节发布动作
 
-前两类清完之前不得开始。其中两条是本版新增的硬约束：
-
-- **资产名必须是 `BilibiliCrawler-Setup-3.6.0-x64.exe`**——更新检查逐字节比对下载地址。
-- 公开后确认 v3.5.0 客户端**不会**收到更新提示（它没有这个功能），这是已知的单向限制。
-
-> **当前机器上装的是候选包（`591c7146…`），不是发布包。** 第 6 节要求从候选提交开干净 worktree、
-> 用全新 CPython 3.13.15 环境重建，只有那次构建的产物才是 Release 资产。候选包仅用于真机验收。
+**已全部完成**，证据见末尾验收记录。其中两条本版新增的硬约束都已线上核实：资产名逐字节匹配
+更新检查拼出的地址；v3.5.0 客户端不会收到提示（它没有这个功能），是已知的单向限制。
 
 ## 发布边界
 
@@ -541,3 +536,73 @@ CSV，「开始任务」立即可再次点击。**终态是已取消而不是失
 **未覆盖**：成功分析所产出的 `analysis.json`、Markdown 报告与词云未参与本次扫描——它们需要一个
 可用的 provider。本次只证明了**失败路径**不泄露；成功路径的产物由 `scrub` 边界与回归测试覆盖，
 未经真机扫描。
+
+### 2026-09-10：v3.6.0 已发布
+
+**标签** `v3.6.0`（annotated，对象 `f192ec23…`），peeled SHA `492b85f4f75c15b7b7c1a9d8e147fb39b80c04a2`，
+推送后经 `git ls-remote` 复核远端 peeled 一致。
+
+**发布构建**：从候选提交开的干净 worktree（`E:\bcc-rel360`，detached），构建环境是 `uv` 新建的
+GUID 命名 CPython 3.13.15 x64（隔离断言通过）。第 2 节全部门禁在该 worktree 内重跑：
+ENV A 334 OK (skipped=3)、ENV B 365 OK、desktop `test:unit` 35/35 + typecheck + build +
+audit 无漏洞、`cargo check --locked`（在 `build_backend.ps1` 之后）、`git diff --check` 干净、
+Actions gate 在候选提交上 success。venv 门禁使用本机 Python 3.13.0——第 2 节未钉版本，
+3.13.15 只约束安装包构建。
+
+**产物**：
+
+| 文件 | 大小 | SHA-256 |
+|---|---|---|
+| `BilibiliCrawler-Setup-3.6.0-x64.exe` | 53,533,440 | `5a73e1d9c1aad2d8acf44d09e1fec8cd663709d12a16226d9777a28f0f11192b` |
+| `bilibili_crawler-3.6.0-py3-none-any.whl` | 117,314 | `96a839653713d317048ec820ea65c3045cf81fbada652195b3482de15ab95cf2` |
+| `bilibili_crawler-3.6.0.tar.gz` | 117,583 | `d1b86cad3471e2ba16da020fcdb151a33a5d241364742da99c420613f1dc5c9d` |
+
+构建完成 2026-09-10 14:39:38 +08:00。构建后 worktree HEAD 未变；`Cargo.toml` 的 LF 重写按内容
+判据核实（`git diff` 为空且 blob hash 等于 `HEAD:<file>`，均为 `383a7687…`）。
+
+**产物清单比对**：`0 removed, 0 added, 3 changed`，与 v3.4.0 → v3.5.0 同一组非确定性文件
+（`sidecar.exe`、`base_library.zip`、numpy 的 `RECORD`）。**0 removed 意味着本版不遗留任何旧路径**，
+因此未使用 `--allow-removed`。
+
+**发布链路**：标签 → Draft（安装包 + 校验文件 + 产物清单）→ 工作流 `github-release` 附加四个
+Python 资产 → 反向核验 → 公开 → `testpypi` → `pypi`（经人工审批）。
+
+**反向核验**：下载全部七个资产后，`python-package-manifest.json` 的 `source_commit` 等于标签
+peeled SHA；`SHA256SUMS` 与实算一致；安装包哈希三处一致（本地构建 / `.sha256` / 下载后实算）；
+`installer-payload-manifest.json` 与本地构建逐字节相同。
+
+**三处产物哈希一致**：GitHub Release = TestPyPI = PyPI，wheel 与 sdist 均核对通过。
+
+**发布后验证**：干净 venv 安装 `bilibili-crawler[mcp]==3.6.0`，`pip check` 无破损，
+版本 3.6.0 / mcp 2.1.0；`--help` 与只读 `doctor`（`ok:true`）正常；`bilibili-crawler-mcp` stdio
+握手成功，协议 `2025-11-25`，发现 7 个工具。
+
+**更新检查契约线上核实**（只有公开后才能做）：`releases/latest` 的 `draft=false`、
+`prerelease=false`、tag 匹配严格 semver、资产名与 `state=uploaded`、`size>0`，且
+`browser_download_url` **逐字节等于**客户端按 tag 拼出的地址。这是本版最容易踩的约束，线上成立。
+
+#### 发布过程中的问题
+
+- **候选提交在构建过程中被推进过一次。** 第一次发布构建跑在 `3601d4d` 上，构建期间合入了发布
+  说明的修复，main 变成 `492b85f`。标签必须指向候选提交，而 `3601d4d` 里的说明仍是候选版措辞，
+  照那样打标签会让 Release 正文与被标签的源码不一致。该次产物作废，worktree 与构建全部重做。
+  **教训：构建启动后到打标签之前不要再合并任何东西。**
+- **发布说明差点带着候选版措辞发出去。** 第 6 节把 `RELEASE_NOTES_3.6.0.md` 原样作为
+  `--notes-file`，而当时它的标题是「v3.6.0 桌面候选版」、正文有「本版尚未公开发布」。发布前改写。
+- **第 4 节「或 git archive 产物」这条走不通。** `check_package_release.py` 会调
+  `git rev-parse HEAD`，裸解包没有 `.git` 直接报错。有效路径只有干净 worktree。另外本机
+  `core.autocrlf=true` 与该节要求的 `false` 不符，但该脚本判据全部来自 git ref，不受影响；
+  另用 `git archive` 展开独立确认了被标签内容的版本与说明标题。
+- **PyPI `/simple` 索引传播窗口仍会导致本机首次安装失败。** 工作流内的验证 job 一次通过
+  （其 `/simple` 等待步骤生效），但本机首次 `pip install`（已带 `--no-cache-dir`）报
+  `No matching distribution found`；查 `/simple` 确认 3.6.0 已在索引中，重试即成功。
+  属客户端侧几十秒级的传播窗口，非发布问题。v3.5.0 记录的同类现象在客户端侧仍然存在。
+- **仓库根目录的 `bilibili_crawler.egg-info` 是陈旧的（Version 3.5.0）。** 在仓库目录内执行
+  `importlib.metadata.version('bilibili-crawler')` 会读到它，一度让 wheel 验证误报 3.5.0。
+  在中立目录重验为 3.6.0。任何版本相关检查都不要在仓库根目录跑。
+
+#### 未执行的验收项
+
+见上方「发布后：未执行的验收项」。最值得注意的是**分析成功路径的产物从未真机验证**——
+`analysis.json`、Markdown 报告、词云均只由回归测试覆盖。canary 凭据泄露验收已通过，但它覆盖的是
+HTTP 401 失败路径；成功路径产出的文件未经真机扫描。
