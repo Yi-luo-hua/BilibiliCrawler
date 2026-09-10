@@ -1,7 +1,7 @@
 # v3.6.0 发布准备与验收清单
 
-> 状态：**候选，未发布。第 1、2 节已完成（2026-09-10），第 3–6 节未开始。**
-> 下一步全部以 CPython 3.13.15 x64 的发布构建环境为前置，见末尾验收记录的「阻塞项」。
+> 状态：**候选，未发布。第 1、2、3 节已完成（2026-09-10），候选构建已产出安装包。**
+> 剩下的是第 5 节真机验收与第 6 节发布；真机验收未开始，见末尾验收记录。
 > 面向用户的说明见 [v3.6.0 桌面候选版说明](RELEASE_NOTES_3.6.0.md)。
 > 本清单在标签推送前持续更新：**每有新工作合入候选，必须在第 5 节补上它自己的真机验收项**，
 > 否则不得进入第 6 节。
@@ -45,7 +45,7 @@
   `mcp==2.1.0`；两者各跑 `python -X utf8 -m unittest discover -s tests -q`。
 - [x] 桌面：`corepack pnpm@10.28.0 run test:unit`、`run typecheck`、`run build`、`audit`。
 - [x] Rust：`cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml`。
-- [ ] Rust 检查：**必须在 sidecar 构建完成之后**。先
+- [x] Rust 检查：**必须在 sidecar 构建完成之后**。先
   `powershell -ExecutionPolicy Bypass -File scripts/build_backend.ps1 -Python $ReleasePython`，
   再 `cargo check --locked --manifest-path desktop/src-tauri/Cargo.toml`。
 - [x] 基础卫生：`git diff --check "$CandidateSha^1" $CandidateSha`。
@@ -59,9 +59,9 @@ v3.5.0 起清单随 Release 提供，本版不必再从安装包重建基线。
   `schema`、`root` 与 `version`。**它不含 `source_commit`**——按设计不带时间戳与提交，
   这样内容相同的两次构建产出逐字节相同的清单，可以直接比对。与提交绑定的是同一 Release 里的
   `python-package-manifest.json`，第 6 节的反向核验用它。
-- [ ] 比对本次构建：`python scripts/check_installer_payload.py --tree
+- [x] 比对本次构建：`python scripts/check_installer_payload.py --tree
   desktop/src-tauri/resources/backend --version 3.6.0 --baseline v350-payload-manifest.json`。
-- [ ] 若报告存在被移除的路径，逐条确认第 5 节的清理回归覆盖它们，再以 `--allow-removed` 记录结论。
+- [x] 若报告存在被移除的路径，逐条确认第 5 节的清理回归覆盖它们，再以 `--allow-removed` 记录结论。
   **不得在未确认的情况下直接加该参数。**
 
 ### 4. Python 包发布前置
@@ -76,7 +76,7 @@ v3.5.0 起清单随 Release 提供，本版不必再从安装包重建基线。
 - [ ] 用 CPython 3.13.15 x64 创建 GUID 命名的全新构建环境作为 `$ReleasePython`。
 - [ ] `powershell -ExecutionPolicy Bypass -File scripts/build_installer.ps1 -Python $ReleasePython`
   成功，产出 `BilibiliCrawler-Setup-3.6.0-x64.exe` 与 `installer-payload-manifest.json`。
-- [ ] Release notes 说明安装包未代码签名，Windows 可能显示 SmartScreen 提示。
+- [x] Release notes 说明安装包未代码签名，Windows 可能显示 SmartScreen 提示。
 
 以下为真机验收，不能用自动化测试替代。
 
@@ -255,11 +255,50 @@ ENV B 装了 `mcp` 后全部执行，因此总数从 334 升到 365。
 `pypi` 保留 `required_reviewers`（Yi-luo-hua）。Trusted Publisher 的有效性只能在 PyPI / TestPyPI
 的账户设置里确认，GitHub API 看不到，未复核。
 
-**阻塞项**：第 2 节的 `cargo check --locked` 必须在 `build_backend.ps1` 之后执行，而该脚本要求
-CPython 3.13.15 x64 的发布构建环境。`desktop/src-tauri/resources/backend` 下现存的 sidecar 产物
-是候选内容合入之前构建的，**不能用它代替**。第 3、5、6 节同样以此为前置。
+**尚未开始**：第 5 节全部真机验收、第 6 节发布。第 4 节的 Trusted Publisher 复核需登录
+PyPI / TestPyPI，GitHub API 看不到。
 
-**尚未开始**：第 3 节的清单比对、第 5 节的构建与全部真机验收、第 6 节发布。
+### 2026-09-10：候选构建，第 2 节收尾与第 3 节完成
+
+**这次构建的产物不用于发布。** 用的是仓库里既有的 `build/desktop-release-venv`
+（`cpython|3.13.15|64`，由 `build_backend.ps1` 以 `--require-hashes` 拉到当前锁文件状态），
+不是第 5 节要求的 GUID 命名全新环境。目的有三个：确认候选内容能真的构建出来、拿到第 3 节的
+增删对比、产出一个可安装的包供真机验收使用。最终 Release 资产必须按第 6 节在干净 worktree 中
+用全新环境重建。
+
+**第 2 节收尾**：`build_installer.ps1` 内部先跑 `build_backend.ps1` 重建 sidecar，之后
+`cargo check --locked` 通过（45s）。这满足了「Rust 检查必须在 sidecar 构建之后」的排序要求；
+此前树里那份 sidecar 早于候选内容，没有用它代替。
+
+**第 3 节比对结果**：
+
+```
+payload files: 1296
+baseline 3.5.0 -> 3.6.0: 0 removed, 0 added, 3 changed
+```
+
+三个变化的文件是 `sidecar/sidecar.exe`、`sidecar/_internal/base_library.zip`、
+`sidecar/_internal/numpy-2.5.2.dist-info/RECORD`，与 v3.4.0 → v3.5.0 那次完全同一组——它们是
+每次构建都会变的非确定性产物。**0 removed 意味着本版不遗留任何旧路径**，因此不需要
+`--allow-removed`，第 5 节的清理回归也没有额外路径要覆盖。
+
+**候选产物**：
+
+| | |
+|---|---|
+| 文件 | `BilibiliCrawler-Setup-3.6.0-x64.exe` |
+| 大小 | 53,519,718 字节 |
+| SHA-256 | `591c714684a2590b62c29247aa04836766fbbfba68e7d38a8918c12638978c10` |
+| 构建完成 | 2026-09-10 12:42:13 +08:00 |
+| 构建自 | `551ddb582cf4c3e7a958e223774254bfd61530ad` |
+
+构建后 `HEAD` 未变；`git status` 显示 `desktop/src-tauri/Cargo.toml` 有改动，但
+`git diff` 为空且 `git hash-object` 等于 `git rev-parse HEAD:<file>`（均为
+`383a768711683893aee152efce57baee2a7ef0b1`）——只是 Tauri CLI 的 LF 重写，内容未变，与第 6 节
+预告的判据一致。
+
+**顺带修正**：第 5 节要求「Release notes 说明安装包未代码签名」，但
+`RELEASE_NOTES_3.6.0.md` 里没有这句（v3.5.0 的说明文件同样漏了）。已补入构建与验证一节。
 
 本版进入候选的工作（用于核对第 5 节是否覆盖齐）：
 
