@@ -78,7 +78,9 @@ v3.5.0 起清单随 Release 提供，本版不必再从安装包重建基线。
   成功，产出 `BilibiliCrawler-Setup-3.6.0-x64.exe` 与 `installer-payload-manifest.json`。
 - [x] Release notes 说明安装包未代码签名，Windows 可能显示 SmartScreen 提示。
 
-以下为真机验收，不能用自动化测试替代。
+以下为真机验收，不能用自动化测试替代。三条阻断项的逐步操作、判据与本机的先决条件见
+[v3.6.0 真机验收操作手册](ACCEPTANCE_RUNBOOK_3.6.0.md)。**开发机的注册表已被隔离测试污染，
+不先按手册第 0 节处理，升级与清理两条验收都会作用在错误的目录上。**
 
 #### 爬取完整性（本版改变了成功 / 失败判定，影响面最大）
 
