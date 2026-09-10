@@ -104,7 +104,13 @@ Get-Content "$env:TEMP\bcc-v350\BilibiliCrawler-Setup-3.5.0-x64.exe.sha256"
 逐条确认：
 
 - 安装页面显示的目标目录是 `%LOCALAPPDATA%\BilibiliCrawler`，**不是** `E:\Cache\...`
-- 升级提示显示的旧版本是 **3.5.0**（若显示 3.1.1，说明 0.2 那个键没删干净）
+- 出现「Already Installed」页并把已装版本归类为 **older**。**该页不打印版本号**（NSIS 模板只写
+  "An older version of BilibiliCrawler is installed"），所以版本要从注册表核：
+  `(Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\BilibiliCrawler').DisplayVersion`
+  应为 `3.5.0`。若这一页压根不出现，说明 0.2 那个键被删后 v3.5.0 没有重新注册。
+- 选默认的「Uninstall before installing」时会调起 v3.5.0 的卸载程序：确认它显示
+  `Uninstalling from: %LOCALAPPDATA%\BilibiliCrawler`，且「Delete the application data」**未勾选**，
+  卸载后三个数据目录仍在——这一步同时完成了「默认卸载后用户数据保留」那条
 - 安装后从快捷方式启动，标题栏应用名下显示 **`v3.6.0`**，不是「正在读取版本…」或「版本读取失败」
 - `analysis-runs` 里升级前的 run 数量不变，随便打开一个 run 目录内容完好
 - 快捷方式的 `TargetPath` 与 `WorkingDirectory` 指向新安装位置：
