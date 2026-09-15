@@ -667,6 +667,16 @@ class AnalysisTests(AgentServiceTestCase):
         self.assertTrue(chart_keys, "chart_keys must never be empty")
         self.assertNotIn("word_cloud", chart_keys)
 
+    def test_the_desktop_full_strategy_is_not_downgraded_to_sampling(self) -> None:
+        # The desktop calls full analysis "full" while the CLI and MCP call it
+        # "all". Letting "full" fall through to the "sample" default quietly
+        # capped the desktop's 全量分批 at the sample size.
+        run_id = self.seed_run()
+        service = self.make_service()
+        self.run_to_completion(service, service.start_analyze(run_id, strategy="full"))
+
+        self.assertEqual(self.processor.params[0]["strategy"], "all")
+
     def test_analyze_rejects_unknown_and_traversal_run_ids(self) -> None:
         service = self.make_service()
         for bad_id, expected in [
