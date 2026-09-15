@@ -980,6 +980,9 @@ class AgentService:
         processor, so no caller has to keep a key alive between requests.
         """
         chosen = str(strategy or "sample").strip()
+        # The desktop calls full analysis "full"; the CLI and MCP call it "all".
+        if chosen == "full":
+            chosen = "all"
         if chosen not in {"sample", "all"}:
             chosen = "sample"
         if credentials is None:
