@@ -49,6 +49,17 @@ def repeated_comment_fixture(count: int) -> list[dict]:
 
 
 class SidecarAnalysisTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # Every Sidecar builds a RunStore that resolves its root at
+        # construction, and with no override that is the checkout's own
+        # analysis-runs/, where these tests' crawls used to pile up. The tests
+        # that pin the default resolution blank the override again.
+        run_root = tempfile.TemporaryDirectory()
+        self.addCleanup(run_root.cleanup)
+        env_patch = unittest.mock.patch.dict(os.environ, {"BILIBILI_AGENT_RUNS_DIR": run_root.name})
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+
     def test_comment_request_uses_injected_service_through_public_protocol(self) -> None:
         api = object()
         created_with: list[tuple[object, object]] = []
@@ -496,7 +507,7 @@ class SidecarAnalysisTests(unittest.TestCase):
             with unittest.mock.patch.object(paths, "ROOT", Path(bundle) / "_internal"), \
                     unittest.mock.patch.object(sys, "frozen", True, create=True), \
                     unittest.mock.patch.dict(
-                        os.environ, {"LOCALAPPDATA": local_app_data}, clear=False):
+                        os.environ, {"LOCALAPPDATA": local_app_data, "BILIBILI_AGENT_RUNS_DIR": ""}, clear=False):
                 runs = paths.agent_runs_root()
                 assets = paths.analysis_assets_root()
 
@@ -525,7 +536,7 @@ class SidecarAnalysisTests(unittest.TestCase):
             with unittest.mock.patch.object(paths, "ROOT", Path(bundle) / "_internal"), \
                     unittest.mock.patch.object(sys, "frozen", True, create=True), \
                     unittest.mock.patch.dict(
-                        os.environ, {"LOCALAPPDATA": local_app_data}, clear=False):
+                        os.environ, {"LOCALAPPDATA": local_app_data, "BILIBILI_AGENT_RUNS_DIR": ""}, clear=False):
                 first = paths.agent_runs_root()
                 second = paths.agent_runs_root()
 
@@ -561,7 +572,7 @@ class SidecarAnalysisTests(unittest.TestCase):
             with unittest.mock.patch.object(paths, "ROOT", Path(bundle) / "_internal"), \
                     unittest.mock.patch.object(sys, "frozen", True, create=True), \
                     unittest.mock.patch.dict(
-                        os.environ, {"LOCALAPPDATA": local_app_data}, clear=False), \
+                        os.environ, {"LOCALAPPDATA": local_app_data, "BILIBILI_AGENT_RUNS_DIR": ""}, clear=False), \
                     unittest.mock.patch.object(Path, "iterdir", iterdir):
                 resolved = paths.agent_runs_root()
 
@@ -581,7 +592,7 @@ class SidecarAnalysisTests(unittest.TestCase):
             with unittest.mock.patch.object(paths, "ROOT", Path(bundle) / "_internal"), \
                     unittest.mock.patch.object(sys, "frozen", True, create=True), \
                     unittest.mock.patch.dict(
-                        os.environ, {"LOCALAPPDATA": local_app_data}, clear=False), \
+                        os.environ, {"LOCALAPPDATA": local_app_data, "BILIBILI_AGENT_RUNS_DIR": ""}, clear=False), \
                     unittest.mock.patch.object(
                         paths.tempfile, "mkdtemp", side_effect=OSError("staging unavailable")):
                 resolved = paths.agent_runs_root()

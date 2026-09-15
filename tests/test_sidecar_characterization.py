@@ -286,26 +286,41 @@ def drain(sidecar: RecordingSidecar, timeout: float = 5.0) -> None:
             raise AssertionError("sidecar task thread did not finish")
 
 
-class CommentCrawlBaseline(unittest.TestCase):
-    def test_success_persists_a_run_for_followup_analysis(self) -> None:
-        with tempfile.TemporaryDirectory() as run_root, patch.dict(
-            os.environ, {"BILIBILI_AGENT_RUNS_DIR": run_root}
-        ):
-            sidecar, _ = make(comments=[COMMENT_A, COMMENT_B])
-            sidecar.handle({"id": "req-1", "method": "comments.start",
-                            "params": {"input": "BV1xx411c7mD", "max_pages": 1}})
-            drain(sidecar)
+class IsolatedRunRootTestCase(unittest.TestCase):
+    """Gives every test its own runs root, removed after the test.
 
-            run_dirs = [path for path in Path(run_root).iterdir() if path.is_dir()]
-            self.assertEqual(len(run_dirs), 1)
-            run_dir = run_dirs[0]
-            self.assertEqual(sidecar._last_comment_run_id, run_dir.name)
-            self.assertEqual(
-                json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))["status"],
-                "completed",
-            )
-            persisted = json.loads((run_dir / "comments.json").read_text(encoding="utf-8"))
-            self.assertEqual([row["comment_id"] for row in persisted], [1, 2])
+    Each Sidecar builds an AgentService whose RunStore resolves its root once,
+    at construction. Without BILIBILI_AGENT_RUNS_DIR that is the checkout's own
+    analysis-runs/, so every crawl these tests started used to pile up beside
+    the user's real runs -- out of sight, since .gitignore covers the folder.
+    """
+
+    def setUp(self) -> None:
+        run_root = tempfile.TemporaryDirectory()
+        self.addCleanup(run_root.cleanup)
+        env_patch = patch.dict(os.environ, {"BILIBILI_AGENT_RUNS_DIR": run_root.name})
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        self.run_root = Path(run_root.name)
+
+
+class CommentCrawlBaseline(IsolatedRunRootTestCase):
+    def test_success_persists_a_run_for_followup_analysis(self) -> None:
+        sidecar, _ = make(comments=[COMMENT_A, COMMENT_B])
+        sidecar.handle({"id": "req-1", "method": "comments.start",
+                        "params": {"input": "BV1xx411c7mD", "max_pages": 1}})
+        drain(sidecar)
+
+        run_dirs = [path for path in self.run_root.iterdir() if path.is_dir()]
+        self.assertEqual(len(run_dirs), 1)
+        run_dir = run_dirs[0]
+        self.assertEqual(sidecar._last_comment_run_id, run_dir.name)
+        self.assertEqual(
+            json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))["status"],
+            "completed",
+        )
+        persisted = json.loads((run_dir / "comments.json").read_text(encoding="utf-8"))
+        self.assertEqual([row["comment_id"] for row in persisted], [1, 2])
 
     def test_success_emits_stats_then_finished_then_idle(self) -> None:
         sidecar, _ = make(comments=[COMMENT_A, COMMENT_B])
@@ -437,13 +452,8 @@ class CommentCrawlBaseline(unittest.TestCase):
         }])
 
 
-class CommentStopBaseline(unittest.TestCase):
+class CommentStopBaseline(IsolatedRunRootTestCase):
     def test_stop_before_the_worker_builds_a_crawler_finishes_empty(self) -> None:
-        run_root = tempfile.TemporaryDirectory()
-        self.addCleanup(run_root.cleanup)
-        env_patch = patch.dict(os.environ, {"BILIBILI_AGENT_RUNS_DIR": run_root.name})
-        env_patch.start()
-        self.addCleanup(env_patch.stop)
         worker_started = threading.Event()
         release_worker = threading.Event()
         sidecar, _ = make(comments=[COMMENT_A])
@@ -633,245 +643,230 @@ class CommentStopBaseline(unittest.TestCase):
         self.assertNotIn("正在停止分析任务...", logs)
 
 
-class AnalysisBaseline(unittest.TestCase):
+class AnalysisBaseline(IsolatedRunRootTestCase):
     def test_comment_analysis_reuses_the_persisted_comment_run(self) -> None:
         processor = EchoingAnalysisProcessor(result=ANALYSIS_RESULT)
         canary = "sk-desktop-stage5-canary"
-        with tempfile.TemporaryDirectory() as run_root, patch.dict(
-            os.environ, {"BILIBILI_AGENT_RUNS_DIR": run_root}
-        ):
-            sidecar, _ = make(comments=[COMMENT_A, COMMENT_B], processor=processor)
-            sidecar.handle({"id": "crawl-1", "method": "comments.start",
-                            "params": {"input": "BV1xx411c7mD", "max_pages": 1}})
-            drain(sidecar)
-            run_id = sidecar._last_comment_run_id
+        sidecar, _ = make(comments=[COMMENT_A, COMMENT_B], processor=processor)
+        sidecar.handle({"id": "crawl-1", "method": "comments.start",
+                        "params": {"input": "BV1xx411c7mD", "max_pages": 1}})
+        drain(sidecar)
+        run_id = sidecar._last_comment_run_id
 
-            sidecar.frames.clear()
-            with patch.object(
-                sidecar._agent_service,
-                "start_analyze",
-                wraps=sidecar._agent_service.start_analyze,
-            ) as start_analyze:
-                sidecar.handle({
-                    "id": "analysis-1",
-                    "method": "analysis.start",
-                    "params": {
-                        "source": "comments",
-                        "sample_size": 123,
-                        "batch_size": 45,
-                        "chart_keys": ["word_cloud", "topic_ranking"],
-                        "llm_config": {
-                            "api_key": canary,
-                            "base_url": "https://desktop.example/v1",
-                            "model": "desktop-model",
-                        },
-                    },
-                })
-                drain(sidecar)
-
-            start_analyze.assert_called_once()
-            call = start_analyze.call_args
-            self.assertEqual(call.args, (run_id,))
-            self.assertEqual(call.kwargs["sample_size"], 123)
-            self.assertEqual(call.kwargs["batch_size"], 45)
-            self.assertEqual(call.kwargs["chart_keys"], ["word_cloud", "topic_ranking"])
-            self.assertEqual(call.kwargs["credentials"].api_key, canary)
-            self.assertEqual(call.kwargs["credentials"].base_url, "https://desktop.example/v1")
-            self.assertEqual(call.kwargs["credentials"].model, "desktop-model")
-
-            run_dir = Path(run_root) / run_id
-            self.assertTrue((run_dir / "analysis.json").is_file())
-            self.assertTrue((run_dir / "report.md").is_file())
-            self.assertEqual(sidecar._last_analysis["report_markdown"], "# 报告")
-            self.assertTrue(sidecar.has("finished", "analysis"))
-            self.assertEqual(
-                [frame["percent"] for frame in sidecar.frames
-                 if frame.get("event") == "analysis.progress"],
-                [50],
-            )
-            _, dynamics, sent_params = processor.calls[-1]
-            self.assertEqual(dynamics, [])
-            self.assertEqual(sent_params["source"], "comments")
-            self.assertEqual(sent_params["sample_size"], 123)
-            self.assertEqual(sent_params["batch_size"], 45)
-            self.assertEqual(sent_params["chart_keys"], ["word_cloud", "topic_ranking"])
-            self.assertEqual(sent_params["llm_config"]["api_key"], canary)
-            for artifact in run_dir.rglob("*"):
-                if artifact.is_file():
-                    self.assertNotIn(canary.encode(), artifact.read_bytes(), artifact)
-
-    def test_comment_analysis_stop_forwards_the_exact_task_and_keeps_terminal_frames(self) -> None:
-        processor = BlockingAnalysisProcessor()
-        with tempfile.TemporaryDirectory() as run_root, patch.dict(
-            os.environ, {"BILIBILI_AGENT_RUNS_DIR": run_root}
-        ):
-            sidecar, _ = make(comments=[COMMENT_A], processor=processor)
-            sidecar.handle({"id": "crawl-1", "method": "comments.start",
-                            "params": {"input": "BV1xx411c7mD", "max_pages": 1}})
-            drain(sidecar)
-            sidecar.frames.clear()
-
+        sidecar.frames.clear()
+        with patch.object(
+            sidecar._agent_service,
+            "start_analyze",
+            wraps=sidecar._agent_service.start_analyze,
+        ) as start_analyze:
             sidecar.handle({
                 "id": "analysis-1",
                 "method": "analysis.start",
-                "params": {"source": "comments", "llm_config": {"api_key": "test-key"}},
+                "params": {
+                    "source": "comments",
+                    "sample_size": 123,
+                    "batch_size": 45,
+                    "chart_keys": ["word_cloud", "topic_ranking"],
+                    "llm_config": {
+                        "api_key": canary,
+                        "base_url": "https://desktop.example/v1",
+                        "model": "desktop-model",
+                    },
+                },
             })
-            self.assertTrue(processor.entered.wait(timeout=5), "analysis processor was never entered")
-            for _ in range(100):
-                if sidecar._active_agent_task_id:
-                    break
-                threading.Event().wait(0.01)
-            active_task_id = sidecar._active_agent_task_id
-            self.assertTrue(active_task_id)
+            drain(sidecar)
 
-            with patch.object(
-                sidecar._agent_service,
-                "stop",
-                wraps=sidecar._agent_service.stop,
-            ) as stop:
-                sidecar.handle({"id": "stop-1", "method": "task.stop", "params": {}})
-                drain(sidecar)
-                stop.assert_called_once_with(active_task_id)
+        start_analyze.assert_called_once()
+        call = start_analyze.call_args
+        self.assertEqual(call.args, (run_id,))
+        self.assertEqual(call.kwargs["sample_size"], 123)
+        self.assertEqual(call.kwargs["batch_size"], 45)
+        self.assertEqual(call.kwargs["chart_keys"], ["word_cloud", "topic_ranking"])
+        self.assertEqual(call.kwargs["credentials"].api_key, canary)
+        self.assertEqual(call.kwargs["credentials"].base_url, "https://desktop.example/v1")
+        self.assertEqual(call.kwargs["credentials"].model, "desktop-model")
 
-            self.assertTrue(sidecar.has("cancelled", "analysis"))
-            self.assertFalse(sidecar.has("finished", "analysis"))
-            self.assertFalse(sidecar.has("error", "analysis"))
-            self.assertEqual(
-                sidecar.event("cancelled", "analysis")["message"],
-                "分析已被取消",
-            )
-            self.assertEqual(sequence(sidecar)[-3:], [
-                ("cancelled", "analysis"),
-                ("log", None),
-                ("progress", "analysis"),
-            ])
+        run_dir = self.run_root / run_id
+        self.assertTrue((run_dir / "analysis.json").is_file())
+        self.assertTrue((run_dir / "report.md").is_file())
+        self.assertEqual(sidecar._last_analysis["report_markdown"], "# 报告")
+        self.assertTrue(sidecar.has("finished", "analysis"))
+        self.assertEqual(
+            [frame["percent"] for frame in sidecar.frames
+             if frame.get("event") == "analysis.progress"],
+            [50],
+        )
+        _, dynamics, sent_params = processor.calls[-1]
+        self.assertEqual(dynamics, [])
+        self.assertEqual(sent_params["source"], "comments")
+        self.assertEqual(sent_params["sample_size"], 123)
+        self.assertEqual(sent_params["batch_size"], 45)
+        self.assertEqual(sent_params["chart_keys"], ["word_cloud", "topic_ranking"])
+        self.assertEqual(sent_params["llm_config"]["api_key"], canary)
+        for artifact in run_dir.rglob("*"):
+            if artifact.is_file():
+                self.assertNotIn(canary.encode(), artifact.read_bytes(), artifact)
+
+    def test_comment_analysis_stop_forwards_the_exact_task_and_keeps_terminal_frames(self) -> None:
+        processor = BlockingAnalysisProcessor()
+        sidecar, _ = make(comments=[COMMENT_A], processor=processor)
+        sidecar.handle({"id": "crawl-1", "method": "comments.start",
+                        "params": {"input": "BV1xx411c7mD", "max_pages": 1}})
+        drain(sidecar)
+        sidecar.frames.clear()
+
+        sidecar.handle({
+            "id": "analysis-1",
+            "method": "analysis.start",
+            "params": {"source": "comments", "llm_config": {"api_key": "test-key"}},
+        })
+        self.assertTrue(processor.entered.wait(timeout=5), "analysis processor was never entered")
+        for _ in range(100):
+            if sidecar._active_agent_task_id:
+                break
+            threading.Event().wait(0.01)
+        active_task_id = sidecar._active_agent_task_id
+        self.assertTrue(active_task_id)
+
+        with patch.object(
+            sidecar._agent_service,
+            "stop",
+            wraps=sidecar._agent_service.stop,
+        ) as stop:
+            sidecar.handle({"id": "stop-1", "method": "task.stop", "params": {}})
+            drain(sidecar)
+            stop.assert_called_once_with(active_task_id)
+
+        self.assertTrue(sidecar.has("cancelled", "analysis"))
+        self.assertFalse(sidecar.has("finished", "analysis"))
+        self.assertFalse(sidecar.has("error", "analysis"))
+        self.assertEqual(
+            sidecar.event("cancelled", "analysis")["message"],
+            "分析已被取消",
+        )
+        self.assertEqual(sequence(sidecar)[-3:], [
+            ("cancelled", "analysis"),
+            ("log", None),
+            ("progress", "analysis"),
+        ])
 
     def test_comment_analysis_stop_before_task_id_handoff_is_forwarded(self) -> None:
         processor = BlockingAnalysisProcessor()
         return_gate = threading.Event()
-        with tempfile.TemporaryDirectory() as run_root, patch.dict(
-            os.environ, {"BILIBILI_AGENT_RUNS_DIR": run_root}
-        ):
-            sidecar, _ = make(comments=[COMMENT_A], processor=processor)
-            sidecar.handle({"id": "crawl-1", "method": "comments.start",
-                            "params": {"input": "BV1xx411c7mD", "max_pages": 1}})
-            drain(sidecar)
-            sidecar.frames.clear()
+        sidecar, _ = make(comments=[COMMENT_A], processor=processor)
+        sidecar.handle({"id": "crawl-1", "method": "comments.start",
+                        "params": {"input": "BV1xx411c7mD", "max_pages": 1}})
+        drain(sidecar)
+        sidecar.frames.clear()
 
-            start_returned = threading.Event()
-            started_holder = {}
-            original_start = sidecar._agent_service.start_analyze
+        start_returned = threading.Event()
+        started_holder = {}
+        original_start = sidecar._agent_service.start_analyze
 
-            def delayed_start(*args, **kwargs):
-                started = original_start(*args, **kwargs)
-                started_holder["task"] = started
-                start_returned.set()
-                if not return_gate.wait(timeout=5):
-                    raise TimeoutError("AgentService.start_analyze was never released")
-                return started
+        def delayed_start(*args, **kwargs):
+            started = original_start(*args, **kwargs)
+            started_holder["task"] = started
+            start_returned.set()
+            if not return_gate.wait(timeout=5):
+                raise TimeoutError("AgentService.start_analyze was never released")
+            return started
 
-            try:
-                with patch.object(sidecar._agent_service, "start_analyze", side_effect=delayed_start), \
-                        patch.object(
-                            sidecar._agent_service,
-                            "stop",
-                            wraps=sidecar._agent_service.stop,
-                        ) as stop:
-                    sidecar.handle({
-                        "id": "analysis-1",
-                        "method": "analysis.start",
-                        "params": {"source": "comments", "llm_config": {"api_key": "test-key"}},
-                    })
-                    self.assertTrue(start_returned.wait(timeout=5))
-                    sidecar.handle({"id": "stop-1", "method": "task.stop", "params": {}})
-                    return_gate.set()
-                    drain(sidecar)
-                    stop.assert_called_once_with(started_holder["task"].task_id)
-            finally:
-                return_gate.set()
-                drain(sidecar)
-
-            self.assertTrue(sidecar.has("cancelled", "analysis"))
-            self.assertFalse(sidecar.has("finished", "analysis"))
-            self.assertFalse(sidecar.has("error", "analysis"))
-
-    def test_comment_analysis_idle_waits_until_agent_service_is_ready(self) -> None:
-        processor = StubAnalysisProcessor(result=ANALYSIS_RESULT)
-        release_terminal_persist = threading.Event()
-        with tempfile.TemporaryDirectory() as run_root, patch.dict(
-            os.environ, {"BILIBILI_AGENT_RUNS_DIR": run_root}
-        ):
-            sidecar, _ = make(comments=[COMMENT_A], processor=processor)
-            sidecar.handle({"id": "crawl-1", "method": "comments.start",
-                            "params": {"input": "BV1xx411c7mD", "max_pages": 1}})
-            drain(sidecar)
-            sidecar.frames.clear()
-
-            terminal_persist_started = threading.Event()
-            task_ids = []
-            original_persist = sidecar._agent_service._persist
-
-            def blocking_persist(task):
-                if task.kind == "analyze" and task.snapshot().done:
-                    task_ids.append(task.task_id)
-                    terminal_persist_started.set()
-                    if not release_terminal_persist.wait(timeout=5):
-                        raise TimeoutError("terminal analysis persist was never released")
-                return original_persist(task)
-
-            sidecar._agent_service._persist = blocking_persist
-            try:
+        try:
+            with patch.object(sidecar._agent_service, "start_analyze", side_effect=delayed_start), \
+                    patch.object(
+                        sidecar._agent_service,
+                        "stop",
+                        wraps=sidecar._agent_service.stop,
+                    ) as stop:
                 sidecar.handle({
                     "id": "analysis-1",
                     "method": "analysis.start",
                     "params": {"source": "comments", "llm_config": {"api_key": "test-key"}},
                 })
-                self.assertTrue(terminal_persist_started.wait(timeout=5))
-
-                sidecar._active_thread.join(timeout=0.3)
-                self.assertTrue(sidecar._active_thread.is_alive(), "sidecar announced idle too early")
-                self.assertFalse(sidecar.has("finished", "analysis"))
-                self.assertFalse(any(
-                    frame.get("event") == "progress"
-                    and frame.get("mode") == "analysis"
-                    and frame.get("status") == "idle"
-                    for frame in sidecar.frames
-                ))
-            finally:
-                release_terminal_persist.set()
-                if task_ids:
-                    sidecar._agent_service.wait_until_finished(task_ids[0], timeout=5)
+                self.assertTrue(start_returned.wait(timeout=5))
+                sidecar.handle({"id": "stop-1", "method": "task.stop", "params": {}})
+                return_gate.set()
                 drain(sidecar)
+                stop.assert_called_once_with(started_holder["task"].task_id)
+        finally:
+            return_gate.set()
+            drain(sidecar)
+
+        self.assertTrue(sidecar.has("cancelled", "analysis"))
+        self.assertFalse(sidecar.has("finished", "analysis"))
+        self.assertFalse(sidecar.has("error", "analysis"))
+
+    def test_comment_analysis_idle_waits_until_agent_service_is_ready(self) -> None:
+        processor = StubAnalysisProcessor(result=ANALYSIS_RESULT)
+        release_terminal_persist = threading.Event()
+        sidecar, _ = make(comments=[COMMENT_A], processor=processor)
+        sidecar.handle({"id": "crawl-1", "method": "comments.start",
+                        "params": {"input": "BV1xx411c7mD", "max_pages": 1}})
+        drain(sidecar)
+        sidecar.frames.clear()
+
+        terminal_persist_started = threading.Event()
+        task_ids = []
+        original_persist = sidecar._agent_service._persist
+
+        def blocking_persist(task):
+            if task.kind == "analyze" and task.snapshot().done:
+                task_ids.append(task.task_id)
+                terminal_persist_started.set()
+                if not release_terminal_persist.wait(timeout=5):
+                    raise TimeoutError("terminal analysis persist was never released")
+            return original_persist(task)
+
+        sidecar._agent_service._persist = blocking_persist
+        try:
+            sidecar.handle({
+                "id": "analysis-1",
+                "method": "analysis.start",
+                "params": {"source": "comments", "llm_config": {"api_key": "test-key"}},
+            })
+            self.assertTrue(terminal_persist_started.wait(timeout=5))
+
+            sidecar._active_thread.join(timeout=0.3)
+            self.assertTrue(sidecar._active_thread.is_alive(), "sidecar announced idle too early")
+            self.assertFalse(sidecar.has("finished", "analysis"))
+            self.assertFalse(any(
+                frame.get("event") == "progress"
+                and frame.get("mode") == "analysis"
+                and frame.get("status") == "idle"
+                for frame in sidecar.frames
+            ))
+        finally:
+            release_terminal_persist.set()
+            if task_ids:
+                sidecar._agent_service.wait_until_finished(task_ids[0], timeout=5)
+            drain(sidecar)
 
     def test_nonexact_sources_stay_legacy_even_after_a_comment_run_exists(self) -> None:
         processor = StubAnalysisProcessor(result=ANALYSIS_RESULT)
-        with tempfile.TemporaryDirectory() as run_root, patch.dict(
-            os.environ, {"BILIBILI_AGENT_RUNS_DIR": run_root}
-        ):
-            sidecar, _ = make(comments=[COMMENT_A], processor=processor)
-            sidecar.handle({"id": "crawl-1", "method": "comments.start",
-                            "params": {"input": "BV1xx411c7mD", "max_pages": 1}})
-            drain(sidecar)
-            self.assertTrue(sidecar._last_comment_run_id)
-            sidecar._last_dynamics = [{"dynamic_id": "d1", "content": "一条动态"}]
+        sidecar, _ = make(comments=[COMMENT_A], processor=processor)
+        sidecar.handle({"id": "crawl-1", "method": "comments.start",
+                        "params": {"input": "BV1xx411c7mD", "max_pages": 1}})
+        drain(sidecar)
+        self.assertTrue(sidecar._last_comment_run_id)
+        sidecar._last_dynamics = [{"dynamic_id": "d1", "content": "一条动态"}]
 
-            for source in ("dynamics", "all", "auto", "not-a-source", None):
-                with self.subTest(source=source):
-                    processor.calls.clear()
-                    request = {"llm_config": {"api_key": "k"}}
-                    if source is not None:
-                        request["source"] = source
-                    with patch.object(sidecar._agent_service, "start_analyze") as start_analyze:
-                        sidecar._run_analysis(request)
-                    start_analyze.assert_not_called()
-                    self.assertEqual(len(processor.calls), 1)
-                    comments, dynamics, sent = processor.calls[0]
-                    self.assertEqual(comments, sidecar._last_comments)
-                    self.assertEqual(dynamics, sidecar._last_dynamics)
-                    if source is None:
-                        self.assertNotIn("source", sent)
-                    else:
-                        self.assertEqual(sent["source"], source)
+        for source in ("dynamics", "all", "auto", "not-a-source", None):
+            with self.subTest(source=source):
+                processor.calls.clear()
+                request = {"llm_config": {"api_key": "k"}}
+                if source is not None:
+                    request["source"] = source
+                with patch.object(sidecar._agent_service, "start_analyze") as start_analyze:
+                    sidecar._run_analysis(request)
+                start_analyze.assert_not_called()
+                self.assertEqual(len(processor.calls), 1)
+                comments, dynamics, sent = processor.calls[0]
+                self.assertEqual(comments, sidecar._last_comments)
+                self.assertEqual(dynamics, sidecar._last_dynamics)
+                if source is None:
+                    self.assertNotIn("source", sent)
+                else:
+                    self.assertEqual(sent["source"], source)
 
     def test_success_emits_finished_with_the_display_payload(self) -> None:
         processor = StubAnalysisProcessor(result=ANALYSIS_RESULT)
