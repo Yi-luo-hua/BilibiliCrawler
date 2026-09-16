@@ -29,6 +29,7 @@ from bilibili_crawler.service.recovery import analysis_recovery_hint
 from bilibili_crawler.service.models import (
     MAX_PAGES_DEFAULT,
     SAMPLE_SIZE_DEFAULT,
+    ErrorCode,
     ServiceError,
     TaskSnapshot,
     mark_untrusted,
@@ -102,7 +103,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     def add_crawl_flags(sub: argparse.ArgumentParser) -> None:
         sub.add_argument("url", help="视频链接 / BV 号 / 动态链接 / 专栏链接")
-        sub.add_argument("--max-pages", type=int, default=MAX_PAGES_DEFAULT)
+        sub.add_argument(
+            "--max-pages", type=int, default=MAX_PAGES_DEFAULT,
+            help=f"主评论页数，每页 30 条（默认 {MAX_PAGES_DEFAULT}）；0 表示爬完整个评论区。楼中楼回复全部爬取、不计页数",
+        )
         sub.add_argument("--no-replies", action="store_true", help="不爬取楼中楼回复")
         sub.add_argument("--sort-mode", type=int, default=3, help="3=按时间，2=按热度")
         sub.add_argument(
@@ -112,23 +116,57 @@ def _build_parser() -> argparse.ArgumentParser:
                  "不传则读环境变量 BILIBILI_COOKIE，都没有就匿名爬取（评论 IP 属地为空）",
         )
 
+    def add_analysis_flags(sub: argparse.ArgumentParser) -> None:
+        sub.add_argument(
+            "--sample-size", type=int, default=SAMPLE_SIZE_DEFAULT,
+            help=f"抽样分析的评论条数（默认 {SAMPLE_SIZE_DEFAULT}），不设上限；超过 2000 会提醒耗时和费用",
+        )
+        sub.add_argument("--strategy", choices=["sample", "all"], default="sample",
+                         help="sample=抽样，all=全量（忽略 --sample-size）")
+        sub.add_argument("--batch-size", type=int, default=None, help="每次 LLM 请求的评论条数（默认 80）")
+        sub.add_argument(
+            "--charts", default="",
+            help="逗号分隔的分析模块；不传则用默认 6 个。可选：sentiment_distribution, topic_ranking, "
+                 "time_trend, level_distribution, region_map, word_cloud, deep_analysis",
+        )
+        sub.add_argument(
+            "--custom-module", action="append", default=[], metavar="标题=提示",
+            help="自定义分析视角，可重复，例如 --custom-module \"传播路径=分析争议如何扩散\"",
+        )
+
     crawl_analyze = subparsers.add_parser("crawl-and-analyze", help="爬取并分析")
     add_crawl_flags(crawl_analyze)
-    crawl_analyze.add_argument("--sample-size", type=int, default=SAMPLE_SIZE_DEFAULT)
+    add_analysis_flags(crawl_analyze)
 
     crawl_only = subparsers.add_parser("crawl-comments", help="只爬取评论")
     add_crawl_flags(crawl_only)
 
     analyze = subparsers.add_parser("analyze-run", help="对已有 run 重新分析")
     analyze.add_argument("run_id")
-    analyze.add_argument("--sample-size", type=int, default=SAMPLE_SIZE_DEFAULT)
-    analyze.add_argument("--strategy", choices=["sample", "all"], default="sample")
+    add_analysis_flags(analyze)
 
     status = subparsers.add_parser("status", help="查询任务状态")
     status.add_argument("--task-id", default="")
     status.add_argument("--run-id", default="")
 
     return parser
+
+
+def _analysis_kwargs(args: argparse.Namespace) -> dict:
+    charts = [item.strip() for item in str(args.charts or "").split(",") if item.strip()]
+    modules = []
+    for raw in args.custom_module:
+        title, separator, prompt = str(raw).partition("=")
+        if not separator or not title.strip() or not prompt.strip():
+            raise ServiceError(ErrorCode.INVALID_INPUT, f"--custom-module 需要写成 标题=提示：{raw!r}")
+        modules.append({"title": title.strip(), "prompt": prompt.strip()})
+    return {
+        "sample_size": args.sample_size,
+        "strategy": args.strategy,
+        "batch_size": args.batch_size,
+        "chart_keys": charts or None,
+        "custom_modules": modules or None,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -187,14 +225,10 @@ def main(argv: list[str] | None = None) -> int:
                 max_pages=args.max_pages,
                 include_replies=not args.no_replies,
                 sort_mode=args.sort_mode,
-                sample_size=args.sample_size,
+                **_analysis_kwargs(args),
             )
         else:  # analyze-run
-            started = service.start_analyze(
-                args.run_id,
-                sample_size=args.sample_size,
-                strategy=args.strategy,
-            )
+            started = service.start_analyze(args.run_id, **_analysis_kwargs(args))
     except ServiceError as exc:
         _print({"ok": False, "error_code": exc.code, "error": scrub(str(exc)), **exc.context})
         return 1

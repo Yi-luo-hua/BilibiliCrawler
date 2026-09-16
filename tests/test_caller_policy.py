@@ -22,7 +22,7 @@ from src.service.models import (
     AGENT_CHART_KEYS,
     AGENT_POLICY,
     DESKTOP_POLICY,
-    MAX_PAGES_CEILING,
+    MAX_PAGES_UNLIMITED,
     CallerPolicy,
     ErrorCode,
     ServiceError,
@@ -126,13 +126,25 @@ class PolicyTestCase(unittest.TestCase):
 class PolicyValueTests(unittest.TestCase):
     def test_the_default_policy_is_the_agent_policy(self) -> None:
         self.assertEqual(CallerPolicy(), AGENT_POLICY)
-        self.assertEqual(AGENT_POLICY.max_pages_ceiling, MAX_PAGES_CEILING)
+        self.assertIsNone(AGENT_POLICY.max_pages_ceiling)
         self.assertEqual(list(AGENT_POLICY.default_chart_keys), list(AGENT_CHART_KEYS))
         self.assertNotIn("word_cloud", AGENT_POLICY.default_chart_keys)
 
-    def test_agent_policy_clamps_pages_and_desktop_policy_does_not(self) -> None:
-        self.assertEqual(AGENT_POLICY.resolve_max_pages(99999), MAX_PAGES_CEILING)
-        self.assertEqual(DESKTOP_POLICY.resolve_max_pages(99999), 99999)
+    def test_no_shipped_policy_caps_the_page_count(self) -> None:
+        for policy in (AGENT_POLICY, DESKTOP_POLICY):
+            with self.subTest(policy=policy):
+                self.assertEqual(policy.resolve_max_pages(99999), 99999)
+
+    def test_zero_or_negative_pages_mean_the_whole_comment_section(self) -> None:
+        for value in (0, -1, "0"):
+            with self.subTest(value=value):
+                self.assertEqual(AGENT_POLICY.resolve_max_pages(value), MAX_PAGES_UNLIMITED)
+
+    def test_an_embedder_ceiling_still_bounds_an_unlimited_request(self) -> None:
+        capped = CallerPolicy(max_pages_ceiling=7)
+        self.assertEqual(capped.resolve_max_pages(0), 7)
+        self.assertEqual(capped.resolve_max_pages(99), 7)
+        self.assertEqual(capped.resolve_max_pages(3), 3)
 
     def test_each_policy_has_its_own_page_default(self) -> None:
         # The desktop default is 100; AgentService's is deliberately far lower.
@@ -142,11 +154,11 @@ class PolicyValueTests(unittest.TestCase):
             with self.subTest(value=junk):
                 self.assertEqual(AGENT_POLICY.resolve_max_pages(junk), 5)
 
-    def test_pages_never_go_below_one(self) -> None:
-        for policy in (AGENT_POLICY, DESKTOP_POLICY):
-            with self.subTest(policy=policy):
-                self.assertEqual(policy.resolve_max_pages(0), 1)
-                self.assertEqual(policy.resolve_max_pages(-7), 1)
+    def test_a_page_count_that_is_not_a_number_falls_back_to_the_default(self) -> None:
+        # bool is an int subclass; True must not quietly mean one page.
+        for value in (None, "abc", True, 2.5j):
+            with self.subTest(value=value):
+                self.assertEqual(AGENT_POLICY.resolve_max_pages(value), AGENT_POLICY.max_pages_default)
 
     def test_a_request_chart_set_beats_the_policy_default(self) -> None:
         self.assertEqual(
@@ -213,10 +225,10 @@ class PolicyValidationTests(unittest.TestCase):
 
 
 class PolicyReachesTheCrawlerTests(PolicyTestCase):
-    def test_the_agent_ceiling_still_applies_by_default(self) -> None:
+    def test_the_agent_forwards_any_requested_page_count(self) -> None:
         service = self.make()
         self.finish(service, service.start_crawl("BV1xx411c7mD", max_pages=99999))
-        self.assertEqual(self.crawlers[0].calls[0]["max_pages"], MAX_PAGES_CEILING)
+        self.assertEqual(self.crawlers[0].calls[0]["max_pages"], 99999)
 
     def test_the_desktop_policy_forwards_the_requested_page_count(self) -> None:
         service = self.make(policy=DESKTOP_POLICY)
@@ -267,11 +279,43 @@ class PerRequestParameterTests(PolicyTestCase):
         self.finish(service, service.start_analyze(run_id, batch_size=45))
         self.assertEqual(self.processor.params[1]["batch_size"], 45)
 
-    def test_batch_size_is_clamped_to_the_processor_range(self) -> None:
+    def test_batch_size_is_forwarded_without_an_upper_bound(self) -> None:
         service = self.make()
         run_id = self.seed(service)
         self.finish(service, service.start_analyze(run_id, batch_size=9999))
-        self.assertEqual(self.processor.params[0]["batch_size"], 200)
+        self.finish(service, service.start_analyze(run_id, batch_size=0))
+        self.assertEqual(self.processor.params[0]["batch_size"], 9999)
+        # Not a positive number: the processor default, not a crash.
+        self.assertEqual(self.processor.params[1]["batch_size"], 80)
+
+    def test_sample_size_is_forwarded_without_bounds(self) -> None:
+        service = self.make()
+        run_id = self.seed(service)
+        for value, expected in ((5, 5), (50000, 50000), (0, 300), (-3, 300), ("x", 300)):
+            with self.subTest(value=value):
+                self.finish(service, service.start_analyze(run_id, sample_size=value))
+                self.assertEqual(self.processor.params[-1]["sample_size"], expected)
+
+    def test_only_a_sample_above_2000_carries_a_cost_warning(self) -> None:
+        service = self.make()
+        run_id = self.seed(service)
+        cases = [
+            (2000, "sample", False),
+            (2001, "sample", True),
+            (50000, "sample", True),
+            # A full analysis never reads sample_size, so it stays quiet.
+            (50000, "all", False),
+        ]
+        for value, strategy, warned in cases:
+            with self.subTest(value=value, strategy=strategy):
+                final = self.finish(
+                    service, service.start_analyze(run_id, sample_size=value, strategy=strategy)
+                )
+                notes = [w for w in final.warnings if "sample_size" in w]
+                self.assertEqual(bool(notes), warned, final.warnings)
+                if warned:
+                    self.assertIn(f"sample_size={value}", notes[0])
+                    self.assertIn("2000", notes[0])
 
 
 class InjectionPointTests(PolicyTestCase):

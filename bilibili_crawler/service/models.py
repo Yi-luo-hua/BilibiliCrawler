@@ -58,13 +58,17 @@ class TaskKind:
     CRAWL_AND_ANALYZE = "crawl_and_analyze"
 
 
-# --- Abuse controls -------------------------------------------------------
-# The desktop app defaults to 100 pages behind a human clicking a button. An
-# MCP tool can be invoked by any agent in a loop, so the headless defaults are
-# far lower and the ceiling cannot be raised through tool arguments.
+# --- Crawl and analysis defaults ------------------------------------------
+# Defaults, not ceilings. The headless default stays small so an unqualified
+# call finishes quickly, but a caller may ask for any page count; 0 means
+# "until the comment section runs out". Request pacing and the LLM request
+# timeouts/retries are the only brakes left, and they live with the HTTP code.
 MAX_PAGES_DEFAULT = 5
-MAX_PAGES_CEILING = 50
+MAX_PAGES_UNLIMITED = 0
 SAMPLE_SIZE_DEFAULT = 300
+# Not a limit: above this, sampling still honours the number, and the task
+# carries a warning about the cost of sending that many comments to the model.
+SAMPLE_SIZE_WARN_THRESHOLD = 2000
 WAIT_SECONDS_DEFAULT = 90
 WAIT_SECONDS_CEILING = 600
 
@@ -88,19 +92,9 @@ AGENT_CHART_KEYS = [
 
 # --- Untrusted-content handling -------------------------------------------
 # Everything derived from Bilibili comments is attacker-controlled text that
-# ends up inside the calling agent's context. Mark it, and keep it short.
+# ends up inside the calling agent's context. Mark it as data.
 UNTRUSTED_OPEN = "<untrusted-data>"
 UNTRUSTED_CLOSE = "</untrusted-data>"
-SUMMARY_CHAR_LIMIT = 2000
-
-
-def clamp_int(value: Any, default: int, low: int, high: int) -> int:
-    """Coerce value to an int inside [low, high], falling back to default."""
-    try:
-        number = int(value)
-    except (TypeError, ValueError):
-        return default
-    return max(low, min(high, number))
 
 
 @dataclass(frozen=True)
@@ -117,8 +111,9 @@ class CallerPolicy:
     """
 
     max_pages_default: int = MAX_PAGES_DEFAULT
-    # None means "no ceiling": the caller's own number is honoured.
-    max_pages_ceiling: int | None = MAX_PAGES_CEILING
+    # None means "no ceiling": the caller's own number is honoured. Neither
+    # built-in policy sets one any more; the field stays for embedders.
+    max_pages_ceiling: int | None = None
     # None means "do not force a set"; the processor applies its own default.
     default_chart_keys: tuple[str, ...] | None = tuple(AGENT_CHART_KEYS)
     # The desktop has always treated an empty crawl as a successful result.
@@ -156,13 +151,21 @@ class CallerPolicy:
             raise ValueError("default_chart_keys must be None or non-empty")
 
     def resolve_max_pages(self, value: Any) -> int:
+        """Return the page count to crawl; MAX_PAGES_UNLIMITED means no bound.
+
+        Zero or a negative number asks for every page. A ceiling, when an
+        embedder sets one, also bounds that request.
+        """
+        if isinstance(value, bool):
+            return self.max_pages_default
         try:
             number = int(value)
         except (TypeError, ValueError):
             return self.max_pages_default
-        number = max(1, number)
+        if number <= 0:
+            number = MAX_PAGES_UNLIMITED
         if self.max_pages_ceiling is not None:
-            number = min(number, self.max_pages_ceiling)
+            number = self.max_pages_ceiling if number == MAX_PAGES_UNLIMITED else min(number, self.max_pages_ceiling)
         return number
 
     def resolve_chart_keys(self, requested: Any = None) -> list[str] | None:
@@ -297,7 +300,7 @@ class ServiceError(RuntimeError):
         self.context = context
 
 
-def mark_untrusted(text: Any, limit: int = SUMMARY_CHAR_LIMIT) -> str:
+def mark_untrusted(text: Any, limit: int | None = None) -> str:
     """Wrap attacker-controlled text so the calling agent treats it as data.
 
     Comment text is written by strangers, and an LLM summary derived from it can
@@ -307,6 +310,6 @@ def mark_untrusted(text: Any, limit: int = SUMMARY_CHAR_LIMIT) -> str:
     body = str(text or "").strip()
     if not body:
         return ""
-    if len(body) > limit:
+    if limit is not None and len(body) > limit:
         body = body[:limit].rstrip() + "…（已截断）"
     return f"{UNTRUSTED_OPEN}\n{body}\n{UNTRUSTED_CLOSE}"

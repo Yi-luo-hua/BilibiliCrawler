@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import hashlib
 import inspect
 import logging
 import queue
@@ -35,6 +36,7 @@ from bilibili_crawler.service.credentials import (
 )
 from bilibili_crawler.service.models import (
     SAMPLE_SIZE_DEFAULT,
+    SAMPLE_SIZE_WARN_THRESHOLD,
     CallerPolicy,
     ErrorCode,
     EventKind,
@@ -44,7 +46,6 @@ from bilibili_crawler.service.models import (
     TaskKind,
     TaskOutcome,
     TaskSnapshot,
-    clamp_int as _clamp,
 )
 from bilibili_crawler.service.run_store import RunStore, new_run_id
 from bilibili_crawler.utils.helpers import parse_input
@@ -768,6 +769,23 @@ class AgentService:
             self._persist(task)
 
     @staticmethod
+    def _warn_if_sample_is_large(task: _Task, params: dict[str, Any], available: int) -> None:
+        """Say what a sample above the threshold will cost; never shrink it.
+
+        Only a sampling run reads sample_size, so a full analysis stays quiet.
+        """
+        requested = int(params.get("sample_size") or 0)
+        if params.get("strategy") != "sample" or requested <= SAMPLE_SIZE_WARN_THRESHOLD:
+            return
+        analysed = min(requested, available)
+        batch = int(params.get("batch_size") or 80)
+        batches = max(1, -(-analysed // batch)) if analysed else 0
+        task.add_warning(
+            f"sample_size={requested} 超过 {SAMPLE_SIZE_WARN_THRESHOLD}：送入 LLM 的评论越多，"
+            f"耗时和费用越高。本次共有 {available} 条数据，将分析 {analysed} 条，约 {batches} 批。"
+        )
+
+    @staticmethod
     def _empty_crawl_message(task: _Task) -> str:
         """Say that the target was reachable and simply had nothing to crawl.
 
@@ -885,6 +903,7 @@ class AgentService:
             return
 
         comments = self._store.load_comments(task.run_id)
+        self._warn_if_sample_is_large(task, params, len(comments))
 
         def progress(message: str, percent: int) -> None:
             text = str(message)
@@ -1118,7 +1137,7 @@ class AgentService:
         params: dict[str, Any] = {
             "source": "comments",
             "strategy": chosen,
-            "sample_size": _clamp(sample_size, SAMPLE_SIZE_DEFAULT, 20, 2000),
+            "sample_size": _positive(sample_size, SAMPLE_SIZE_DEFAULT),
             "llm_config": resolved.to_llm_config(),
         }
         # Omitted rather than sent empty: _normalize_chart_keys falls back to the
@@ -1129,12 +1148,21 @@ class AgentService:
         if selected is not None:
             params["chart_keys"] = selected
         if batch_size is not None:
-            params["batch_size"] = _clamp(batch_size, 80, 20, 200)
+            params["batch_size"] = _positive(batch_size, 80)
         # Normalised here so a malformed module never reaches the processor and
         # so the id list handed to chart_keys matches what actually runs.
-        modules = LLMAnalysisProcessor._normalize_custom_modules(custom_modules)
+        supplied, generated = _with_module_ids(custom_modules)
+        modules = LLMAnalysisProcessor._normalize_custom_modules(supplied)
         if modules:
             params["custom_modules"] = modules
+        # A module is only analysed when its id is among chart_keys. The desktop
+        # sends its saved modules with ids and ticks the active ones itself, so
+        # only modules that arrived without an id -- an agent asking for them
+        # by title and prompt -- are switched on here.
+        wanted = [item["id"] for item in modules if item["id"] in generated]
+        if wanted and "chart_keys" in params:
+            params["chart_keys"] = [*params["chart_keys"],
+                                    *(key for key in wanted if key not in params["chart_keys"])]
         return params
 
     def _snapshot_from_manifest(self, run_id: str) -> TaskSnapshot:
@@ -1212,3 +1240,39 @@ def _format_pubdate(value: Any) -> str:
     if stamp <= 0:
         return ""
     return datetime.fromtimestamp(stamp).strftime("%Y-%m-%d")
+
+
+def _positive(value: Any, fallback: int) -> int:
+    """A positive integer, or the fallback for anything else. No upper bound."""
+    if isinstance(value, bool):
+        return fallback
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return number if number > 0 else fallback
+
+
+def _with_module_ids(modules: Any) -> tuple[Any, set[str]]:
+    """Give id-less custom modules a stable id derived from their content.
+
+    The processor indexes results by an id of the form custom_xxxxxx and drops
+    anything else, so a module an agent describes by title and prompt alone
+    needs one. Deriving it from the content keeps a re-analysis of the same
+    module under the same id. Modules that already carry an id, valid or not,
+    are passed through for the processor to judge.
+    """
+    if not isinstance(modules, list):
+        return modules, set()
+    generated: set[str] = set()
+    result = []
+    for item in modules:
+        if isinstance(item, dict) and not str(item.get("id") or "").strip():
+            title = str(item.get("title") or "").strip()
+            prompt = str(item.get("prompt") or "").strip()
+            digest = hashlib.sha1(f"{title}\n{prompt}".encode("utf-8")).hexdigest()[:6]
+            module_id = f"custom_{digest}"
+            generated.add(module_id)
+            item = {**item, "id": module_id}
+        result.append(item)
+    return result, generated

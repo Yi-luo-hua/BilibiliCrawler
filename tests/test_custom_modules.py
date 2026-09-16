@@ -34,15 +34,17 @@ class CustomModuleNormalizationTests(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(LLMAnalysisProcessor._normalize_custom_modules([raw]), [])
 
-    def test_fields_are_truncated_and_count_is_capped(self):
+    def test_fields_and_count_are_not_capped_by_the_processor(self):
+        # The desktop enforces its own product limits in the UI and sidecar;
+        # the shared processor analyses whatever it is handed.
         modules = [
             {"id": f"custom_00000{index}", "title": "标" * 60, "prompt": "提" * 900}
             for index in range(6)
         ]
         normalized = LLMAnalysisProcessor._normalize_custom_modules(modules)
-        self.assertEqual(len(normalized), LLMAnalysisProcessor.CUSTOM_MODULE_ACTIVE_LIMIT)
-        self.assertEqual(len(normalized[0]["title"]), LLMAnalysisProcessor.CUSTOM_MODULE_TITLE_LIMIT)
-        self.assertEqual(len(normalized[0]["prompt"]), LLMAnalysisProcessor.CUSTOM_MODULE_PROMPT_LIMIT)
+        self.assertEqual(len(normalized), 6)
+        self.assertEqual(len(normalized[0]["title"]), 60)
+        self.assertEqual(len(normalized[0]["prompt"]), 900)
 
     def test_duplicate_ids_keep_only_the_first(self):
         modules = LLMAnalysisProcessor._normalize_custom_modules(

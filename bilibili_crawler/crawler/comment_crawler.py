@@ -221,7 +221,7 @@ class CommentCrawler:
         Args:
             url_or_id: 视频URL/BV号/AV号、动态链接、文章链接
             include_replies: 是否包含子评论（回复）
-            max_pages: 最大爬取页数
+            max_pages: 最大爬取页数，<= 0 表示爬完整个评论区
             mode: 排序模式，3=按时间，2=按热度
 
         Returns:
@@ -248,7 +248,9 @@ class CommentCrawler:
         total_replies = 0
         seen_comment_ids = set()
 
-        while page <= max_pages and not self._stop_flag:
+        # max_pages <= 0 means every page: the loop still ends on is_end, an
+        # empty page or a page of repeats, all of which the API guarantees.
+        while (max_pages <= 0 or page <= max_pages) and not self._stop_flag:
             self._log(f"正在爬取第 {page} 页评论...")
 
             comment_data = self.api.get_comments(
@@ -381,6 +383,7 @@ class CommentCrawler:
             回复列表
         """
         replies = []
+        seen = set()
         page = 1
 
         while not self._stop_flag:
@@ -389,22 +392,51 @@ class CommentCrawler:
             if not reply_data or not reply_data.get('data'):
                 raise CrawlError(f"评论 {root} 的第 {page} 页回复获取失败", replies)
 
-            reply_list = reply_data['data'].get('replies', [])
-            if not reply_list:
+            data = reply_data['data']
+            reply_list = data.get('replies') or []
+            fresh = [r for r in reply_list if r.get('rpid') not in seen]
+            # An empty page, or one that only repeats what we already have,
+            # is the end regardless of what the paging fields claim.
+            if not fresh:
                 break
 
-            for reply in reply_list:
+            for reply in fresh:
+                if reply.get('rpid'):
+                    seen.add(reply['rpid'])
                 comment = self._process_comment(reply, oid, is_reply=True, root_id=root)
                 replies.append(comment)
 
-            cursor = reply_data['data'].get('cursor', {})
-            is_end = cursor.get('is_end', True) if cursor else True
-            if is_end:
+            if self._reply_thread_finished(data, page):
                 break
 
             page += 1
 
         return replies
+
+    @staticmethod
+    def _reply_thread_finished(data: Dict, page: int) -> bool:
+        """Decide whether a reply thread has more pages.
+
+        x/v2/reply/reply pages with `page: {num, size, count}` and sends no
+        `cursor`. Reading only `cursor.is_end`, which defaulted to True when
+        absent, stopped every thread after its first page: the server caps a
+        page at 20 regardless of the requested ps, so each root comment kept at
+        most 20 replies, silently, and the busiest threads lost the most.
+        A `cursor` is still honoured for responses that carry one; with
+        neither, keep going until a page comes back empty.
+        """
+        info = data.get('page') or {}
+        try:
+            count = int(info.get('count'))
+            size = int(info.get('size'))
+        except (TypeError, ValueError):
+            count = size = 0
+        if count >= 0 and size > 0 and info.get('count') is not None:
+            return page * size >= count
+        cursor = data.get('cursor')
+        if isinstance(cursor, dict) and 'is_end' in cursor:
+            return bool(cursor.get('is_end'))
+        return False
 
     def _process_comment(
         self,

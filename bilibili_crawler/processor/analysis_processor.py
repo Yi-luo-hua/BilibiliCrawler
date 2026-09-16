@@ -35,6 +35,9 @@ class LLMAnalysisProcessor:
     CONNECT_TIMEOUT_SECONDS = 90
     READ_TIMEOUT_SECONDS = 90
     PROGRESS_INTERVAL_SECONDS = 1.0
+    # Display caps owned by the desktop: sidecar.py trims its chart payloads
+    # and the React workspace enforces the custom-module rules with its own
+    # copies. The processor itself no longer truncates by these.
     WORD_CLOUD_LIMIT = 80
     WORD_CLOUD_WIDTH = 800
     WORD_CLOUD_HEIGHT = 440
@@ -125,8 +128,11 @@ class LLMAnalysisProcessor:
         started_at = time.monotonic()
         source = cls._normalize_source(comments, dynamics, params.get("source"))
         strategy = params.get("strategy") or "sample"
-        sample_size = cls._clamp_int(params.get("sample_size"), 300, 20, 2000)
-        batch_size = cls._clamp_int(params.get("batch_size"), 80, 20, 200)
+        # Positive only: how many comments reach the model and how they are
+        # batched is the caller's call. Large values cost time and tokens,
+        # which the service warns about; the LLM request limits still apply.
+        sample_size = cls._positive_int(params.get("sample_size"), 300)
+        batch_size = cls._positive_int(params.get("batch_size"), 80)
         custom_modules = cls._normalize_custom_modules(params.get("custom_modules"))
         chart_keys = cls._normalize_chart_keys(
             params.get("chart_keys"), source, [item["id"] for item in custom_modules]
@@ -379,7 +385,7 @@ class LLMAnalysisProcessor:
             raise AnalysisError("LLM 总结整合响应缺少 choices[0].message.content", code=ErrorCode.LLM_RESPONSE_INVALID) from None
         parsed = cls._parse_json_object(str(content))
         summary = str(parsed.get("summary") or "").strip()
-        points = cls._strings(parsed.get("summary_points"))[:7]
+        points = cls._strings(parsed.get("summary_points"))
         if not summary and points:
             summary = points[0]
         if not summary:
@@ -510,7 +516,7 @@ class LLMAnalysisProcessor:
             {
                 "id": item["id"],
                 "type": item["type"],
-                "content": item["content"][:600],
+                "content": item["content"],
                 "likes": item["likes"],
                 "replies": item["replies"],
                 "time": item["time_text"],
@@ -522,15 +528,15 @@ class LLMAnalysisProcessor:
         fields = [
             "summary 字符串，概括总体舆论走向；",
             "risk_points 数组，列出争议、误解、负面扩散风险；",
-            "insights 数组，列出 3-6 条关键洞察；",
-            "notable_quotes 数组，最多 5 条代表性评论短句。",
+            "insights 数组，列出关键洞察；",
+            "notable_quotes 数组，列出代表性评论短句。",
         ]
         if cls._needs_sentiment(chart_keys):
             fields.append("sentiment_counts 数组，元素为 {name,value}，name 只能是 正向/中性/负向；")
         if cls._chart_enabled(chart_keys, "topic_ranking"):
-            fields.append("topic_counts 数组，最多 8 项，元素为 {name,value}；")
+            fields.append("topic_counts 数组，元素为 {name,value}；")
         if cls._chart_enabled(chart_keys, "word_cloud"):
-            fields.append(f"word_counts 数组，最多 {cls.WORD_CLOUD_LIMIT} 项，元素为 {{name,value}}，name 使用 2-8 个字的中文关键词或短语；")
+            fields.append("word_counts 数组，元素为 {name,value}，name 使用 2-8 个字的中文关键词或短语；")
         if cls._chart_enabled(chart_keys, "deep_analysis"):
             fields.append(
                 "deep_analysis 对象，包含 sociology、psychology、philosophy 三个字符串，分别从社会学、心理学、哲学角度剖析，必须基于评论证据，不能捏造事实；"
@@ -670,7 +676,7 @@ class LLMAnalysisProcessor:
                 merged["summary"] = "；".join(fallback_points[:2])
             return
         merged["summary"] = str(integrated.get("summary") or merged.get("summary") or "").strip()
-        points = cls._strings(integrated.get("summary_points"))[:7]
+        points = cls._strings(integrated.get("summary_points"))
         merged["summary_points"] = points or fallback_points
 
     @classmethod
@@ -679,14 +685,12 @@ class LLMAnalysisProcessor:
         points.extend(str(item.get("summary") or "").strip() for item in batch_results if str(item.get("summary") or "").strip())
         points.extend(cls._strings(merged.get("insights")))
         points.extend(cls._strings(merged.get("risk_points")))
-        return cls._dedupe([cls._trim_sentence(item, 110) for item in points if item])[:7]
+        return cls._dedupe([cls._trim_sentence(item) for item in points if item])
 
     @staticmethod
-    def _trim_sentence(value: str, limit: int) -> str:
-        text = re.sub(r"\s+", " ", value).strip(" ；;。")
-        if len(text) <= limit:
-            return text
-        return text[: limit - 1].rstrip("，,；;。") + "…"
+    def _trim_sentence(value: str) -> str:
+        """Normalise whitespace and trailing punctuation; never shortens."""
+        return re.sub(r"\s+", " ", value).strip(" ；;。")
 
     @classmethod
     def _build_records(
@@ -899,11 +903,11 @@ class LLMAnalysisProcessor:
             "summary": summary,
             "overview": overview,
             "sentiment_counts": cls._counter_items(sentiment, ["正向", "中性", "负向"]) if cls._needs_sentiment(chart_keys) else [],
-            "topic_counts": cls._counter_items(topics)[:8] if cls._chart_enabled(chart_keys, "topic_ranking") else [],
-            "word_counts": cls._counter_items(words)[: cls.WORD_CLOUD_LIMIT] if cls._chart_enabled(chart_keys, "word_cloud") else [],
-            "risk_points": cls._dedupe(risk_points)[:8],
-            "insights": cls._dedupe(insights)[:8],
-            "notable_quotes": cls._dedupe(quotes)[:5],
+            "topic_counts": cls._counter_items(topics) if cls._chart_enabled(chart_keys, "topic_ranking") else [],
+            "word_counts": cls._counter_items(words) if cls._chart_enabled(chart_keys, "word_cloud") else [],
+            "risk_points": cls._dedupe(risk_points),
+            "insights": cls._dedupe(insights),
+            "notable_quotes": cls._dedupe(quotes),
             "deep_analysis": {
                 key: cls._compact_analysis_segments(value)
                 for key, value in deep_segments.items()
@@ -953,7 +957,7 @@ class LLMAnalysisProcessor:
             reverse=True,
         )[:10]
         return {
-            "time_series": sorted(time_buckets.values(), key=lambda item: item["name"])[-14:]
+            "time_series": sorted(time_buckets.values(), key=lambda item: item["name"])
             if cls._chart_enabled(chart_keys, "time_trend")
             else [],
             "region_counts": cls._counter_items(region)
@@ -1112,7 +1116,7 @@ class LLMAnalysisProcessor:
             return "LLM 未返回有效总结。"
         if len(clean) == 1:
             return clean[0]
-        joined = "；".join(clean[:5])
+        joined = "；".join(clean)
         return f"本次采用{strategy}策略，分析 {analyzed}/{total_records} 条数据。分批结论概览：{joined}"
 
     @staticmethod
@@ -1183,14 +1187,12 @@ class LLMAnalysisProcessor:
             module_id = str(item.get("id") or "").strip().lower()
             if not cls.CUSTOM_MODULE_ID_PATTERN.match(module_id) or module_id in seen:
                 continue
-            title = str(item.get("title") or "").strip()[: cls.CUSTOM_MODULE_TITLE_LIMIT]
-            prompt = str(item.get("prompt") or "").strip()[: cls.CUSTOM_MODULE_PROMPT_LIMIT]
+            title = str(item.get("title") or "").strip()
+            prompt = str(item.get("prompt") or "").strip()
             if not title or not prompt:
                 continue
             seen.add(module_id)
             modules.append({"id": module_id, "title": title, "prompt": prompt})
-            if len(modules) >= cls.CUSTOM_MODULE_ACTIVE_LIMIT:
-                break
         return modules
 
     @classmethod
@@ -1254,7 +1256,7 @@ class LLMAnalysisProcessor:
             token = cls._clean_word_token(token)
             if token:
                 counter[token] += 1
-        return cls._counter_items(counter)[: cls.WORD_CLOUD_LIMIT]
+        return cls._counter_items(counter)
 
     @classmethod
     def _build_word_counts_by_regex(cls, texts: list[str]) -> list[dict[str, Any]]:
@@ -1276,7 +1278,7 @@ class LLMAnalysisProcessor:
                     token = cls._clean_word_token(token)
                     if token:
                         counter[token] += 1
-        return cls._counter_items(counter)[: cls.WORD_CLOUD_LIMIT]
+        return cls._counter_items(counter)
 
     @classmethod
     def _clean_word_token(cls, token: Any) -> str:
@@ -1338,7 +1340,8 @@ class LLMAnalysisProcessor:
                     "width": cls.WORD_CLOUD_WIDTH,
                     "height": cls.WORD_CLOUD_HEIGHT,
                     "background_color": "white",
-                    "max_words": cls.WORD_CLOUD_LIMIT,
+                    # Render every word that was counted.
+                    "max_words": max(1, len(frequencies)),
                     "stopwords": set(cls.STOP_WORDS),
                     "collocations": False,
                     "prefer_horizontal": 0.72,
@@ -1432,7 +1435,7 @@ class LLMAnalysisProcessor:
             return ""
         if len(kept) == 1:
             return kept[0][1]
-        return "\n\n".join(f"（第 {number} 批）{text}" for number, text in kept[:5])
+        return "\n\n".join(f"（第 {number} 批）{text}" for number, text in kept)
 
     @staticmethod
     def _append_chart_section(
@@ -1545,8 +1548,6 @@ class LLMAnalysisProcessor:
             return 0
 
     @classmethod
-    def _clamp_int(cls, value: Any, fallback: int, minimum: int, maximum: int) -> int:
+    def _positive_int(cls, value: Any, fallback: int) -> int:
         parsed = cls._safe_int(value)
-        if parsed <= 0:
-            parsed = fallback
-        return max(minimum, min(maximum, parsed))
+        return parsed if parsed > 0 else fallback

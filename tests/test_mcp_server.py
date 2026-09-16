@@ -217,14 +217,18 @@ class CrawlToolTests(McpServerTestCase):
         self.assertIn(f'task_id="{payload["task_id"]}"', payload["next_step"])
         release.set()
 
-    async def test_page_ceiling_is_enforced_even_when_the_caller_asks_for_more(self) -> None:
+    async def test_the_requested_page_count_is_not_capped(self) -> None:
         service = self.install_service()
         async with self.client() as client:
-            result = await client.call_tool(
+            many = await client.call_tool(
                 "crawl_comments", {"url": "BV1xx411c7mD", "max_pages": 100000}
             )
-        run_id = result.structured_content["run_id"]
-        self.assertEqual(service.store.read_manifest(run_id)["params"]["max_pages"], 50)
+            everything = await client.call_tool(
+                "crawl_comments", {"url": "BV1xx411c7mD", "max_pages": 0}
+            )
+        read = service.store.read_manifest
+        self.assertEqual(read(many.structured_content["run_id"])["params"]["max_pages"], 100000)
+        self.assertEqual(read(everything.structured_content["run_id"])["params"]["max_pages"], 0)
 
 
 class StatusAndStopTests(McpServerTestCase):
@@ -528,7 +532,9 @@ class ErrorHandlingTests(McpServerTestCase):
 
 
 class UntrustedContentTests(McpServerTestCase):
-    async def test_summary_is_wrapped_in_untrusted_markers_and_capped(self) -> None:
+    async def test_summary_is_wrapped_in_untrusted_markers_in_full(self) -> None:
+        # Marked as data, but no longer shortened: the length cap was one of
+        # the analysis limits removed on request.
         self.install_service(summary=INJECTION_SUMMARY)
         async with self.client() as client:
             result = await client.call_tool("crawl_and_analyze", {"url": "BV1xx411c7mD"})
@@ -536,8 +542,8 @@ class UntrustedContentTests(McpServerTestCase):
         summary = result.structured_content["summary"]
         self.assertTrue(summary.startswith(UNTRUSTED_OPEN))
         self.assertTrue(summary.endswith(UNTRUSTED_CLOSE))
-        self.assertIn("已截断", summary)
-        self.assertLess(len(summary), len(INJECTION_SUMMARY))
+        self.assertIn(INJECTION_SUMMARY, summary)
+        self.assertNotIn("已截断", summary)
 
     async def test_raw_comment_bodies_never_cross_into_the_response(self) -> None:
         # notable_quotes echoes comments verbatim, so it stays in analysis.json

@@ -29,14 +29,18 @@ bilibili-crawler-mcp
 ```
 
 省略 extras 只装 CLI/文本分析核心；MCP 选 `mcp`，源码桌面后端选 `desktop`。
-`analysis` extra（jieba/wordcloud）只服务桌面与 sidecar：CLI 和 MCP 的默认图表集合
-不含词云，装了也不会生成，普通 pip 用户不需要它。
+`analysis` extra（jieba/wordcloud）只在需要词云时安装：CLI 和 MCP 的默认图表集合不含词云，
+显式请求 `word_cloud`（CLI `--charts`、MCP `chart_keys`）时才会生成 PNG。
 从 checkout 安装用 `pip install ".[mcp]"`。
 包边界、旧入口兼容及安装后的数据目录见 [Python 包说明](docs/PYTHON_PACKAGE_BOUNDARY.md)。
 
 **pip 包的能力边界**：上面的功能清单描述的是桌面应用。CLI 和 MCP 只做
-「单个视频 / 动态 / 专栏的评论爬取 + LLM 文本分析」，不含动态爬取（用户空间、关注页）、
-扫码登录和图表渲染——分析结果只到 JSON/Markdown。
+「单个视频 / 动态 / 专栏的评论爬取 + LLM 分析」，不含动态爬取（用户空间、关注页）、
+扫码登录和图表渲染——分析结果是 JSON/Markdown，另可按需生成词云 PNG。
+
+爬取页数、抽样条数、分批大小、分析模块和自定义视角都由调用方决定，不设上限；
+`--max-pages 0` 爬完整个评论区，楼中楼回复全部爬取。抽样超过 2000 条时会提醒耗时与费用。
+参数说明见 [docs/MCP.md](docs/MCP.md#参数与限制)。
 
 **登录**：CLI/MCP 默认匿名爬取，此时 B 站不返回评论 IP 属地，地域分布必然为空。
 需要属地时设置环境变量 `BILIBILI_COOKIE`（CLI 也可用 `--cookie`），值是浏览器里
