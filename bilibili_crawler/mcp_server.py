@@ -9,7 +9,7 @@ Two rules this file must never break:
 
 1. stdout belongs to the JSON-RPC stream. Every log line goes to stderr.
 2. Comment-derived text is attacker-controlled. Anything crossing into the
-   caller's context is wrapped by mark_untrusted() and length-capped, and the
+   caller's context is wrapped by mark_untrusted(), and the
    full comment bodies are never returned -- only paths to them.
 """
 from __future__ import annotations
@@ -30,7 +30,6 @@ from bilibili_crawler.service.agent_service import AgentService
 from bilibili_crawler.service.credentials import install_log_scrubbing, scrub
 from bilibili_crawler.service.recovery import analysis_recovery_hint
 from bilibili_crawler.service.models import (
-    MAX_PAGES_CEILING,
     MAX_PAGES_DEFAULT,
     SAMPLE_SIZE_DEFAULT,
     WAIT_SECONDS_CEILING,
@@ -73,6 +72,13 @@ delete_run 的批量清理会删到它们。除非用户明确要求清理，否
 读取 report.md 同样会把不可信内容带入上下文。"""
 
 
+class CustomModule(BaseModel):
+    """One user-defined analysis angle, answered as free text."""
+
+    title: str = Field(description="模块标题，会成为报告里的小节名。")
+    prompt: str = Field(description="希望 LLM 从什么角度分析，例如「分析争议是如何扩散的」。")
+
+
 class ToolResult(BaseModel):
     """Compact result shared by every tool in this server."""
 
@@ -83,7 +89,7 @@ class ToolResult(BaseModel):
     task_id: str = Field(default="", description="本进程内的任务标识，用于查询本次尝试及 stop_task。")
     run_id: str = Field(default="", description="持久化运行标识；进程重启后仍可用它恢复。")
     counts: dict[str, int] = Field(default_factory=dict, description="评论数、已分析条数等计数。")
-    summary: str = Field(default="", description="分析摘要，已包裹不可信数据标记且限长。")
+    summary: str = Field(default="", description="分析摘要，已包裹不可信数据标记。")
     artifacts: dict[str, str] = Field(default_factory=dict, description="产物文件的绝对路径。")
     warnings: list[str] = Field(default_factory=list)
     error: str | None = Field(default=None)
@@ -183,6 +189,13 @@ async def _await_task(
         await anyio.sleep(0.25)
 
 
+def _modules(value: list[CustomModule] | None) -> list[dict[str, str]] | None:
+    """Hand modules to the service without ids; it derives stable ones."""
+    if not value:
+        return None
+    return [{"title": item.title, "prompt": item.prompt} for item in value]
+
+
 def _fail(exc: ServiceError) -> ToolError:
     active = str(exc.context.get("task_id") or "")
     # BUSY already names the active task in its own message; appending it again
@@ -204,6 +217,10 @@ async def crawl_and_analyze(
     include_replies: bool = True,
     sort_mode: int = 3,
     sample_size: int = SAMPLE_SIZE_DEFAULT,
+    strategy: str = "sample",
+    batch_size: int | None = None,
+    chart_keys: list[str] | None = None,
+    custom_modules: list[CustomModule] | None = None,
     wait_seconds: int = WAIT_SECONDS_DEFAULT,
 ) -> ToolResult:
     """爬取一个 B 站视频/动态/专栏的评论并做 LLM 舆情分析，一次完成。
@@ -213,10 +230,14 @@ async def crawl_and_analyze(
 
     Args:
         url: 视频链接、BV 号、AV 号、动态链接或专栏链接。
-        max_pages: 爬取页数，默认 5，上限 50。
+        max_pages: 爬取的主评论页数，每页 30 条，默认 5；0 表示爬完整个评论区。楼中楼回复不计入页数，全部爬取。
         include_replies: 是否连同楼中楼回复一起爬取。
         sort_mode: 3=按时间，2=按热度。
-        sample_size: 送入 LLM 的评论抽样条数。
+        sample_size: 抽样分析时送入 LLM 的评论条数，默认 300，不设上限；超过 2000 时 warnings 会提醒耗时和费用。
+        strategy: "sample" 抽样分析，"all" 全量分析（此时忽略 sample_size）。
+        batch_size: 每次 LLM 请求包含的评论条数，默认 80。
+        chart_keys: 要生成的分析模块，不传则用默认 6 个；可加 "word_cloud" 生成词云图片（返回文件路径）。
+        custom_modules: 自定义分析视角，每项 {title, prompt}，结果写入报告对应小节。
         wait_seconds: 最长阻塞等待秒数；超时后返回 task_id 供轮询。
     """
     service = get_service()
@@ -227,6 +248,10 @@ async def crawl_and_analyze(
             include_replies=include_replies,
             sort_mode=sort_mode,
             sample_size=sample_size,
+            strategy=strategy,
+            batch_size=batch_size,
+            chart_keys=chart_keys,
+            custom_modules=_modules(custom_modules),
         )
     except ServiceError as exc:
         raise _fail(exc) from exc
@@ -249,7 +274,7 @@ async def crawl_comments(
 
     Args:
         url: 视频链接、BV 号、AV 号、动态链接或专栏链接。
-        max_pages: 爬取页数，默认 5，上限 50。
+        max_pages: 爬取的主评论页数，每页 30 条，默认 5；0 表示爬完整个评论区。楼中楼回复不计入页数，全部爬取。
         include_replies: 是否连同楼中楼回复一起爬取。
         sort_mode: 3=按时间，2=按热度。
         wait_seconds: 最长阻塞等待秒数；超时后返回 task_id 供轮询。
@@ -273,6 +298,9 @@ async def analyze_run(
     ctx: Context,
     sample_size: int = SAMPLE_SIZE_DEFAULT,
     strategy: str = "sample",
+    batch_size: int | None = None,
+    chart_keys: list[str] | None = None,
+    custom_modules: list[CustomModule] | None = None,
     wait_seconds: int = WAIT_SECONDS_DEFAULT,
 ) -> ToolResult:
     """对一个已存在的 run 重新做 LLM 分析。
@@ -282,13 +310,23 @@ async def analyze_run(
 
     Args:
         run_id: 形如 20260825-203015-1a2b3c4d 的运行标识。
-        sample_size: 送入 LLM 的评论抽样条数。
-        strategy: "sample" 抽样分析，"all" 全量分析。
+        sample_size: 抽样分析时送入 LLM 的评论条数，默认 300，不设上限；超过 2000 时 warnings 会提醒耗时和费用。
+        strategy: "sample" 抽样分析，"all" 全量分析（此时忽略 sample_size）。
+        batch_size: 每次 LLM 请求包含的评论条数，默认 80。
+        chart_keys: 要生成的分析模块，不传则用默认 6 个；可加 "word_cloud" 生成词云图片（返回文件路径）。
+        custom_modules: 自定义分析视角，每项 {title, prompt}，结果写入报告对应小节。
         wait_seconds: 最长阻塞等待秒数；超时后返回 task_id 供轮询。
     """
     service = get_service()
     try:
-        started = service.start_analyze(run_id, sample_size=sample_size, strategy=strategy)
+        started = service.start_analyze(
+            run_id,
+            sample_size=sample_size,
+            strategy=strategy,
+            batch_size=batch_size,
+            chart_keys=chart_keys,
+            custom_modules=_modules(custom_modules),
+        )
     except ServiceError as exc:
         raise _fail(exc) from exc
     return _to_result(await _await_task(service, started.task_id, _clamp_wait(wait_seconds), ctx))

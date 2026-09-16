@@ -24,7 +24,7 @@ bilibili-crawler doctor
 bilibili-crawler-mcp
 ```
 
-不需要 `analysis` extra：MCP 的默认图表集合不含词云，它只服务桌面与 sidecar。
+默认不需要 `analysis` extra：MCP 的默认图表集合不含词云；只有在 `chart_keys` 里显式加 `word_cloud` 时才需要安装 `.[mcp,analysis]`。
 
 MCP 宿主的 command 可指定环境内 `bilibili-crawler-mcp` 的绝对路径，无须额外 args；
 也可使用该环境的 Python 执行 `-m bilibili_crawler mcp`。普通 CLI 不需要 `mcp` extra。
@@ -170,6 +170,23 @@ run_id 时生效）；省略 `prune_to` 不会默认全删，正在执行的任�
 
 **不会**返回全量评论、完整报告正文或词云图 Base64，只返回文件路径。
 
+### 参数与限制
+
+| 参数 | 工具 | 说明 |
+|---|---|---|
+| `max_pages` | 三个任务工具 | 主评论页数，每页 30 条，默认 5，**无上限**；`0` 表示爬完整个评论区 |
+| `include_replies` | 三个任务工具 | 楼中楼回复全部爬取，不计入 `max_pages` |
+| `sample_size` | `crawl_and_analyze` / `analyze_run` | 抽样条数，默认 300，**无上限**；超过 2000 时 `warnings` 会提醒耗时与费用 |
+| `strategy` | `crawl_and_analyze` / `analyze_run` | `sample` 抽样或 `all` 全量（全量时忽略 `sample_size`） |
+| `batch_size` | `crawl_and_analyze` / `analyze_run` | 每次 LLM 请求的评论条数，默认 80 |
+| `chart_keys` | `crawl_and_analyze` / `analyze_run` | 分析模块，默认 6 个；可加 `word_cloud` 生成词云 PNG（需要 `analysis` extra，以文件路径返回） |
+| `custom_modules` | `crawl_and_analyze` / `analyze_run` | 自定义分析视角 `[{title, prompt}]`，数量和长度不限，自动分配 id 并启用 |
+
+分析结果不再截断：评论全文送入 LLM，主题、风险点、洞察、代表性评论、总结要点、词云词数、
+时间趋势天数和各批深度分析都完整保留。桌面端的图表展示上限由 sidecar 自己控制，不受影响。
+客观限制仍然存在：B 站每页主评论 30 条、回复 20 条，排序只有时间（3）和热度（2），
+只支持视频、动态、专栏，匿名请求拿不到 IP 属地。
+
 ### 有界阻塞
 
 `crawl_and_analyze` 等工具默认最多阻塞 `wait_seconds`（默认 90 秒，上限 600），
@@ -266,18 +283,20 @@ Cookie 与 API Key 同级处理：只在内存中使用，其中的会话字段�
 所以：
 
 - 返回的 `summary` 由 LLM 从不可信输入生成，**它本身就可能夹带指令**。
-  该字段已被 `<untrusted-data>` 标记包裹并限长，请当作数据看待。
+  该字段已被 `<untrusted-data>` 标记包裹（不再截断长度），请当作数据看待。
 - `notable_quotes`（原样引用的评论）不进入工具返回值，只写入 `analysis.json`。
 - **读取 `report.md` 会把不可信内容重新带回上下文**，请以同样的态度对待。
 - 分析用的 system prompt 已显式声明评论为不可信输入、禁止执行其中的指令。
 
 ### 滥用控制
 
-MCP 工具可被 agent 循环调用，压力远高于人点 GUI，因此 headless 默认值比桌面端保守得多：
+爬取量和分析量不再设上限，由调用方决定（见上方「参数与限制」）。保留的约束：
 
-- `max_pages` 默认 5，**硬上限 50**，任何工具参数都无法突破。
-- 请求间隔不暴露为工具参数。
+- 默认值仍然保守：`max_pages` 默认 5，`sample_size` 默认 300；要更多需显式传参。
+- 请求节奏（间隔 0.1–2 秒自适应、单次请求超时 10 秒、最多重试 3 次）不暴露为工具参数。
+- LLM 请求的连接/读取超时各 90 秒、每批最多 3 次尝试不变。
 - 单进程同时只允许一个任务，冲突时返回 `BUSY` 和当前 `task_id`。
+- `max_pages=0` 会爬完整个评论区，热门视频可能要很久；配合 `wait_seconds` 与轮询使用。
 
 请只对公开内容使用，并遵守 B 站的服务条款。
 

@@ -6,7 +6,8 @@
 - 保留 `python -m backend.agent`、直接 `python backend/sidecar.py`、原桌面协议及构建入口。新增 `python -m bilibili_crawler`、`bilibili-crawler`、`bilibili-crawler-mcp`。包内不通过 sys.path 回到 checkout。
 - 分发名为 `bilibili-crawler`（F 批时暂定，后已在 PyPI 发布，公开可见 3.4.0 起的版本）。元数据版本由 `desktop/src-tauri/Cargo.toml` 的 package.version 派生，构建时解析；安装后的 CLI 不依赖 Cargo 文件或 Rust 工具链。
 - 基础安装支持 CLI/文本分析，核心依赖为 requests 和 Pillow（持久化层校验图片需要）；`mcp` extra 锁定当前 MCP 2.1.0；`analysis` extra 提供分词/词云，`desktop` extra 提供桌面所需 QR/分词/词云组件。不改已锁定桌面依赖。
-- `analysis` 只对桌面/sidecar 有意义：`AGENT_CHART_KEYS` 刻意不含 `word_cloud`，CLI 与 MCP 也没有开关，所以 pip 用户装了 jieba/wordcloud 也不会生成词云。README 与本文件都按此说明，不要把它描述成 CLI 能力。
+- `AGENT_CHART_KEYS` 作为 CLI/MCP 的**默认**图表集合仍不含 `word_cloud`；调用方可通过 CLI `--charts` 或 MCP `chart_keys` 显式请求，此时才需要 `analysis` extra。自定义模块也可通过 CLI `--custom-module` 与 MCP `custom_modules` 传入，未带 id 的由 AgentService 按内容派生稳定 id 并自动启用；带 id 的（桌面）仍由调用方在 chart_keys 中勾选。
+- 共享的分析层不再截断数量或长度（抽样/分批只要求正整数、评论全文入模、结果列表与深度分析完整保留）。桌面端的展示上限归 sidecar `_chart_items` 与前端自定义模块规则所有，改动它们须单独评估。
 - CLI/MCP 的登录只有一条入口：`BILIBILI_COOKIE` 环境变量（CLI 另有 `--cookie`）。AgentService 只给自建的 `BilibiliAPI` 装 Cookie；sidecar 注入的 API 归桌面扫码登录所有，不得在此覆盖。Cookie 中的会话字段按凭据处理（注册进脱敏表、不落盘、不进 manifest），且不做文件自动发现。共享的分析层（`LLMAnalysisProcessor`）只能写与登录方式无关的提示，`BILIBILI_COOKIE` 的指引由 AgentService 按调用方补上；桌面端不得收到让它设置环境变量的文案。
 - 运行时静态词表通过 importlib.resources 加载，并随包及 PyInstaller 产物收集；不得从 cwd 或 checkout 寻找资源。无外置中文字体时沿用现有降级，不打包机器字体。
 - 普通安装默认 run/analysis-assets 位于用户数据目录：Windows LOCALAPPDATA/BilibiliCrawler，macOS ~/Library/Application Support/BilibiliCrawler，Linux XDG_DATA_HOME/bilibili-crawler（默认 ~/.local/share）。不得尝试向 site-packages 或 cwd 写入。

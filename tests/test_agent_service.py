@@ -14,7 +14,7 @@ from src.service.agent_service import AgentService
 from src.service.credentials import LLMCredentials
 from src.service.models import (
     DESKTOP_POLICY,
-    MAX_PAGES_CEILING,
+    MAX_PAGES_UNLIMITED,
     ErrorCode,
     RunStatus,
     ServiceError,
@@ -435,10 +435,12 @@ class CrawlTests(AgentServiceTestCase):
         self.assertEqual(manifest["target"]["owner"], "测试UP主")
         self.assertEqual(manifest["target"]["bvid"], "BV1xx411c7mD")
 
-    def test_max_pages_ceiling_cannot_be_raised_by_caller(self) -> None:
+    def test_the_caller_page_count_is_honoured_and_zero_means_all(self) -> None:
         service = self.make_service()
         self.run_to_completion(service, service.start_crawl("BV1xx411c7mD", max_pages=99999))
-        self.assertEqual(self.crawlers[0].calls[0]["max_pages"], MAX_PAGES_CEILING)
+        self.run_to_completion(service, service.start_crawl("BV1xx411c7mD", max_pages=0))
+        self.assertEqual(self.crawlers[0].calls[0]["max_pages"], 99999)
+        self.assertEqual(self.crawlers[1].calls[0]["max_pages"], MAX_PAGES_UNLIMITED)
 
     def test_empty_crawl_result_fails_with_actionable_message(self) -> None:
         # Reaching the empty check means the crawler resolved the target, so
