@@ -939,7 +939,7 @@ class TargetValidationTests(AgentServiceTestCase):
                 snapshot = self.run_to_completion(service, service.start_crawl(target))
                 self.assertEqual(snapshot.status, RunStatus.COMPLETED)
 
-    def own_api_service(self, comments, cookie: str = "") -> AgentService:
+    def own_api_service(self, comments, cookie: str = "", processor=None) -> AgentService:
         """A service that built its own API, i.e. the CLI/MCP shape.
 
         make_service injects one, which is the desktop shape: there the login
@@ -956,7 +956,7 @@ class TargetValidationTests(AgentServiceTestCase):
             service = AgentService(
                 store=self.store,
                 crawler_factory=factory,
-                analysis_processor=self.processor,
+                analysis_processor=processor or self.processor,
                 credentials_resolver=fake_credentials,
                 cookie=cookie,
             )
@@ -1001,6 +1001,67 @@ class TargetValidationTests(AgentServiceTestCase):
 
         self.assertTrue(service._api_is_foreign)
         self.assertEqual([w for w in snapshot.warnings if "匿名爬取" in w], [])
+
+    # The processor's own no-location warning only fires inside the real
+    # analyze(), so these drive it with just the HTTP call replaced. The fake
+    # processor never emits it and would pass with the dedup deleted.
+    def run_real_analysis(self, service, start):
+        with patch.object(LLMAnalysisProcessor, "_call_llm", return_value={"summary": "总结"}):
+            return self.run_to_completion(service, start())
+
+    @staticmethod
+    def location_warnings(snapshot):
+        return [w for w in snapshot.warnings if "属地" in w]
+
+    def test_crawl_and_analyze_explains_missing_locations_once(self) -> None:
+        unlocated = [{**dict(item), "ip_location": ""} for item in SAMPLE_COMMENTS]
+        service = self.own_api_service(unlocated, processor=LLMAnalysisProcessor)
+        snapshot = self.run_real_analysis(
+            service, lambda: service.start_crawl_and_analyze("BV1xx411c7mD"),
+        )
+
+        self.assertEqual(snapshot.status, RunStatus.COMPLETED, snapshot.error)
+        warnings = self.location_warnings(snapshot)
+        self.assertEqual(len(warnings), 1, warnings)
+        self.assertIn("匿名爬取", warnings[0])
+
+    def test_a_stale_cookie_is_not_contradicted_by_the_analysis(self) -> None:
+        unlocated = [{**dict(item), "ip_location": ""} for item in SAMPLE_COMMENTS]
+        service = self.own_api_service(
+            unlocated, cookie="SESSDATA=expired-value-0123456789", processor=LLMAnalysisProcessor,
+        )
+        snapshot = self.run_real_analysis(
+            service, lambda: service.start_crawl_and_analyze("BV1xx411c7mD"),
+        )
+
+        warnings = self.location_warnings(snapshot)
+        self.assertEqual(len(warnings), 1, warnings)
+        self.assertIn("会话已失效", warnings[0])
+        self.assertEqual([w for w in snapshot.warnings if "匿名" in w], [])
+
+    def test_a_standalone_analysis_names_the_cli_channel(self) -> None:
+        unlocated = [{**dict(item), "ip_location": ""} for item in SAMPLE_COMMENTS]
+        service = self.own_api_service(unlocated, processor=LLMAnalysisProcessor)
+        crawled = self.run_to_completion(service, service.start_crawl("BV1xx411c7mD"))
+        snapshot = self.run_real_analysis(service, lambda: service.start_analyze(crawled.run_id))
+
+        warnings = self.location_warnings(snapshot)
+        self.assertEqual(len(warnings), 1, warnings)
+        self.assertIn("BILIBILI_COOKIE", warnings[0])
+
+    def test_the_desktop_is_never_told_to_set_an_environment_variable(self) -> None:
+        unlocated = [{**dict(item), "ip_location": ""} for item in SAMPLE_COMMENTS]
+        service = self.make_service(comments=unlocated, processor=LLMAnalysisProcessor)
+        snapshot = self.run_real_analysis(
+            service, lambda: service.start_crawl_and_analyze("BV1xx411c7mD"),
+        )
+
+        warnings = self.location_warnings(snapshot)
+        self.assertEqual(len(warnings), 1, warnings)
+        self.assertNotIn("BILIBILI_COOKIE", warnings[0])
+        report = (self.store.run_dir(snapshot.run_id) / "report.md").read_text(encoding="utf-8")
+        self.assertIn("国内 / 地图数据", report)
+        self.assertNotIn("BILIBILI_COOKIE", report)
 
 
 class ReviewRegressionTests(AgentServiceTestCase):
@@ -1383,6 +1444,36 @@ class ProgressTests(AgentServiceTestCase):
         self.assertTrue(events)
         self.assertTrue(all(isinstance(percent, int) for percent, _ in events))
         self.assertIn("正在爬取第 1 页", [message for _, message in events])
+
+    def test_a_terminal_status_is_never_visible_before_its_final_event(self) -> None:
+        # The MCP poller drains the queue and then reads the status. If the
+        # 100% event is queued after the lock that publishes the terminal
+        # status is released, a poll landing in between returns without it.
+        release = threading.Event()
+        service = self.make_service(release=release)
+        started = service.start_crawl("BV1xx411c7mD")
+        task = service._tasks[started.task_id]
+        observable_first: list[bool] = []
+
+        class Probe(type(task.progress)):
+            def put(inner, item, *args, **kwargs):  # noqa: N805
+                if item[0] == 100 and task.terminal:
+                    # Free lock == a snapshot could already report terminal.
+                    free = task._lock.acquire(blocking=False)
+                    if free:
+                        task._lock.release()
+                    observable_first.append(free)
+                return super().put(item, *args, **kwargs)
+
+        probe = Probe()
+        for event in service.drain_progress(started.task_id):
+            probe.put(event)
+        task.progress = probe
+        release.set()
+        final = self.run_to_completion(service, started)
+
+        self.assertEqual(observable_first, [False])
+        self.assertEqual(service.drain_progress(final.task_id)[-1][0], 100)
 
     def test_draining_an_unknown_task_returns_no_events(self) -> None:
         service = self.make_service()

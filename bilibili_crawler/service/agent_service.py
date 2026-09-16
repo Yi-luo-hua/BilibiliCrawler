@@ -83,6 +83,9 @@ class _Task:
         # persisted into the manifest next to the comments it describes.
         self.target: dict = {}
         self.warnings: list[str] = []
+        # Set when the crawl half already explained missing IP locations, so
+        # the analysis half does not say it a second time.
+        self.location_warned = False
         self.error: str | None = None
         self.error_code: str | None = None
 
@@ -186,11 +189,13 @@ class _Task:
                 setattr(self, key, value)
             self.percent = 100
             self.terminal = True
-            final = self.stage
-        # Queued outside the lock, and only here: percent tracks how many
-        # progress lines the crawler happened to emit, so a crawl-only task
-        # used to stop notifying at 14% and never announce its own completion.
-        self.progress.put((100, final))
+            # percent tracks how many progress lines the crawler happened to
+            # emit, so a crawl-only task used to stop notifying at 14% and
+            # never announce its own completion. Queued under the lock: a
+            # poller drains the queue and then reads the status, and queuing
+            # after release let it see the terminal status with the event
+            # still missing. Queue.put never blocks on an unbounded queue.
+            self.progress.put((100, self.stage))
 
     def mark_failed(self, code: str, message: str) -> None:
         with self._lock:
@@ -199,8 +204,7 @@ class _Task:
             self.error_code = code
             self.percent = 100
             self.terminal = True
-            final = self.stage
-        self.progress.put((100, final))
+            self.progress.put((100, self.stage))
 
     def add_warning(self, message: str) -> None:
         with self._lock:
@@ -806,6 +810,7 @@ class AgentService:
                 "已配置 BILIBILI_COOKIE，但评论 IP 属地仍全部为空。"
                 "通常是会话已失效或 Cookie 中缺少 SESSDATA，请重新复制登录后的 Cookie。"
             )
+            task.location_warned = True
             return
         # Names the environment variable first: it is the one channel both the
         # CLI and an MCP host can use, and a cookie on a command line lands in
@@ -814,6 +819,22 @@ class AgentService:
             "本次为匿名爬取，评论 IP 属地全部为空（地域分布将没有数据）。"
             "如需属地，请设置环境变量 BILIBILI_COOKIE（CLI 也可用 --cookie）。"
         )
+        task.location_warned = True
+
+    def _analysis_location_warning(self, task: _Task, warning: str) -> str:
+        """Turn the processor's neutral no-location warning into this caller's.
+
+        The processor is shared with the desktop, so it cannot say how to log
+        in. A crawl-and-analyze task has already said it with better knowledge
+        (anonymous vs. a stale cookie), so the analysis half stays quiet. A
+        standalone analysis cannot tell how an older run was crawled, so it
+        only names the channel, not a cause.
+        """
+        if task.location_warned:
+            return ""
+        if self._api_is_foreign:
+            return warning
+        return warning + "如需属地，请设置环境变量 BILIBILI_COOKIE（CLI 也可用 --cookie）后重新爬取。"
 
     def _crawl_results(self, task: _Task, cleaned: list[dict[str, Any]]) -> dict[str, Any]:
         """Persist the crawled comments and build the resulting state changes."""
@@ -899,6 +920,10 @@ class AgentService:
         # keeps doing that. _record_outcome takes the deep copy.
         self._record_outcome(task, analysis=result)
         for warning in result.get("warnings") or []:
+            if warning == LLMAnalysisProcessor.NO_LOCATION_WARNING:
+                warning = self._analysis_location_warning(task, warning)
+                if not warning:
+                    continue
             task.add_warning(scrub(warning))
 
         task.update(status=RunStatus.EXPORTING, stage="正在导出分析结果", percent=95)

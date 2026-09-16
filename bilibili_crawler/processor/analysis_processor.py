@@ -42,6 +42,8 @@ class LLMAnalysisProcessor:
     # merely opens with the word 回复 and happens to contain a colon much later
     # keeps its text.
     _REPLY_PREFIX = re.compile(r"^回复\s*@.{1,64}?\s*[:：]\s*")
+    # Matched verbatim by the service, which swaps in a caller-specific hint.
+    NO_LOCATION_WARNING = "所有评论都没有 IP 属地，地域分布没有数据（B 站只对已登录的请求返回属地）。"
     ALL_CHART_KEYS = [
         "sentiment_distribution",
         "topic_ranking",
@@ -204,12 +206,10 @@ class LLMAnalysisProcessor:
         merged["overview"].update(location_stats)
         if cls._chart_enabled(chart_keys, "region_map") and location_stats.get("ip_locations") == 0:
             # The region chart is on by default, so an empty one looks like a
-            # failure. It is almost always an anonymous crawl: Bilibili only
-            # returns reply_control.location to a logged-in caller.
-            merged.setdefault("warnings", []).append(
-                "所有评论都没有 IP 属地，地域分布没有数据（通常是匿名爬取；"
-                "设置 BILIBILI_COOKIE 后重新爬取才能获取属地）。"
-            )
+            # failure. Deliberately says nothing about how to log in: the
+            # desktop (QR login) and the CLI/MCP (BILIBILI_COOKIE) share this
+            # processor, and only the service knows which one it is serving.
+            merged.setdefault("warnings", []).append(cls.NO_LOCATION_WARNING)
         if cls._chart_enabled(chart_keys, "word_cloud") and not merged.get("word_counts"):
             merged["word_counts"] = cls._build_word_counts(selected)
         cls._raise_if_cancelled(cancel_event)
@@ -726,7 +726,8 @@ class LLMAnalysisProcessor:
         covered = meta.get("ip_locations", overview.get("ip_locations", 0)) or 0
         if covered:
             return "- 暂无（评论有属地，但没有可归类到国内省份的记录）"
-        return "- 暂无：本次运行没有获取到任何评论 IP 属地，通常是匿名爬取所致（设置 BILIBILI_COOKIE 后重新爬取可获取）"
+        # Shared with the desktop's export, so no CLI-only login instructions.
+        return "- 暂无：本次运行没有获取到任何评论 IP 属地（B 站只对已登录的请求返回属地，登录后重新爬取可获取）"
 
     @classmethod
     def _strip_reply_prefix(cls, value: Any) -> str:

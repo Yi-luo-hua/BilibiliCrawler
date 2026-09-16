@@ -126,13 +126,15 @@ class RegionSectionTests(unittest.TestCase):
         self.assertIn("### 国内 / 地图数据", report)
         body = report.split("### 国内 / 地图数据", 1)[1].split("### 海外", 1)[0]
         # An empty heading reads as a broken report.
-        self.assertIn("BILIBILI_COOKIE", body)
+        self.assertIn("登录", body)
         self.assertIn("暂无", body)
+        # The desktop exports this same report; its users log in by QR code.
+        self.assertNotIn("BILIBILI_COOKIE", body)
 
     def test_locations_present_but_none_domestic_says_so_instead(self):
         report = P._build_markdown_report(self.result(3, []))
         body = report.split("### 国内 / 地图数据", 1)[1].split("### 海外", 1)[0]
-        self.assertNotIn("BILIBILI_COOKIE", body)
+        self.assertNotIn("登录", body)
         self.assertIn("国内省份", body)
 
     def test_real_region_data_is_rendered_as_before(self):
@@ -165,7 +167,8 @@ class RegionWarningTests(unittest.TestCase):
     def test_warning_is_attached_when_no_comment_has_a_location(self):
         result = self.analyze([comment("正文", ip_location="") for _ in range(3)], ["region_map"])
         self.assertTrue(any("地域分布没有数据" in w for w in result.get("warnings", [])))
-        self.assertTrue(any("BILIBILI_COOKIE" in w for w in result.get("warnings", [])))
+        # Shared with the desktop: how to log in is the service's call.
+        self.assertFalse(any("BILIBILI_COOKIE" in w for w in result.get("warnings", [])))
 
     def test_no_warning_when_the_region_chart_was_not_requested(self):
         result = self.analyze([comment("正文", ip_location="") for _ in range(3)], ["topic_ranking"])
