@@ -214,7 +214,29 @@ LLM 请求等待期间，stage/progress 消息约每秒刷新本次分析已用�
 仓库目录不可写时自动回落到 `%LOCALAPPDATA%\BilibiliCrawler\analysis-runs\`，
 与桌面端 `analysis-assets` 采用同一套目录选择策略。可用 `BILIBILI_AGENT_RUNS_DIR` 覆盖。
 
+**这个目录是共享的。** pip 安装的 CLI、MCP 服务和已安装的桌面应用默认指向同一个
+`analysis-runs`，所以 `list_runs` 会列出桌面产生的历史分析，`delete_run` 的批量清理
+（`prune_to`）也会删掉它们。要让 agent 只看见自己的 run，在宿主配置里给本服务单独设置
+`BILIBILI_AGENT_RUNS_DIR`。
+
 `run_id` 形如 `20260825-203826-0f407dfe`。
+
+### 登录与 IP 属地
+
+MCP 服务默认匿名爬取。B 站只对带会话的请求返回评论 IP 属地，所以匿名结果里
+`ip_location` 全为空，`region_map` 模块必然没有数据——此时分析结果的 `warnings`
+会明确说明这一点。
+
+需要属地时由用户在宿主配置的 `env` 里提供 `BILIBILI_COOKIE`（完整 Cookie 头，
+至少含 `SESSDATA`）。本服务不提供登录工具，也不会自行发起或持久化登录：
+
+```json
+"env": { "BILIBILI_COOKIE": "SESSDATA=...; bili_jct=..." }
+```
+
+Cookie 与 API Key 同级处理：只在内存中使用，其中的会话字段会被日志与错误脱敏，
+不写入 run 目录。`bilibili-crawler doctor` 的 `bilibili_login` 字段只报告是否配置，
+不显示内容。
 
 ---
 
@@ -345,7 +367,17 @@ TLS、额度不足、解析错误不自动重放。超过 10 秒的 Retry-After 
 .venv-agent/Scripts/python.exe -m backend.agent analyze-run 20260825-203826-0f407dfe
 ```
 
+带登录爬取（拿到评论 IP 属地）。`--cookie` 会进入 shell 历史，长期使用请配环境变量：
+
+```bash
+.venv-agent/Scripts/python.exe -m backend.agent crawl-comments "BV1GJ411x7h7" --cookie "SESSDATA=...; bili_jct=..."
+```
+
 结果 JSON 走 stdout，进度日志走 stderr，方便管道处理。
+`--version` 报告当前版本；`doctor` 的 `bilibili_login` 字段说明是否已配置 Cookie。
+
+只接受单个内容的链接：视频（BV/AV/完整链接）、动态（`t.bilibili.com`）、专栏（`cv`）。
+用户空间链接和无法识别的输入在受理阶段就返回 `INVALID_INPUT`，不会创建 run 目录。
 
 ---
 

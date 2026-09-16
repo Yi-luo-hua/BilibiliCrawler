@@ -681,10 +681,12 @@ class RawProgressTests(ChannelTestCase):
         self.assertEqual(seen, [("准备分析", 0), ("正在调用模型", 50), ("分析完成", 100)])
 
         # The queue the MCP client polls keeps the squeezed numbers, which is
-        # exactly why the raw ones needed a channel of their own.
+        # exactly why the raw ones needed a channel of their own. It also gets
+        # one terminal 100% line the listener channel does not need: without it
+        # a host's progress bar stops at whatever the last step happened to be.
         self.assertEqual(
             [(percent, message) for percent, message in service.drain_progress(final.task_id)],
-            [(70, "准备分析"), (82, "正在调用模型"), (95, "分析完成")],
+            [(70, "准备分析"), (82, "正在调用模型"), (95, "分析完成"), (100, "分析完成")],
         )
 
     def test_crawl_lines_reach_the_listener_verbatim(self) -> None:

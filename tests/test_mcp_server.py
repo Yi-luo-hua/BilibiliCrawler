@@ -17,6 +17,7 @@ try:
 except ImportError as exc:  # pragma: no cover - exercised only without the SDK
     raise unittest.SkipTest(f"MCP SDK not installed ({exc}); pip install -r requirements-agent.txt")
 
+import bilibili_crawler
 import backend.mcp_server as mcp_server
 from src.service.agent_service import AgentService
 from src.service.credentials import LLMCredentials
@@ -144,6 +145,13 @@ class ToolSurfaceTests(McpServerTestCase):
                 "stop_task",
             ],
         )
+
+    async def test_the_server_announces_its_version_to_the_host(self) -> None:
+        # An empty version left the host with no way to tell which build it
+        # was talking to when reporting a problem.
+        self.assertEqual(mcp_server.mcp.version, bilibili_crawler.resolve_version())
+        self.assertTrue(mcp_server.mcp.version)
+        self.assertNotEqual(mcp_server.mcp.version, bilibili_crawler.UNKNOWN_VERSION)
 
     async def test_every_tool_documents_its_arguments(self) -> None:
         self.install_service()
@@ -319,7 +327,11 @@ class StatusAndStopTests(McpServerTestCase):
         self.assertTrue(busy.is_error)
         text = " ".join(getattr(item, "text", "") for item in busy.content)
         self.assertIn("BUSY", text)
-        self.assertIn(first.structured_content["task_id"], text)
+        task_id = first.structured_content["task_id"]
+        self.assertIn(task_id, text)
+        # The service message already names the task; the adapter used to
+        # append it a second time in the same sentence.
+        self.assertEqual(text.count(task_id), 1)
         release.set()
 
 
@@ -415,6 +427,21 @@ class RunManagementTests(McpServerTestCase):
         self.assertEqual(len(pruned.structured_content["deleted"]), 2)
         # Run ids sort on a whole-second timestamp, so which of the three
         # survives is not deterministic -- only that exactly one does.
+        self.assertEqual(len(service.store.list_runs()), 1)
+
+    async def test_delete_run_prunes_without_being_handed_an_empty_run_id(self) -> None:
+        # The docstring and MCP.md both say prune works "不传 run_id"; the
+        # schema used to require it, so following the documentation produced a
+        # pydantic validation error instead of a cleanup.
+        service = self.install_service()
+        async with self.client() as client:
+            await client.call_tool("crawl_comments", {"url": "BV1xx411c7mD"})
+            await client.call_tool("crawl_comments", {"url": "BV1xx411c7mD"})
+
+            pruned = await client.call_tool("delete_run", {"prune_to": 1})
+
+        self.assertFalse(pruned.is_error)
+        self.assertEqual(len(pruned.structured_content["deleted"]), 1)
         self.assertEqual(len(service.store.list_runs()), 1)
 
     async def test_delete_run_without_an_explicit_prune_to_is_rejected(self) -> None:

@@ -38,6 +38,10 @@ class LLMAnalysisProcessor:
     WORD_CLOUD_LIMIT = 80
     WORD_CLOUD_WIDTH = 800
     WORD_CLOUD_HEIGHT = 440
+    # "回复 @name :" / "回复 @name ：". Bounded name length so a comment that
+    # merely opens with the word 回复 and happens to contain a colon much later
+    # keeps its text.
+    _REPLY_PREFIX = re.compile(r"^回复\s*@.{1,64}?\s*[:：]\s*")
     ALL_CHART_KEYS = [
         "sentiment_distribution",
         "topic_ranking",
@@ -198,6 +202,14 @@ class LLMAnalysisProcessor:
         cls._raise_if_cancelled(cancel_event)
         location_stats = cls._location_stats(records)
         merged["overview"].update(location_stats)
+        if cls._chart_enabled(chart_keys, "region_map") and location_stats.get("ip_locations") == 0:
+            # The region chart is on by default, so an empty one looks like a
+            # failure. It is almost always an anonymous crawl: Bilibili only
+            # returns reply_control.location to a logged-in caller.
+            merged.setdefault("warnings", []).append(
+                "所有评论都没有 IP 属地，地域分布没有数据（通常是匿名爬取；"
+                "设置 BILIBILI_COOKIE 后重新爬取才能获取属地）。"
+            )
         if cls._chart_enabled(chart_keys, "word_cloud") and not merged.get("word_counts"):
             merged["word_counts"] = cls._build_word_counts(selected)
         cls._raise_if_cancelled(cancel_event)
@@ -697,7 +709,7 @@ class LLMAnalysisProcessor:
         return {
             "id": str(comment.get("comment_id") or ""),
             "type": "comment_reply" if comment.get("is_reply") else "comment",
-            "content": str(comment.get("content") or "").strip(),
+            "content": cls._strip_reply_prefix(comment.get("content")),
             "likes": int(comment.get("like_count") or 0),
             "replies": int(comment.get("reply_count") or 0),
             "timestamp": int(comment.get("ctime") or 0),
@@ -706,6 +718,28 @@ class LLMAnalysisProcessor:
             "user_level": cls._normalize_user_level(comment.get("user_level")) or "",
             "username": str(comment.get("username") or ""),
         }
+
+    @staticmethod
+    def _no_region_line(result: dict[str, Any]) -> str:
+        meta = result.get("meta") if isinstance(result.get("meta"), dict) else {}
+        overview = result.get("overview") if isinstance(result.get("overview"), dict) else {}
+        covered = meta.get("ip_locations", overview.get("ip_locations", 0)) or 0
+        if covered:
+            return "- 暂无（评论有属地，但没有可归类到国内省份的记录）"
+        return "- 暂无：本次运行没有获取到任何评论 IP 属地，通常是匿名爬取所致（设置 BILIBILI_COOKIE 后重新爬取可获取）"
+
+    @classmethod
+    def _strip_reply_prefix(cls, value: Any) -> str:
+        """Drop Bilibili's "回复 @someone :" lead-in from a nested reply.
+
+        Roughly two in five replies carry it. It is addressing markup, not
+        opinion: it pushed 回复 to the second most frequent token in the word
+        cloud and sent the addressed person's username to the LLM with every
+        batch. Only stripped for analysis — the exported comment keeps the
+        verbatim text Bilibili returned.
+        """
+        text = str(value or "").strip()
+        return cls._REPLY_PREFIX.sub("", text, count=1).strip()
 
     @staticmethod
     def _dynamic_record(dynamic: dict[str, Any]) -> dict[str, Any]:
@@ -1021,7 +1055,9 @@ class LLMAnalysisProcessor:
             elif key == "region_map":
                 cls._append_chart_section(lines, "地域分布", key, assets_by_key, asset_dir_name)
                 lines.extend(["", "### 国内 / 地图数据"])
-                lines.extend(cls._items_lines(result.get("region_counts", [])))
+                domestic = list(cls._items_lines(result.get("region_counts", [])))
+                # An empty heading reads as a broken report; say why it is empty.
+                lines.extend(domestic if domestic else [cls._no_region_line(result)])
                 lines.extend(["", "### 海外 / 未知"])
                 overseas = list(cls._items_lines(result.get("overseas_region_counts", [])))
                 lines.extend(overseas if overseas else ["- 暂无"])
@@ -1364,12 +1400,23 @@ class LLMAnalysisProcessor:
 
     @staticmethod
     def _compact_analysis_segments(items: list[str]) -> str:
-        clean = [item for item in items if item]
-        if not clean:
+        """Join one batch's worth of prose per paragraph, labelled by batch.
+
+        Each batch writes a finished paragraph that ends in a full stop, so the
+        old "；".join produced "。；" seams and read as one impossible sentence
+        arguing the same point three times. There is no second LLM pass here
+        (unlike the summary), so the honest presentation is to keep the
+        batches visibly separate rather than pretend they were synthesized.
+        """
+        clean = [item.strip() for item in items if item and item.strip()]
+        # Identical batches happen when the same theme dominates every slice.
+        deduped = list(dict.fromkeys(clean))
+        if not deduped:
             return ""
-        if len(clean) == 1:
-            return clean[0]
-        return "；".join(clean[:5])
+        if len(deduped) == 1:
+            return deduped[0]
+        kept = deduped[:5]
+        return "\n\n".join(f"（第 {index} 批）{text}" for index, text in enumerate(kept, start=1))
 
     @staticmethod
     def _append_chart_section(

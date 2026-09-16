@@ -1,11 +1,13 @@
 import io
 import json
+import os
 import tempfile
 import threading
 import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from src.processor.analysis_processor import LLMAnalysisProcessor
 from src.service.agent_service import AgentService
@@ -55,21 +57,23 @@ SECRET_KEY = "sk-DO-NOT-LEAK-abcdef123456"
 class FakeCrawler:
     """Stands in for CommentCrawler; records the arguments it was handed."""
 
-    def __init__(self, progress, comments=None, release=None):
+    def __init__(self, progress, comments=None, release=None, resolves=True):
         self.progress = progress
         self.comments = SAMPLE_COMMENTS if comments is None else comments
         self.release = release
         self.started = threading.Event()
         self.stopped = False
         self.calls: list[dict] = []
-        # What the real crawler learns resolving the target.
+        # What the real crawler learns resolving the target. It stays empty
+        # when resolution failed, which is how the service tells "no comments
+        # here" apart from "could not reach this".
         self.target_info = {
             "bvid": "BV1xx411c7mD",
             "aid": 12345,
             "title": "测试视频",
             "owner": "测试UP主",
             "pubdate": 1735660800,
-        }
+        } if resolves else {}
 
     def stop(self) -> None:
         self.stopped = True
@@ -336,12 +340,13 @@ class AgentServiceTestCase(unittest.TestCase):
                 if task.thread is not None:
                     task.thread.join(timeout=5)
 
-    def make_service(self, comments=None, release=None, processor=None, policy=None, retain_outcome=False) -> AgentService:
+    def make_service(self, comments=None, release=None, processor=None, policy=None, retain_outcome=False,
+                     resolves=True) -> AgentService:
         if release is not None:
             self._releases.append(release)
 
         def factory(progress):
-            crawler = FakeCrawler(progress, comments=comments, release=release)
+            crawler = FakeCrawler(progress, comments=comments, release=release, resolves=resolves)
             self.crawlers.append(crawler)
             return crawler
 
@@ -432,11 +437,26 @@ class CrawlTests(AgentServiceTestCase):
         self.assertEqual(self.crawlers[0].calls[0]["max_pages"], MAX_PAGES_CEILING)
 
     def test_empty_crawl_result_fails_with_actionable_message(self) -> None:
+        # The target resolved, so the link is not the problem and the message
+        # must not send the caller off checking it.
         service = self.make_service(comments=[])
         snapshot = self.run_to_completion(service, service.start_crawl("BV1xx411c7mD"))
         self.assertEqual(snapshot.status, RunStatus.FAILED)
         self.assertEqual(snapshot.error_code, ErrorCode.CRAWL_FAILED)
-        self.assertIn("没有爬到任何评论", snapshot.error or "")
+        self.assertIn("目标可以访问", snapshot.error or "")
+        self.assertIn("测试视频", snapshot.error or "")
+        self.assertNotIn("请检查链接", snapshot.error or "")
+
+    def test_empty_crawl_without_a_resolved_target_still_blames_the_link(self) -> None:
+        service = self.make_service(comments=[])
+        snapshot = self.run_to_completion(service, service.start_crawl("BV1xx411c7mD"))
+        self.assertIn("测试视频", snapshot.error or "")
+
+        # Same empty result, but the crawler never learned what the target was.
+        service = self.make_service(comments=[], resolves=False)
+        snapshot = self.run_to_completion(service, service.start_crawl("BV1xx411c7mD"))
+        self.assertEqual(snapshot.error_code, ErrorCode.CRAWL_FAILED)
+        self.assertIn("请检查链接", snapshot.error or "")
 
     def test_desktop_policy_empty_crawl_is_success_without_a_csv_warning(self) -> None:
         # No data is not an export failure: the desktop policy finishes an
@@ -691,7 +711,7 @@ class AnalysisTests(AgentServiceTestCase):
 
     def test_analyze_without_comments_reports_not_found(self) -> None:
         run_id = "20260101-000000-abcdef01"
-        self.store.create_run(run_id, TaskKind.CRAWL, {"url": "BV1"})
+        self.store.create_run(run_id, TaskKind.CRAWL, {"url": "BV1xx411c7mD"})
         service = self.make_service()
         with self.assertRaises(ServiceError) as ctx:
             service.start_analyze(run_id)
@@ -869,6 +889,109 @@ class SafetyTests(AgentServiceTestCase):
         manifest = json.loads(raw)
         self.assertNotIn("llm_config", manifest["params"])
         self.assertNotIn("api_key", manifest["params"])
+
+
+class TargetValidationTests(AgentServiceTestCase):
+    """An input no parser can resolve is rejected before a run exists."""
+
+    def test_unparseable_input_is_rejected_without_creating_a_run(self) -> None:
+        service = self.make_service()
+        for target in ("not a url at all", "https://example.com/watch?v=abc", "BV1"):
+            with self.subTest(target=target):
+                with self.assertRaises(ServiceError) as ctx:
+                    service.start_crawl(target)
+                self.assertEqual(ctx.exception.code, ErrorCode.INVALID_INPUT)
+        # A typo used to cost a run directory and a network round trip, then
+        # come back blaming the network.
+        self.assertEqual(self.store.list_runs(), [])
+        self.assertEqual(self.crawlers, [])
+
+    def test_a_user_space_link_says_why_it_is_not_supported(self) -> None:
+        service = self.make_service()
+        for target in ("https://space.bilibili.com/946974", "946974"):
+            with self.subTest(target=target):
+                with self.assertRaises(ServiceError) as ctx:
+                    service.start_crawl(target)
+                self.assertEqual(ctx.exception.code, ErrorCode.INVALID_INPUT)
+                self.assertIn("桌面应用", str(ctx.exception))
+
+    def test_well_formed_targets_still_reach_the_crawler(self) -> None:
+        # Only a local parse runs up front; whether the id exists is still the
+        # API's answer, so a well-formed id must not be rejected here.
+        for target in (
+            "BV1xx411c7mD",
+            "https://www.bilibili.com/video/BV1xx411c7mD/?spm_id_from=333",
+            "av12345",
+            "https://t.bilibili.com/1248537385154641922",
+            "https://www.bilibili.com/read/cv53029809",
+        ):
+            with self.subTest(target=target):
+                service = self.make_service()
+                snapshot = self.run_to_completion(service, service.start_crawl(target))
+                self.assertEqual(snapshot.status, RunStatus.COMPLETED)
+
+    def own_api_service(self, comments, cookie: str = "") -> AgentService:
+        """A service that built its own API, i.e. the CLI/MCP shape.
+
+        make_service injects one, which is the desktop shape: there the login
+        state lives on an object the service did not create and must not
+        assume anything about.
+        """
+        def factory(progress):
+            crawler = FakeCrawler(progress, comments=comments)
+            self.crawlers.append(crawler)
+            return crawler
+
+        with patch.dict(os.environ, {}):
+            os.environ.pop("BILIBILI_COOKIE", None)
+            service = AgentService(
+                store=self.store,
+                crawler_factory=factory,
+                analysis_processor=self.processor,
+                credentials_resolver=fake_credentials,
+                cookie=cookie,
+            )
+        self.services.append(service)
+        return service
+
+    def test_an_anonymous_crawl_without_locations_warns_once(self) -> None:
+        # What Bilibili actually returns to a caller with no session.
+        unlocated = [{**dict(item), "ip_location": ""} for item in SAMPLE_COMMENTS]
+        service = self.own_api_service(unlocated)
+        self.assertFalse(service._api_is_foreign)
+        snapshot = self.run_to_completion(service, service.start_crawl("BV1xx411c7mD"))
+
+        warnings = [w for w in snapshot.warnings if "匿名爬取" in w]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("BILIBILI_COOKIE", warnings[0])
+
+    def test_no_anonymity_warning_when_locations_came_back(self) -> None:
+        located = [{**dict(SAMPLE_COMMENTS[0]), "ip_location": "上海"}]
+        service = self.own_api_service(located)
+        snapshot = self.run_to_completion(service, service.start_crawl("BV1xx411c7mD"))
+
+        self.assertEqual([w for w in snapshot.warnings if "匿名爬取" in w], [])
+
+    def test_a_configured_cookie_that_yielded_nothing_is_called_out(self) -> None:
+        # An expired SESSDATA still returns 200, just without locations. Going
+        # quiet would leave the user trusting a session that stopped working.
+        unlocated = [{**dict(item), "ip_location": ""} for item in SAMPLE_COMMENTS]
+        service = self.own_api_service(unlocated, cookie="SESSDATA=expired-value-0123456789")
+        snapshot = self.run_to_completion(service, service.start_crawl("BV1xx411c7mD"))
+
+        warnings = [w for w in snapshot.warnings if "BILIBILI_COOKIE" in w]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("会话已失效", warnings[0])
+        self.assertNotIn("匿名爬取", warnings[0])
+
+    def test_the_desktops_injected_api_is_never_called_anonymous(self) -> None:
+        # The desktop may be logged in on the object it injected; guessing
+        # would tell a logged-in user their crawl was anonymous.
+        service = self.make_service()
+        snapshot = self.run_to_completion(service, service.start_crawl("BV1xx411c7mD"))
+
+        self.assertTrue(service._api_is_foreign)
+        self.assertEqual([w for w in snapshot.warnings if "匿名爬取" in w], [])
 
 
 class ReviewRegressionTests(AgentServiceTestCase):
@@ -1177,7 +1300,7 @@ class ReviewRegressionTests(AgentServiceTestCase):
         service = self.make_service()
         for given, expected in [(2, 2), (3, 3), (999, 3), (-1, 3), ("2", 2), (None, 3)]:
             with self.subTest(sort_mode=given):
-                self.assertEqual(service._crawl_params("BV1", 5, True, given)["sort_mode"], expected)
+                self.assertEqual(service._crawl_params("BV1xx411c7mD", 5, True, given)["sort_mode"], expected)
 
     def test_a_failed_manifest_write_leaves_the_previous_one_intact(self) -> None:
         # Writes go through a temp file plus os.replace, so a crash mid-write

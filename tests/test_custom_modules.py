@@ -106,7 +106,13 @@ class CustomModuleMergeTests(unittest.TestCase):
         merged = LLMAnalysisProcessor._merge_llm_results(
             results, [], 10, 10, 0, "sample", ["custom_a1b2c3"], [MODULE]
         )
-        self.assertEqual(merged["custom_results"], {"custom_a1b2c3": "第一批观察；第二批观察"})
+        # Each batch wrote its own finished paragraph and nothing synthesizes
+        # them, so they stay labelled and separate rather than being run into
+        # one sentence.
+        self.assertEqual(
+            merged["custom_results"],
+            {"custom_a1b2c3": "（第 1 批）第一批观察\n\n（第 2 批）第二批观察"},
+        )
 
     def test_no_modules_yields_an_empty_mapping(self):
         merged = LLMAnalysisProcessor._merge_llm_results([{}], [], 1, 1, 0, "sample", ["topic_ranking"], None)
