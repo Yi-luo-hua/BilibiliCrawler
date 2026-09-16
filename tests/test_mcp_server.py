@@ -229,7 +229,12 @@ class CrawlToolTests(McpServerTestCase):
 
 class StatusAndStopTests(McpServerTestCase):
     async def test_provider_failure_guides_retry_of_the_original_run(self) -> None:
-        from test_provider_recovery import provider, error_body, KEY, BODY_MARKER, SUCCESS
+        try:
+            from test_provider_recovery import provider, error_body, KEY, BODY_MARKER, SUCCESS
+        except ModuleNotFoundError as exc:
+            if exc.name != "test_provider_recovery":
+                raise
+            from tests.test_provider_recovery import provider, error_body, KEY, BODY_MARKER, SUCCESS
         from src.processor.analysis_processor import LLMAnalysisProcessor
 
         with provider([(401, error_body(), {}), (200, SUCCESS, {})]) as (url, calls):
