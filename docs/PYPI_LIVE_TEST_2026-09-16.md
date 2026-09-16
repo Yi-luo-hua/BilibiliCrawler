@@ -75,7 +75,7 @@ CLI 与 MCP 两条通路，并用浏览器里的已登录账号做对照验证�
 改动后用真实 B 站数据复验：无法识别的输入与空间链接在受理阶段被拒且不建 run；匿名爬取
 184 条带出 warning，进度收在 100%；`--strategy all` 的报告里 `。；` 出现 0 次，地域段落有说明；
 MCP 侧 `serverInfo.version='3.6.0'`、`delete_run` 的 `required` 为空、BUSY 只提一次 task_id。
-另用一个**无效** Cookie 打真实接口，确认请求带 Cookie 不影响爬取，且会提示「会话可能已失效」。
+另用一个**无效** Cookie 打真实接口，确认请求带 Cookie 不影响爬取，且会提示「会话可能已失效」；有效 Cookie 的结果见下文。
 
 ### PR 审查后的修正（#54）
 
@@ -96,14 +96,19 @@ MCP 侧 `serverInfo.version='3.6.0'`、`delete_run` 的 `required` 为空、BUSY
 
 两处逻辑修复都验证过「回退即变红」。测试 404 → 406。
 
-未验证：**有效** Cookie 打真实 api.bilibili.com 能否拿到属地。SESSDATA 是 HttpOnly，
-浏览器里取不到，测试用的是 loopback 往返 + 登录态浏览器对同一接口的对照。自行确认：
+### 有效 Cookie 的真实接口验证
 
-```powershell
-$env:BILIBILI_COOKIE = "<浏览器里 bilibili.com 的完整 Cookie>"
-bilibili-crawler crawl-comments "https://www.bilibili.com/video/BV15QtG6PEzh/" --max-pages 1
-# warnings 为空即为成功；comments.json 里 ip_location 应有值
-```
+由仓库维护者在本机终端用自己的登录 Cookie 运行 `verify_cookie.py`（Cookie 只放在该终端的
+`BILIBILI_COOKIE` 里，未经过本记录的作者；结果由维护者转述）：
+
+- 爬取 `BV15QtG6PEzh` 第 1 页含楼中楼共 186 条，**186 条都有 IP 属地，覆盖率 100%**；
+- 分析层 `_location_stats` 识别到 186 条属地记录，爬取无属地相关 warning；
+- 本次 run 产物中的 SESSDATA / bili_jct 泄露扫描 0 处命中；
+- 运行后已清除该终端的 Cookie 环境变量。
+
+同一脚本在无效 SESSDATA 下对同一视频得到 0/186 并判为未通过，说明它能区分两种情况。
+至此登录链路（环境变量 → AgentService 自建 API → 真实 api.bilibili.com → 属地解析 →
+分析层统计）已端到端验证。
 
 ## 问题
 
