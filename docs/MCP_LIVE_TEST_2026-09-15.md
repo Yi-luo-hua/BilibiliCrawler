@@ -48,8 +48,9 @@
 ## 问题
 
 > **后续状态（2026-09-16）**：问题 1、3、5 与问题 4 中 BUSY 重复 task_id 已在 #54 修复；
-> 问题 4 的两种错误通道已写入 [MCP.md](MCP.md)。问题 2（参数静默夹紧）与问题 6
-> （`test_mcp_server` 单独运行时导入失败）仍未处理。详见 [PyPI 实测记录](PYPI_LIVE_TEST_2026-09-16.md)。
+> 问题 4 的两种错误通道已写入 [MCP.md](MCP.md)。问题 6 已修复：`test_mcp_server`
+> 的同目录导入加了 `tests.` 包路径回退，`python -m unittest tests.test_mcp_server` 可单独运行。
+> 问题 2（参数静默夹紧）仍未处理。详见 [PyPI 实测记录](PYPI_LIVE_TEST_2026-09-16.md)。
 
 ### 1. `delete_run` 不传 run_id 无法批量清理（中）
 

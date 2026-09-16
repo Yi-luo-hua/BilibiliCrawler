@@ -15,7 +15,12 @@ from src.processor.analysis_processor import AnalysisCancelled, LLMAnalysisProce
 from src.service.agent_service import AgentService
 from src.service.credentials import LLMCredentials
 from src.service.run_store import RunStore
-from test_provider_recovery import KEY, SUCCESS, error_body, provider
+try:
+    from test_provider_recovery import KEY, SUCCESS, error_body, provider
+except ModuleNotFoundError as exc:
+    if exc.name != "test_provider_recovery":
+        raise
+    from tests.test_provider_recovery import KEY, SUCCESS, error_body, provider
 
 
 @contextmanager
