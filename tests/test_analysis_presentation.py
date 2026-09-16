@@ -64,23 +64,50 @@ class ReplyPrefixTests(unittest.TestCase):
 
 
 class BatchProseTests(unittest.TestCase):
+    """Driven through the real merge, so batch numbers come from real batches."""
+
+    @staticmethod
+    def sociology(*per_batch):
+        """Merge one batch result per argument; None means the key was omitted."""
+        results = [
+            {} if text is None else {"deep_analysis": {"sociology": text}}
+            for text in per_batch
+        ]
+        merged = P._merge_llm_results(
+            results, [], 10, 10, 0, "all", ["deep_analysis"], None,
+        )
+        return merged["deep_analysis"]["sociology"]
+
     def test_batches_stay_separate_paragraphs_instead_of_one_sentence(self):
-        merged = P._compact_analysis_segments(["第一段结束。", "第二段结束。"])
+        merged = self.sociology("第一段结束。", "第二段结束。")
         # "。；" was the seam the old join produced.
         self.assertNotIn("。；", merged)
-        self.assertIn("\n\n", merged)
-        self.assertIn("第一段结束。", merged)
-        self.assertIn("第二段结束。", merged)
+        self.assertEqual(merged, "（第 1 批）第一段结束。\n\n（第 2 批）第二段结束。")
 
     def test_a_single_batch_is_not_labelled(self):
-        self.assertEqual(P._compact_analysis_segments(["只有一段"]), "只有一段")
+        self.assertEqual(self.sociology("只有一段"), "只有一段")
 
     def test_identical_batches_collapse(self):
-        self.assertEqual(P._compact_analysis_segments(["同一段", "同一段"]), "同一段")
+        self.assertEqual(self.sociology("同一段", "同一段"), "同一段")
+
+    def test_a_duplicate_does_not_renumber_the_batches_after_it(self):
+        # [A, A, C]: C came from batch 3 and must not be called batch 2.
+        self.assertEqual(
+            self.sociology("甲", "甲", "丙"),
+            "（第 1 批）甲\n\n（第 3 批）丙",
+        )
+
+    def test_a_batch_that_said_nothing_does_not_renumber_the_rest(self):
+        # The same drift without any duplicate: batch 1 omitted the key, so
+        # list position and batch number disagreed before dedup ever ran.
+        self.assertEqual(
+            self.sociology(None, "乙", "丙"),
+            "（第 2 批）乙\n\n（第 3 批）丙",
+        )
 
     def test_empty_input_stays_empty(self):
-        self.assertEqual(P._compact_analysis_segments([]), "")
-        self.assertEqual(P._compact_analysis_segments(["", "  "]), "")
+        self.assertEqual(self.sociology(), "")
+        self.assertEqual(self.sociology("", "  "), "")
 
 
 class RegionSectionTests(unittest.TestCase):

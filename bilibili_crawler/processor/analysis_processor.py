@@ -836,16 +836,22 @@ class LLMAnalysisProcessor:
     ) -> dict[str, Any]:
         sentiment = Counter({"正向": 0, "中性": 0, "负向": 0})
         custom_ids = [item["id"] for item in (custom_modules or []) if item.get("id") in chart_keys]
-        custom_segments: dict[str, list[str]] = {module_id: [] for module_id in custom_ids}
+        # (batch number, text). The number is carried rather than derived from
+        # list position: a batch that returned nothing for a key is not
+        # appended at all, so position stopped matching the batch long before
+        # deduplication got a chance to shift it further.
+        custom_segments: dict[str, list[tuple[int, str]]] = {module_id: [] for module_id in custom_ids}
         topics: Counter[str] = Counter()
         words: Counter[str] = Counter()
         risk_points: list[str] = []
         insights: list[str] = []
         quotes: list[str] = []
         summaries: list[str] = []
-        deep_segments = {"sociology": [], "psychology": [], "philosophy": []}
+        deep_segments: dict[str, list[tuple[int, str]]] = {
+            "sociology": [], "psychology": [], "philosophy": [],
+        }
 
-        for result in results:
+        for batch_number, result in enumerate(results, start=1):
             summaries.append(str(result.get("summary") or "").strip())
             if cls._needs_sentiment(chart_keys):
                 for item in cls._list_of_dicts(result.get("sentiment_counts")):
@@ -867,14 +873,14 @@ class LLMAnalysisProcessor:
                 for key in deep_segments:
                     text = str(deep.get(key) or "").strip()
                     if text:
-                        deep_segments[key].append(text)
+                        deep_segments[key].append((batch_number, text))
             if custom_ids:
                 returned = result.get("custom_results")
                 returned = returned if isinstance(returned, dict) else {}
                 for module_id in custom_ids:
                     text = str(returned.get(module_id) or "").strip()
                     if text:
-                        custom_segments[module_id].append(text)
+                        custom_segments[module_id].append((batch_number, text))
             risk_points.extend(cls._strings(result.get("risk_points")))
             insights.extend(cls._strings(result.get("insights")))
             quotes.extend(cls._strings(result.get("notable_quotes")))
@@ -1399,7 +1405,7 @@ class LLMAnalysisProcessor:
         return ""
 
     @staticmethod
-    def _compact_analysis_segments(items: list[str]) -> str:
+    def _compact_analysis_segments(items: list[tuple[int, str]]) -> str:
         """Join one batch's worth of prose per paragraph, labelled by batch.
 
         Each batch writes a finished paragraph that ends in a full stop, so the
@@ -1407,16 +1413,25 @@ class LLMAnalysisProcessor:
         arguing the same point three times. There is no second LLM pass here
         (unlike the summary), so the honest presentation is to keep the
         batches visibly separate rather than pretend they were synthesized.
+
+        Labels use the batch number each text arrived with. Renumbering after
+        filtering or deduplication would call batch 3 "第 2 批".
         """
-        clean = [item.strip() for item in items if item and item.strip()]
-        # Identical batches happen when the same theme dominates every slice.
-        deduped = list(dict.fromkeys(clean))
-        if not deduped:
+        seen: set[str] = set()
+        kept: list[tuple[int, str]] = []
+        for batch_number, raw in items:
+            text = str(raw or "").strip()
+            # Identical batches happen when the same theme dominates every
+            # slice; the first one keeps its own number.
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            kept.append((batch_number, text))
+        if not kept:
             return ""
-        if len(deduped) == 1:
-            return deduped[0]
-        kept = deduped[:5]
-        return "\n\n".join(f"（第 {index} 批）{text}" for index, text in enumerate(kept, start=1))
+        if len(kept) == 1:
+            return kept[0][1]
+        return "\n\n".join(f"（第 {number} 批）{text}" for number, text in kept[:5])
 
     @staticmethod
     def _append_chart_section(

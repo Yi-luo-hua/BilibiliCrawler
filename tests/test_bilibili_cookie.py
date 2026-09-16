@@ -11,6 +11,7 @@ import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from unittest.mock import patch
 
 from bilibili_crawler.api import bilibili_api
@@ -154,6 +155,15 @@ class LiveLoopbackTests(unittest.TestCase):
     """A real HTTP round trip: the header has to survive the whole stack."""
 
     def setUp(self):
+        # A default RunStore() resolves the checkout's own analysis-runs and
+        # probes it for writability. No run is written here, but #53 made
+        # keeping the tests out of that directory the rule, not a detail.
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        runs = patch.dict(os.environ, {"BILIBILI_AGENT_RUNS_DIR": self.temp.name})
+        runs.start()
+        self.addCleanup(runs.stop)
+
         Handler.seen_cookies = []
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -190,7 +200,7 @@ class LiveLoopbackTests(unittest.TestCase):
         self.assertEqual([c["ip_location"] for c in comments], ["上海"])
 
     def test_the_service_path_is_wired_the_same_way(self):
-        service = AgentService(store=RunStore(), cookie=COOKIE)
+        service = AgentService(store=RunStore(Path(self.temp.name)), cookie=COOKIE)
         comments = self.crawl(service._api)
         self.assertEqual([c["ip_location"] for c in comments], ["上海"])
 

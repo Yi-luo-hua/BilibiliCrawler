@@ -765,21 +765,25 @@ class AgentService:
 
     @staticmethod
     def _empty_crawl_message(task: _Task) -> str:
-        """Separate "target has no comments" from "target could not be reached".
+        """Say that the target was reachable and simply had nothing to crawl.
 
-        target is only populated once the crawler resolved the object through
-        the API, so a non-empty one means the link was fine and the section is
-        genuinely empty. Reporting both as "check the link" sends a caller off
-        retrying a URL that was never the problem.
+        Getting here means the crawler resolved the target: every failure in
+        crawl_comments -- unresolvable input, a failed page request -- raises
+        CrawlError, which _do_crawl settles before this check. An empty return
+        only happens when page one came back with no replies. So "check the
+        link" is always wrong here; it sends a caller off retrying a URL that
+        was never the problem.
+
+        The title is a bonus, not the signal: only the video resolver fills
+        task.target, while dynamics and articles resolve their oid through
+        differently-shaped responses and leave it empty.
         """
-        if task.target:
-            title = str(task.target.get("title") or "").strip()
-            named = f"《{title}》" if title else "该目标"
-            return (
-                f"{named}的评论区没有内容：目标可以访问，但没有抓到任何评论"
-                "（可能是评论数为 0、评论区已关闭，或筛选后没有剩余评论）。"
-            )
-        return "没有爬到任何评论，请检查链接是否为公开可访问的视频/动态/专栏。"
+        title = str((task.target or {}).get("title") or "").strip()
+        named = f"《{title}》" if title else "该目标"
+        return (
+            f"{named}的评论区没有内容：目标可以访问，但没有抓到任何评论"
+            "（可能是评论数为 0、评论区已关闭，或筛选后没有剩余评论）。"
+        )
 
     def _warn_if_locations_missing(self, task: _Task, cleaned: list[dict[str, Any]]) -> None:
         """Explain an empty IP-location column while the crawl is still in view.

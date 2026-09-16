@@ -57,23 +57,27 @@ SECRET_KEY = "sk-DO-NOT-LEAK-abcdef123456"
 class FakeCrawler:
     """Stands in for CommentCrawler; records the arguments it was handed."""
 
-    def __init__(self, progress, comments=None, release=None, resolves=True):
+    DEFAULT_TARGET_INFO = {
+        "bvid": "BV1xx411c7mD",
+        "aid": 12345,
+        "title": "测试视频",
+        "owner": "测试UP主",
+        "pubdate": 1735660800,
+    }
+
+    def __init__(self, progress, comments=None, release=None, target_info=None):
         self.progress = progress
         self.comments = SAMPLE_COMMENTS if comments is None else comments
         self.release = release
         self.started = threading.Event()
         self.stopped = False
         self.calls: list[dict] = []
-        # What the real crawler learns resolving the target. It stays empty
-        # when resolution failed, which is how the service tells "no comments
-        # here" apart from "could not reach this".
-        self.target_info = {
-            "bvid": "BV1xx411c7mD",
-            "aid": 12345,
-            "title": "测试视频",
-            "owner": "测试UP主",
-            "pubdate": 1735660800,
-        } if resolves else {}
+        # Metadata the real crawler captures while resolving the target, and
+        # only for videos: dynamics and articles resolve their oid through a
+        # differently-shaped response and leave this empty. Pass {} to model
+        # those. It is not a "did it resolve" flag -- an unresolvable target
+        # raises CrawlError and never reaches the paths that read this.
+        self.target_info = dict(self.DEFAULT_TARGET_INFO if target_info is None else target_info)
 
     def stop(self) -> None:
         self.stopped = True
@@ -341,12 +345,12 @@ class AgentServiceTestCase(unittest.TestCase):
                     task.thread.join(timeout=5)
 
     def make_service(self, comments=None, release=None, processor=None, policy=None, retain_outcome=False,
-                     resolves=True) -> AgentService:
+                     target_info=None) -> AgentService:
         if release is not None:
             self._releases.append(release)
 
         def factory(progress):
-            crawler = FakeCrawler(progress, comments=comments, release=release, resolves=resolves)
+            crawler = FakeCrawler(progress, comments=comments, release=release, target_info=target_info)
             self.crawlers.append(crawler)
             return crawler
 
@@ -437,8 +441,8 @@ class CrawlTests(AgentServiceTestCase):
         self.assertEqual(self.crawlers[0].calls[0]["max_pages"], MAX_PAGES_CEILING)
 
     def test_empty_crawl_result_fails_with_actionable_message(self) -> None:
-        # The target resolved, so the link is not the problem and the message
-        # must not send the caller off checking it.
+        # Reaching the empty check means the crawler resolved the target, so
+        # the link is not the problem and the message must not say it is.
         service = self.make_service(comments=[])
         snapshot = self.run_to_completion(service, service.start_crawl("BV1xx411c7mD"))
         self.assertEqual(snapshot.status, RunStatus.FAILED)
@@ -447,16 +451,21 @@ class CrawlTests(AgentServiceTestCase):
         self.assertIn("测试视频", snapshot.error or "")
         self.assertNotIn("请检查链接", snapshot.error or "")
 
-    def test_empty_crawl_without_a_resolved_target_still_blames_the_link(self) -> None:
-        service = self.make_service(comments=[])
-        snapshot = self.run_to_completion(service, service.start_crawl("BV1xx411c7mD"))
-        self.assertIn("测试视频", snapshot.error or "")
+    def test_an_empty_dynamic_is_not_blamed_on_the_link_either(self) -> None:
+        # Only the video resolver fills target_info; a dynamic or article
+        # resolves its oid through a differently-shaped response and leaves it
+        # empty. Keying the message off that metadata left this case -- the one
+        # the live test actually hit -- still telling the user to check a link
+        # that was fine.
+        service = self.make_service(comments=[], target_info={})
+        snapshot = self.run_to_completion(
+            service, service.start_crawl("https://t.bilibili.com/1248537385154641922")
+        )
 
-        # Same empty result, but the crawler never learned what the target was.
-        service = self.make_service(comments=[], resolves=False)
-        snapshot = self.run_to_completion(service, service.start_crawl("BV1xx411c7mD"))
         self.assertEqual(snapshot.error_code, ErrorCode.CRAWL_FAILED)
-        self.assertIn("请检查链接", snapshot.error or "")
+        self.assertIn("目标可以访问", snapshot.error or "")
+        self.assertIn("该目标", snapshot.error or "")
+        self.assertNotIn("请检查链接", snapshot.error or "")
 
     def test_desktop_policy_empty_crawl_is_success_without_a_csv_warning(self) -> None:
         # No data is not an export failure: the desktop policy finishes an
