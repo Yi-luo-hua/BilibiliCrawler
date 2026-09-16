@@ -93,7 +93,7 @@ class SidecarAnalysisTests(unittest.TestCase):
             {
                 "id": "comment-request",
                 "method": "comments.start",
-                "params": {"input": "BV1xx", "max_pages": 1},
+                "params": {"input": "BV1xx411c7mD", "max_pages": 1},
             }
         )
         wait_for_active_thread(sidecar)
@@ -197,7 +197,7 @@ class SidecarAnalysisTests(unittest.TestCase):
         try:
             CommentCrawler.crawl_comments = fake_crawl
             sidecar = CaptureSidecar()
-            sidecar._run_comments({"input": "BV1xx", "max_pages": 1})
+            sidecar._run_comments({"input": "BV1xx411c7mD", "max_pages": 1})
         finally:
             CommentCrawler.crawl_comments = original_crawl
 

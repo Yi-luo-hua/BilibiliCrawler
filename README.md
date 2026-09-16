@@ -22,14 +22,37 @@ BilibiliCrawler 是一个 B 站评论 / 动态爬取与舆论分析桌面工具�
 现已支持 MCP 调用，请阅读 [MCP 文档](docs/MCP.md)。已发布到 PyPI：
 
 ```powershell
-python -m pip install "bilibili-crawler[mcp,analysis]"
+python -m pip install "bilibili-crawler[mcp]"
+bilibili-crawler --version
 bilibili-crawler doctor
 bilibili-crawler-mcp
 ```
 
-省略 extras 只装 CLI/文本分析核心；词云/分词选 `analysis`，MCP 选 `mcp`，源码桌面后端选 `desktop`。
-从 checkout 安装用 `pip install ".[mcp,analysis]"`。
+省略 extras 只装 CLI/文本分析核心；MCP 选 `mcp`，源码桌面后端选 `desktop`。
+`analysis` extra（jieba/wordcloud）只服务桌面与 sidecar：CLI 和 MCP 的默认图表集合
+不含词云，装了也不会生成，普通 pip 用户不需要它。
+从 checkout 安装用 `pip install ".[mcp]"`。
 包边界、旧入口兼容及安装后的数据目录见 [Python 包说明](docs/PYTHON_PACKAGE_BOUNDARY.md)。
+
+**pip 包的能力边界**：上面的功能清单描述的是桌面应用。CLI 和 MCP 只做
+「单个视频 / 动态 / 专栏的评论爬取 + LLM 文本分析」，不含动态爬取（用户空间、关注页）、
+扫码登录和图表渲染——分析结果只到 JSON/Markdown。
+
+**登录**：CLI/MCP 默认匿名爬取，此时 B 站不返回评论 IP 属地，地域分布必然为空。
+需要属地时设置环境变量 `BILIBILI_COOKIE`（CLI 也可用 `--cookie`），值是浏览器里
+登录 B 站后的 Cookie 头，至少要包含 `SESSDATA`：
+
+```powershell
+$env:BILIBILI_COOKIE = "SESSDATA=...; bili_jct=..."
+bilibili-crawler doctor          # bilibili_login.has_sessdata 应为 true
+```
+
+Cookie 等同于账号凭据：它只在内存里使用，不写入 run 目录或日志，也不会被自动发现；
+写在命令行上会进入 shell 历史和进程列表，优先用环境变量。
+
+> 控制台是 GBK（代码页 936）时，`--help` 的中文会显示为乱码；用
+> `python -X utf8 -m bilibili_crawler --help` 或设置 `PYTHONIOENCODING=utf-8` 即可。
+> `doctor` 输出已经是 ASCII 转义，不受影响。
 
 > 旧版 Python GUI / 单 exe 代码保留在 `legacy-python-gui` 分支。主分支以后以 Windows 安装包桌面应用为主。
 
@@ -70,7 +93,7 @@ bilibili-crawler-mcp
 2. 输入视频 BV/AV、动态链接、专栏 CV 号或完整链接。
 3. 设置最大页数、排序方式和是否包含子评论。
 4. 点击“开始任务”，等待日志和进度完成。
-5. 如需更稳定地获取评论 IP 归属地，建议先扫码登录。
+5. 如需获取评论 IP 归属地，先扫码登录：B 站只对带会话的请求返回属地，匿名爬取拿不到。
 6. 点击“导出 CSV”保存结果。
 
 ### 动态爬取

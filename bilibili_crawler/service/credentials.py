@@ -45,6 +45,12 @@ ENV_API_KEY = "BILIBILI_LLM_API_KEY"
 ENV_BASE_URL = "BILIBILI_LLM_BASE_URL"
 ENV_MODEL = "BILIBILI_LLM_MODEL"
 ENV_CREDENTIALS_FILE = "BILIBILI_AGENT_CREDENTIALS"
+ENV_COOKIE = "BILIBILI_COOKIE"
+
+# Cookie names worth treating as secrets. SESSDATA is the session itself and
+# bili_jct is the CSRF token; the rest of a browser cookie header is device
+# fingerprinting that leaks nothing on its own.
+_COOKIE_SECRET_NAMES = ("SESSDATA", "bili_jct", "sid")
 
 _DEV_CREDENTIALS = ROOT / ".install-test" / "user-data" / "config" / "credentials.json"
 
@@ -80,6 +86,57 @@ def register_env_secrets() -> None:
     task never calls the resolver, yet its logs and errors still need scrubbing.
     """
     register_secret(os.environ.get(ENV_API_KEY, ""))
+    register_cookie_secrets(os.environ.get(ENV_COOKIE, ""))
+
+
+def register_cookie_secrets(cookie: str) -> None:
+    """Register the session-bearing values inside a Bilibili cookie header.
+
+    A cookie grants the account, so it gets the same treatment as an API key:
+    the values are scrubbed out of logs, manifests and tool errors. Only the
+    sensitive names are registered — scrubbing a device id would replace
+    harmless substrings in unrelated text.
+    """
+    for name, value in _parse_cookie_header(cookie).items():
+        if name in _COOKIE_SECRET_NAMES:
+            register_secret(value)
+
+
+def _parse_cookie_header(cookie: str) -> dict[str, str]:
+    """Split a `k=v; k=v` header, keeping values that contain '=' intact."""
+    pairs: dict[str, str] = {}
+    for chunk in str(cookie or "").split(";"):
+        name, separator, value = chunk.strip().partition("=")
+        if separator and name.strip():
+            pairs[name.strip()] = value.strip()
+    return pairs
+
+
+def resolve_bilibili_cookie(explicit: str = "") -> str:
+    """Resolve the Bilibili cookie header for anonymous-by-default crawling.
+
+    An explicit value (a CLI flag) wins over BILIBILI_COOKIE. Unlike the LLM
+    key this is never auto-discovered from a desktop profile: the desktop keeps
+    its login in memory for one session and deliberately does not persist it,
+    so there is no file to read and nothing here starts a login.
+    """
+    cookie = str(explicit or "").strip() or os.environ.get(ENV_COOKIE, "").strip()
+    if not cookie:
+        return ""
+    register_cookie_secrets(cookie)
+    return cookie
+
+
+def cookie_status(cookie: str) -> dict[str, Any]:
+    """Describe a cookie for diagnostics without revealing any of its values."""
+    pairs = _parse_cookie_header(cookie)
+    return {
+        "configured": bool(str(cookie or "").strip()),
+        # SESSDATA is the one the comment API checks; without it a syntactically
+        # valid cookie is still served as an anonymous request.
+        "has_sessdata": bool(pairs.get("SESSDATA")),
+        "names": sorted(pairs),
+    }
 
 
 class SecretScrubbingFilter(logging.Filter):

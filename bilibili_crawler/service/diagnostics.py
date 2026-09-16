@@ -6,7 +6,14 @@ import os
 from pathlib import Path
 from typing import Any
 
-from bilibili_crawler.service.credentials import LLMProfile, resolve_llm_profile, scrub
+from bilibili_crawler import resolve_version
+from bilibili_crawler.service.credentials import (
+    ENV_COOKIE,
+    LLMProfile,
+    cookie_status,
+    resolve_llm_profile,
+    scrub,
+)
 from bilibili_crawler.service.models import ServiceError
 from bilibili_crawler.service.paths import RUNS_DIR_ENV, RUNS_DIR_NAME, candidate_bases
 
@@ -41,6 +48,24 @@ def inspect_runs_directory() -> dict[str, Any]:
         if result["writable_hint"]:
             break
     return result
+
+
+def _login_status() -> dict[str, Any]:
+    """Report whether a Bilibili cookie is configured, never what it contains.
+
+    Read-only and offline: it does not call Bilibili, so "configured" means the
+    header is present, not that the session is still valid.
+    """
+    status = cookie_status(os.environ.get(ENV_COOKIE, "").strip())
+    if not status["configured"]:
+        note = ("未配置 Cookie，将匿名爬取；评论 IP 属地会全部为空，地域分布没有数据。"
+                f"设置环境变量 {ENV_COOKIE} 或使用 --cookie 可获取属地。")
+    elif not status["has_sessdata"]:
+        note = (f"{ENV_COOKIE} 已设置但缺少 SESSDATA：Cookie 仍会随请求发送，"
+                "但 B 站不会当作已登录，评论 IP 属地依旧为空；请复制完整的 Cookie 头。")
+    else:
+        note = "已配置 Cookie；本检查不联网，不代表会话仍然有效。"
+    return {**status, "source": ENV_COOKIE, "note": note}
 
 
 def _check_provider(profile: LLMProfile, timeout: float) -> dict[str, Any]:
@@ -84,9 +109,11 @@ def diagnose(*, check_provider: bool = False, timeout: float = 10.0) -> dict[str
         version = None
     payload: dict[str, Any] = {
         "ok": True,
+        "version": resolve_version(),
         "mcp": {"installed": version is not None, "version": version,
                 "note": "MCP 服务需要 bilibili-crawler[mcp]（源码可用 requirements-agent.txt）；普通 CLI 和本诊断不要求安装 SDK。"},
         "runs": inspect_runs_directory(),
+        "bilibili_login": _login_status(),
     }
     profile = None
     try:

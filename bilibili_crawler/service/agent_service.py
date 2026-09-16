@@ -27,7 +27,12 @@ from bilibili_crawler.crawler.comment_crawler import CommentCrawler
 from bilibili_crawler.crawler.errors import CrawlError
 from bilibili_crawler.processor.analysis_processor import AnalysisCancelled, AnalysisError, LLMAnalysisProcessor
 from bilibili_crawler.processor.data_processor import DataProcessor
-from bilibili_crawler.service.credentials import LLMCredentials, resolve_llm_credentials, scrub
+from bilibili_crawler.service.credentials import (
+    LLMCredentials,
+    resolve_bilibili_cookie,
+    resolve_llm_credentials,
+    scrub,
+)
 from bilibili_crawler.service.models import (
     SAMPLE_SIZE_DEFAULT,
     CallerPolicy,
@@ -42,6 +47,7 @@ from bilibili_crawler.service.models import (
     clamp_int as _clamp,
 )
 from bilibili_crawler.service.run_store import RunStore, new_run_id
+from bilibili_crawler.utils.helpers import parse_input
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +83,9 @@ class _Task:
         # persisted into the manifest next to the comments it describes.
         self.target: dict = {}
         self.warnings: list[str] = []
+        # Set when the crawl half already explained missing IP locations, so
+        # the analysis half does not say it a second time.
+        self.location_warned = False
         self.error: str | None = None
         self.error_code: str | None = None
 
@@ -180,6 +189,13 @@ class _Task:
                 setattr(self, key, value)
             self.percent = 100
             self.terminal = True
+            # percent tracks how many progress lines the crawler happened to
+            # emit, so a crawl-only task used to stop notifying at 14% and
+            # never announce its own completion. Queued under the lock: a
+            # poller drains the queue and then reads the status, and queuing
+            # after release let it see the terminal status with the event
+            # still missing. Queue.put never blocks on an unbounded queue.
+            self.progress.put((100, self.stage))
 
     def mark_failed(self, code: str, message: str) -> None:
         with self._lock:
@@ -188,6 +204,7 @@ class _Task:
             self.error_code = code
             self.percent = 100
             self.terminal = True
+            self.progress.put((100, self.stage))
 
     def add_warning(self, message: str) -> None:
         with self._lock:
@@ -256,9 +273,22 @@ class AgentService:
         policy: CallerPolicy | None = None,
         events: Callable[[TaskEvent], None] | None = None,
         retain_outcome: bool = False,
+        cookie: str = "",
     ) -> None:
         self._store = store or RunStore()
-        self._api = api if api is not None else BilibiliAPI()
+        # Only a self-built API gets a cookie. An injected one belongs to the
+        # desktop sidecar, which drives its own QR login on that same object:
+        # writing a header here would replace the session the user just logged
+        # into, and its login state is not visible from here either.
+        self._api_is_foreign = api is not None
+        if api is not None:
+            self._api = api
+            self._cookie = ""
+        else:
+            self._api = BilibiliAPI()
+            self._cookie = resolve_bilibili_cookie(cookie)
+            if self._cookie:
+                self._api.set_cookie(self._cookie)
         self._crawler_factory = crawler_factory or (
             lambda progress: CommentCrawler(progress_callback=progress, api=self._api)
         )
@@ -722,10 +752,9 @@ class AgentService:
             return
 
         if not cleaned and not self._policy.empty_crawl_is_success:
-            raise ServiceError(
-                ErrorCode.CRAWL_FAILED,
-                "没有爬到任何评论，请检查链接是否为公开可访问的视频/动态/专栏。",
-            )
+            raise ServiceError(ErrorCode.CRAWL_FAILED, self._empty_crawl_message(task))
+
+        self._warn_if_locations_missing(task, cleaned)
 
         task.update(status=RunStatus.EXPORTING, stage="正在写入评论文件")
         changes = self._crawl_results(task, cleaned)
@@ -737,6 +766,75 @@ class AgentService:
         else:
             task.update(status=RunStatus.ANALYZING, stage="评论爬取完成", **changes)
             self._persist(task)
+
+    @staticmethod
+    def _empty_crawl_message(task: _Task) -> str:
+        """Say that the target was reachable and simply had nothing to crawl.
+
+        Getting here means the crawler resolved the target: every failure in
+        crawl_comments -- unresolvable input, a failed page request -- raises
+        CrawlError, which _do_crawl settles before this check. An empty return
+        only happens when page one came back with no replies. So "check the
+        link" is always wrong here; it sends a caller off retrying a URL that
+        was never the problem.
+
+        The title is a bonus, not the signal: only the video resolver fills
+        task.target, while dynamics and articles resolve their oid through
+        differently-shaped responses and leave it empty.
+        """
+        title = str((task.target or {}).get("title") or "").strip()
+        named = f"《{title}》" if title else "该目标"
+        return (
+            f"{named}的评论区没有内容：目标可以访问，但没有抓到任何评论"
+            "（可能是评论数为 0、评论区已关闭，或筛选后没有剩余评论）。"
+        )
+
+    def _warn_if_locations_missing(self, task: _Task, cleaned: list[dict[str, Any]]) -> None:
+        """Explain an empty IP-location column while the crawl is still in view.
+
+        Bilibili only attaches reply_control.location for a logged-in caller,
+        so this is the difference between "the region chart has no data" and
+        "the region chart cannot have data". Silent only for an API we did not
+        build: the desktop's own session may be logged in through its QR flow
+        and we cannot see that from here.
+        """
+        if not cleaned or (self._api_is_foreign and not self._cookie):
+            return
+        if any(str(item.get("ip_location") or "").strip() for item in cleaned):
+            return
+        if self._cookie:
+            # An expired SESSDATA fails silently upstream: the request still
+            # succeeds, it just comes back without locations. Staying quiet
+            # here would leave the user staring at a cookie they believe works.
+            task.add_warning(
+                "已配置 BILIBILI_COOKIE，但评论 IP 属地仍全部为空。"
+                "通常是会话已失效或 Cookie 中缺少 SESSDATA，请重新复制登录后的 Cookie。"
+            )
+            task.location_warned = True
+            return
+        # Names the environment variable first: it is the one channel both the
+        # CLI and an MCP host can use, and a cookie on a command line lands in
+        # shell history and the process list.
+        task.add_warning(
+            "本次为匿名爬取，评论 IP 属地全部为空（地域分布将没有数据）。"
+            "如需属地，请设置环境变量 BILIBILI_COOKIE（CLI 也可用 --cookie）。"
+        )
+        task.location_warned = True
+
+    def _analysis_location_warning(self, task: _Task, warning: str) -> str:
+        """Turn the processor's neutral no-location warning into this caller's.
+
+        The processor is shared with the desktop, so it cannot say how to log
+        in. A crawl-and-analyze task has already said it with better knowledge
+        (anonymous vs. a stale cookie), so the analysis half stays quiet. A
+        standalone analysis cannot tell how an older run was crawled, so it
+        only names the channel, not a cause.
+        """
+        if task.location_warned:
+            return ""
+        if self._api_is_foreign:
+            return warning
+        return warning + "如需属地，请设置环境变量 BILIBILI_COOKIE（CLI 也可用 --cookie）后重新爬取。"
 
     def _crawl_results(self, task: _Task, cleaned: list[dict[str, Any]]) -> dict[str, Any]:
         """Persist the crawled comments and build the resulting state changes."""
@@ -822,6 +920,10 @@ class AgentService:
         # keeps doing that. _record_outcome takes the deep copy.
         self._record_outcome(task, analysis=result)
         for warning in result.get("warnings") or []:
+            if warning == LLMAnalysisProcessor.NO_LOCATION_WARNING:
+                warning = self._analysis_location_warning(task, warning)
+                if not warning:
+                    continue
             task.add_warning(scrub(warning))
 
         task.update(status=RunStatus.EXPORTING, stage="正在导出分析结果", percent=95)
@@ -954,6 +1056,7 @@ class AgentService:
         target = str(url or "").strip()
         if not target:
             raise ServiceError(ErrorCode.INVALID_INPUT, "url 不能为空")
+        self._reject_unsupported_target(target)
         return {
             "url": target,
             # The ceiling comes from the caller's policy and is applied here,
@@ -964,6 +1067,29 @@ class AgentService:
             # upstream API; anything else would be forwarded verbatim.
             "sort_mode": int(sort_mode) if sort_mode in (2, 3, "2", "3") else 3,
         }
+
+    @staticmethod
+    def _reject_unsupported_target(target: str) -> None:
+        """Refuse an input no crawler can ever resolve, before a run exists.
+
+        Format errors used to travel the whole way to CRAWL_FAILED, which
+        created a run directory, cost a network round trip and blamed the
+        network for a typo. Only the purely local parse runs here: a
+        well-formed id that turns out not to exist is still a crawl failure,
+        because only the API can tell us that.
+        """
+        parsed = parse_input(target)
+        if parsed is None:
+            raise ServiceError(
+                ErrorCode.INVALID_INPUT,
+                f"无法识别的目标：{target!r}。请提供视频链接/BV 号/AV 号、动态链接或专栏 cv 链接。",
+            )
+        if parsed.content_type is None and parsed.uid:
+            raise ServiceError(
+                ErrorCode.INVALID_INPUT,
+                f"{target!r} 是用户空间/UID。本命令只爬取单个内容的评论区；"
+                "按用户爬取动态目前只有桌面应用支持。",
+            )
 
     def _analysis_params(
         self,

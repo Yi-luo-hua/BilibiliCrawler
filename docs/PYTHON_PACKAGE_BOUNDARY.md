@@ -6,6 +6,8 @@
 - 保留 `python -m backend.agent`、直接 `python backend/sidecar.py`、原桌面协议及构建入口。新增 `python -m bilibili_crawler`、`bilibili-crawler`、`bilibili-crawler-mcp`。包内不通过 sys.path 回到 checkout。
 - 本地分发名暂定 `bilibili-crawler`，不表示该名称已在 PyPI 注册。元数据版本由 `desktop/src-tauri/Cargo.toml` 的 package.version 派生，构建时解析；安装后的 CLI 不依赖 Cargo 文件或 Rust 工具链。
 - 基础安装支持 CLI/文本分析，核心依赖为 requests 和 Pillow（持久化层校验图片需要）；`mcp` extra 锁定当前 MCP 2.1.0；`analysis` extra 提供分词/词云，`desktop` extra 提供桌面所需 QR/分词/词云组件。不改已锁定桌面依赖。
+- `analysis` 只对桌面/sidecar 有意义：`AGENT_CHART_KEYS` 刻意不含 `word_cloud`，CLI 与 MCP 也没有开关，所以 pip 用户装了 jieba/wordcloud 也不会生成词云。README 与本文件都按此说明，不要把它描述成 CLI 能力。
+- CLI/MCP 的登录只有一条入口：`BILIBILI_COOKIE` 环境变量（CLI 另有 `--cookie`）。AgentService 只给自建的 `BilibiliAPI` 装 Cookie；sidecar 注入的 API 归桌面扫码登录所有，不得在此覆盖。Cookie 中的会话字段按凭据处理（注册进脱敏表、不落盘、不进 manifest），且不做文件自动发现。
 - 运行时静态词表通过 importlib.resources 加载，并随包及 PyInstaller 产物收集；不得从 cwd 或 checkout 寻找资源。无外置中文字体时沿用现有降级，不打包机器字体。
 - 普通安装默认 run/analysis-assets 位于用户数据目录：Windows LOCALAPPDATA/BilibiliCrawler，macOS ~/Library/Application Support/BilibiliCrawler，Linux XDG_DATA_HOME/bilibili-crawler（默认 ~/.local/share）。不得尝试向 site-packages 或 cwd 写入。
 - 源码 checkout 保留现有根目录数据与开发 profile 发现，避免旧 run 失联；冻结桌面仍保留原稳定目录与复制迁移行为。环境变量 BILIBILI_AGENT_RUNS_DIR/BILIBILI_AGENT_CREDENTIALS 保持最高优先级；不自动移动或删除用户数据。

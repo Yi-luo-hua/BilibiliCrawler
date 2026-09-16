@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from bilibili_crawler.service.agent_service import AgentService
+from bilibili_crawler import resolve_version
 from bilibili_crawler.service.credentials import install_log_scrubbing, scrub
 from bilibili_crawler.service.recovery import analysis_recovery_hint
 from bilibili_crawler.service.models import (
@@ -73,8 +74,24 @@ def _run_blocking(service: AgentService, snapshot: TaskSnapshot, timeout: float)
             return current
 
 
+class _VersionAction(argparse.Action):
+    """argparse's own version action wants the string up front.
+
+    Resolving it there would cost a dist-info scan on every invocation, for a
+    flag almost nobody passes.
+    """
+
+    def __init__(self, option_strings, dest=argparse.SUPPRESS, help="输出版本号并退出"):
+        super().__init__(option_strings=option_strings, dest=dest, nargs=0, help=help)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        print(f"bilibili-crawler {resolve_version()}")
+        parser.exit()
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="bilibili-crawler", description=__doc__)
+    parser.add_argument("--version", action=_VersionAction)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("mcp", help="以 stdio 方式启动 MCP 服务器")
@@ -88,6 +105,12 @@ def _build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--max-pages", type=int, default=MAX_PAGES_DEFAULT)
         sub.add_argument("--no-replies", action="store_true", help="不爬取楼中楼回复")
         sub.add_argument("--sort-mode", type=int, default=3, help="3=按时间，2=按热度")
+        sub.add_argument(
+            "--cookie",
+            default="",
+            help="B 站 Cookie（形如 'SESSDATA=...; bili_jct=...'）；"
+                 "不传则读环境变量 BILIBILI_COOKIE，都没有就匿名爬取（评论 IP 属地为空）",
+        )
 
     crawl_analyze = subparsers.add_parser("crawl-and-analyze", help="爬取并分析")
     add_crawl_flags(crawl_analyze)
@@ -137,7 +160,9 @@ def main(argv: list[str] | None = None) -> int:
 
     from bilibili_crawler.service.agent_service import AgentService
 
-    service = AgentService()
+    # A cookie on the command line is visible to `ps`/history, so the flag is a
+    # convenience over BILIBILI_COOKIE rather than the recommended channel.
+    service = AgentService(cookie=getattr(args, "cookie", ""))
 
     try:
         if args.command == "list-runs":

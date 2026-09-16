@@ -38,6 +38,12 @@ class LLMAnalysisProcessor:
     WORD_CLOUD_LIMIT = 80
     WORD_CLOUD_WIDTH = 800
     WORD_CLOUD_HEIGHT = 440
+    # "回复 @name :" / "回复 @name ：". Bounded name length so a comment that
+    # merely opens with the word 回复 and happens to contain a colon much later
+    # keeps its text.
+    _REPLY_PREFIX = re.compile(r"^回复\s*@.{1,64}?\s*[:：]\s*")
+    # Matched verbatim by the service, which swaps in a caller-specific hint.
+    NO_LOCATION_WARNING = "所有评论都没有 IP 属地，地域分布没有数据（B 站只对已登录的请求返回属地）。"
     ALL_CHART_KEYS = [
         "sentiment_distribution",
         "topic_ranking",
@@ -198,6 +204,12 @@ class LLMAnalysisProcessor:
         cls._raise_if_cancelled(cancel_event)
         location_stats = cls._location_stats(records)
         merged["overview"].update(location_stats)
+        if cls._chart_enabled(chart_keys, "region_map") and location_stats.get("ip_locations") == 0:
+            # The region chart is on by default, so an empty one looks like a
+            # failure. Deliberately says nothing about how to log in: the
+            # desktop (QR login) and the CLI/MCP (BILIBILI_COOKIE) share this
+            # processor, and only the service knows which one it is serving.
+            merged.setdefault("warnings", []).append(cls.NO_LOCATION_WARNING)
         if cls._chart_enabled(chart_keys, "word_cloud") and not merged.get("word_counts"):
             merged["word_counts"] = cls._build_word_counts(selected)
         cls._raise_if_cancelled(cancel_event)
@@ -697,7 +709,7 @@ class LLMAnalysisProcessor:
         return {
             "id": str(comment.get("comment_id") or ""),
             "type": "comment_reply" if comment.get("is_reply") else "comment",
-            "content": str(comment.get("content") or "").strip(),
+            "content": cls._strip_reply_prefix(comment.get("content")),
             "likes": int(comment.get("like_count") or 0),
             "replies": int(comment.get("reply_count") or 0),
             "timestamp": int(comment.get("ctime") or 0),
@@ -706,6 +718,29 @@ class LLMAnalysisProcessor:
             "user_level": cls._normalize_user_level(comment.get("user_level")) or "",
             "username": str(comment.get("username") or ""),
         }
+
+    @staticmethod
+    def _no_region_line(result: dict[str, Any]) -> str:
+        meta = result.get("meta") if isinstance(result.get("meta"), dict) else {}
+        overview = result.get("overview") if isinstance(result.get("overview"), dict) else {}
+        covered = meta.get("ip_locations", overview.get("ip_locations", 0)) or 0
+        if covered:
+            return "- 暂无（评论有属地，但没有可归类到国内省份的记录）"
+        # Shared with the desktop's export, so no CLI-only login instructions.
+        return "- 暂无：本次运行没有获取到任何评论 IP 属地（B 站只对已登录的请求返回属地，登录后重新爬取可获取）"
+
+    @classmethod
+    def _strip_reply_prefix(cls, value: Any) -> str:
+        """Drop Bilibili's "回复 @someone :" lead-in from a nested reply.
+
+        Roughly two in five replies carry it. It is addressing markup, not
+        opinion: it pushed 回复 to the second most frequent token in the word
+        cloud and sent the addressed person's username to the LLM with every
+        batch. Only stripped for analysis — the exported comment keeps the
+        verbatim text Bilibili returned.
+        """
+        text = str(value or "").strip()
+        return cls._REPLY_PREFIX.sub("", text, count=1).strip()
 
     @staticmethod
     def _dynamic_record(dynamic: dict[str, Any]) -> dict[str, Any]:
@@ -802,16 +837,22 @@ class LLMAnalysisProcessor:
     ) -> dict[str, Any]:
         sentiment = Counter({"正向": 0, "中性": 0, "负向": 0})
         custom_ids = [item["id"] for item in (custom_modules or []) if item.get("id") in chart_keys]
-        custom_segments: dict[str, list[str]] = {module_id: [] for module_id in custom_ids}
+        # (batch number, text). The number is carried rather than derived from
+        # list position: a batch that returned nothing for a key is not
+        # appended at all, so position stopped matching the batch long before
+        # deduplication got a chance to shift it further.
+        custom_segments: dict[str, list[tuple[int, str]]] = {module_id: [] for module_id in custom_ids}
         topics: Counter[str] = Counter()
         words: Counter[str] = Counter()
         risk_points: list[str] = []
         insights: list[str] = []
         quotes: list[str] = []
         summaries: list[str] = []
-        deep_segments = {"sociology": [], "psychology": [], "philosophy": []}
+        deep_segments: dict[str, list[tuple[int, str]]] = {
+            "sociology": [], "psychology": [], "philosophy": [],
+        }
 
-        for result in results:
+        for batch_number, result in enumerate(results, start=1):
             summaries.append(str(result.get("summary") or "").strip())
             if cls._needs_sentiment(chart_keys):
                 for item in cls._list_of_dicts(result.get("sentiment_counts")):
@@ -833,14 +874,14 @@ class LLMAnalysisProcessor:
                 for key in deep_segments:
                     text = str(deep.get(key) or "").strip()
                     if text:
-                        deep_segments[key].append(text)
+                        deep_segments[key].append((batch_number, text))
             if custom_ids:
                 returned = result.get("custom_results")
                 returned = returned if isinstance(returned, dict) else {}
                 for module_id in custom_ids:
                     text = str(returned.get(module_id) or "").strip()
                     if text:
-                        custom_segments[module_id].append(text)
+                        custom_segments[module_id].append((batch_number, text))
             risk_points.extend(cls._strings(result.get("risk_points")))
             insights.extend(cls._strings(result.get("insights")))
             quotes.extend(cls._strings(result.get("notable_quotes")))
@@ -1021,7 +1062,9 @@ class LLMAnalysisProcessor:
             elif key == "region_map":
                 cls._append_chart_section(lines, "地域分布", key, assets_by_key, asset_dir_name)
                 lines.extend(["", "### 国内 / 地图数据"])
-                lines.extend(cls._items_lines(result.get("region_counts", [])))
+                domestic = list(cls._items_lines(result.get("region_counts", [])))
+                # An empty heading reads as a broken report; say why it is empty.
+                lines.extend(domestic if domestic else [cls._no_region_line(result)])
                 lines.extend(["", "### 海外 / 未知"])
                 overseas = list(cls._items_lines(result.get("overseas_region_counts", [])))
                 lines.extend(overseas if overseas else ["- 暂无"])
@@ -1363,13 +1406,33 @@ class LLMAnalysisProcessor:
         return ""
 
     @staticmethod
-    def _compact_analysis_segments(items: list[str]) -> str:
-        clean = [item for item in items if item]
-        if not clean:
+    def _compact_analysis_segments(items: list[tuple[int, str]]) -> str:
+        """Join one batch's worth of prose per paragraph, labelled by batch.
+
+        Each batch writes a finished paragraph that ends in a full stop, so the
+        old "；".join produced "。；" seams and read as one impossible sentence
+        arguing the same point three times. There is no second LLM pass here
+        (unlike the summary), so the honest presentation is to keep the
+        batches visibly separate rather than pretend they were synthesized.
+
+        Labels use the batch number each text arrived with. Renumbering after
+        filtering or deduplication would call batch 3 "第 2 批".
+        """
+        seen: set[str] = set()
+        kept: list[tuple[int, str]] = []
+        for batch_number, raw in items:
+            text = str(raw or "").strip()
+            # Identical batches happen when the same theme dominates every
+            # slice; the first one keeps its own number.
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            kept.append((batch_number, text))
+        if not kept:
             return ""
-        if len(clean) == 1:
-            return clean[0]
-        return "；".join(clean[:5])
+        if len(kept) == 1:
+            return kept[0][1]
+        return "\n\n".join(f"（第 {number} 批）{text}" for number, text in kept[:5])
 
     @staticmethod
     def _append_chart_section(
