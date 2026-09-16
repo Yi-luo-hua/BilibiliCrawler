@@ -10,7 +10,12 @@ from pathlib import Path
 from unittest import skipUnless
 from unittest.mock import patch
 
-from test_agent_service import AgentServiceTestCase, FakeAnalysisProcessor, WordCloudProcessor, fake_credentials
+try:
+    from test_agent_service import AgentServiceTestCase, FakeAnalysisProcessor, WordCloudProcessor, fake_credentials
+except ModuleNotFoundError as exc:
+    if exc.name != "test_agent_service":
+        raise
+    from tests.test_agent_service import AgentServiceTestCase, FakeAnalysisProcessor, WordCloudProcessor, fake_credentials
 from src.processor.analysis_processor import AnalysisCancelled, AnalysisError
 from src.service.agent_service import AgentService
 from src.service.models import RunStatus, ServiceError
