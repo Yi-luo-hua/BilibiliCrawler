@@ -15,17 +15,20 @@
 
 ## 安装
 
-本分支可从 checkout 安装，不需要在 MCP 宿主中设置 checkout 的 cwd：
+已发布到 PyPI（`pip install "bilibili-crawler[mcp]"`），也可从 checkout 安装，
+不需要在 MCP 宿主中设置 checkout 的 cwd：
 
 ```powershell
-python -m pip install ".[mcp,analysis]"
+python -m pip install ".[mcp]"
 bilibili-crawler doctor
 bilibili-crawler-mcp
 ```
 
+不需要 `analysis` extra：MCP 的默认图表集合不含词云，它只服务桌面与 sidecar。
+
 MCP 宿主的 command 可指定环境内 `bilibili-crawler-mcp` 的绝对路径，无须额外 args；
 也可使用该环境的 Python 执行 `-m bilibili_crawler mcp`。普通 CLI 不需要 `mcp` extra。
-下面的旧源码入口仍受支持；wheel/sdist 发布、多版本干净安装矩阵和 PyPI 公共名称尚未完成。
+下面的旧源码入口仍受支持。
 详细依赖、资源及路径边界见 [Python 包说明](PYTHON_PACKAGE_BOUNDARY.md)。
 
 需要 Python 3.10+。建议用独立虚拟环境，避免与你机器上其他 MCP server 的 `mcp` 版本冲突：
@@ -157,6 +160,9 @@ API Key 不会写进 `manifest.json`、不会出现在日志（含异常堆栈�
 
 所有任务工具返回同一个精简结构：`ok` / `done` / `status` / `stage` / `task_id` / `run_id` /
 `counts` / `summary` / `artifacts` / `warnings` / `error` / `error_code` / `next_step`。
+这个结构只覆盖已受理的任务：执行中失败（如 `CRAWL_FAILED`）会带 `error_code` 正常返回。
+受理前就被拒绝的调用（`BUSY` / `NOT_FOUND` / `INVALID_INPUT`）是工具错误，只有一段文本，
+错误码在开头的 `[CODE]` 前缀里；参数类型不对时则是 SDK 的参数校验原文，没有前缀。
 `list_runs` 返回运行记录数组（run_id/kind/status/created_at），`delete_run` 返回
 `{"ok": true, "deleted": [run_id, ...]}`。批量清理必须显式传 `prune_to`（>= 1，不传
 run_id 时生效）；省略 `prune_to` 不会默认全删，正在执行的任务的 run 会被跳过并要求先
@@ -167,7 +173,8 @@ run_id 时生效）；省略 `prune_to` 不会默认全删，正在执行的任�
 ### 有界阻塞
 
 `crawl_and_analyze` 等工具默认最多阻塞 `wait_seconds`（默认 90 秒，上限 600），
-期间通过 MCP progress 通知汇报进度。
+期间通过 MCP progress 通知汇报进度。任务在窗口内结束时，最后一条通知总是 100%，
+纯爬取任务也不会停在中途的百分比上。
 
 如果在窗口内没跑完，工具会带着 `done: false`、`task_id` 和 `run_id` 正常返回，
 之后用 `get_task_status(task_id=...)` 查询本次尝试的最终状态。这样长任务不会被宿主的
@@ -224,8 +231,17 @@ LLM 请求等待期间，stage/progress 消息约每秒刷新本次分析已用�
 ### 登录与 IP 属地
 
 MCP 服务默认匿名爬取。B 站只对带会话的请求返回评论 IP 属地，所以匿名结果里
-`ip_location` 全为空，`region_map` 模块必然没有数据——此时分析结果的 `warnings`
-会明确说明这一点。
+`ip_location` 全为空，`region_map` 模块必然没有数据。属地全空时任务的 `warnings`
+会说明原因，同一任务只提示一次：
+
+| 情况 | 提示 |
+|---|---|
+| 未配置 Cookie 的爬取 | 本次为匿名爬取，如需属地请设置 `BILIBILI_COOKIE` |
+| 已配置 Cookie 但属地仍全空 | 会话可能已失效或缺少 `SESSDATA`（B 站对过期会话照样返回 200，只是不带属地） |
+| 对已有 run 单独 `analyze_run`（启用了 `region_map`） | 地域分布没有数据，如需属地请设置 `BILIBILI_COOKIE` 后重新爬取（无法判断旧 run 当初如何爬取，不推断原因） |
+
+报告 `report.md` 的「国内 / 地图数据」段落为空时写的是通用说明（B 站只对已登录请求返回属地），
+不含 `BILIBILI_COOKIE`：分析层与桌面端共用，登录方式由调用方各自说明。
 
 需要属地时由用户在宿主配置的 `env` 里提供 `BILIBILI_COOKIE`（完整 Cookie 头，
 至少含 `SESSDATA`）。本服务不提供登录工具，也不会自行发起或持久化登录：
@@ -235,8 +251,8 @@ MCP 服务默认匿名爬取。B 站只对带会话的请求返回评论 IP 属�
 ```
 
 Cookie 与 API Key 同级处理：只在内存中使用，其中的会话字段会被日志与错误脱敏，
-不写入 run 目录。`bilibili-crawler doctor` 的 `bilibili_login` 字段只报告是否配置，
-不显示内容。
+不写入 run 目录。`bilibili-crawler doctor` 的 `bilibili_login` 字段只报告是否配置、
+是否含 `SESSDATA`，不显示内容；该检查不联网，不能说明会话仍然有效。
 
 ---
 
