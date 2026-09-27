@@ -9,7 +9,7 @@
 一个本地 stdio MCP 服务器，把「爬取评论 → LLM 舆情分析 → 导出报告」暴露成 7 个工具。
 每次运行都会落盘成一个带 `run_id` 的目录，因此 MCP 进程重启后仍能按 `run_id` 继续分析。
 
-桌面客户端继续走 `backend/sidecar.py`；本次仅在内部复用服务层，既有 RPC 返回与事件表面保持兼容。
+桌面客户端继续走 `backend/sidecar.py`，CLI/MCP 通过共享服务层执行爬取与分析。
 
 ---
 
@@ -38,18 +38,17 @@ python -m venv .venv-agent
 ```
 
 ```bash
-.venv-agent/Scripts/python.exe -m pip install -r requirements-agent.txt
+.venv-agent/Scripts/python.exe -m pip install "bilibili-crawler[mcp]"
 ```
 
 Linux / macOS 下把 `.venv-agent/Scripts/python.exe` 换成 `.venv-agent/bin/python`。
 
-已发布的 v3.3.0 仍采用源码安装。本分支新增本地可安装包；独立 wheel / sdist 公开资产、PyPI 发布与 MCP Registry 接入已列入
-[`RELEASE_3.3.0.md`](RELEASE_3.3.0.md) 的后续 Python 包计划，不属于本次发布产物。
+Python wheel 和 sdist 随 GitHub Release 提供。若从源码 checkout 安装，把包名换成 `".[mcp]"`；旧源码入口 `backend.agent` 仍受支持。
 
 验证安装：
 
 ```bash
-.venv-agent/Scripts/python.exe -m backend.agent list-runs
+.venv-agent/Scripts/bilibili-crawler.exe list-runs
 ```
 
 ---
@@ -57,17 +56,14 @@ Linux / macOS 下把 `.venv-agent/Scripts/python.exe` 换成 `.venv-agent/bin/py
 ## 配置 MCP 宿主
 
 把下面这段加进宿主的 MCP 配置（如 Claude Desktop 的 `claude_desktop_config.json`），
-路径换成你自己的仓库位置：
+路径换成你安装 Python 包的虚拟环境：
 
 ```json
 {
   "mcpServers": {
     "bilibili-crawler": {
-      "command": "E:\\path\\to\\BilibiliCrawler\\.venv-agent\\Scripts\\python.exe",
-      "args": ["-m", "backend.agent", "mcp"],
-      "cwd": "E:\\path\\to\\BilibiliCrawler",
+      "command": "E:\\path\\to\\venv\\Scripts\\bilibili-crawler-mcp.exe",
       "env": {
-        "BILIBILI_LLM_API_KEY": "sk-your-key",
         "BILIBILI_LLM_BASE_URL": "https://api.openai.com/v1",
         "BILIBILI_LLM_MODEL": "gpt-4.1-mini"
       }
@@ -79,10 +75,10 @@ Linux / macOS 下把 `.venv-agent/Scripts/python.exe` 换成 `.venv-agent/bin/py
 Claude Code 用户也可以直接：
 
 ```bash
-claude mcp add bilibili-crawler -- /path/to/.venv-agent/Scripts/python.exe -m backend.agent mcp
+claude mcp add bilibili-crawler -- /path/to/venv/bin/bilibili-crawler-mcp
 ```
 
-`cwd` 必须指向仓库根目录，否则 `backend.agent` 模块无法被找到。
+从 PyPI 安装的命令不依赖仓库目录。分析类工具仍需配置 LLM 凭据，见下节。
 
 ---
 
@@ -131,9 +127,8 @@ import os
 from mcp import StdioServerParameters
 
 params = StdioServerParameters(
-    command=r"E:\path\to\BilibiliCrawler\.venv-agent\Scripts\python.exe",
-    args=["-m", "backend.agent", "mcp"],
-    cwd=r"E:\path\to\BilibiliCrawler",
+    command=r"E:\path\to\venv\Scripts\bilibili-crawler-mcp.exe",
+    args=[],
     env={**os.environ, "BILIBILI_AGENT_CREDENTIALS": r"D:\Apps\BilibiliCrawler\user-data\config\credentials.json"},
 )
 ```
@@ -314,13 +309,13 @@ Cookie 与 API Key 同级处理：只在内存中使用，其中的会话字段�
 **先检查最终配置（不显示 API Key）**
 
 ```bash
-python -m backend.agent doctor
-python -m backend.agent doctor --check-provider --timeout 10
+bilibili-crawler doctor
+bilibili-crawler doctor --check-provider --timeout 10
 ```
 
 默认只读、不联网、不创建或迁移运行目录，输出配置来源、有效服务地址/模型、MCP SDK 版本及
 运行目录的权限估计。退出码 0 表示 profile 和目录预检通过，1 表示配置/目录或显式连通性检查失败。
-SDK 未安装会标明 `installed: false`，不影响普通 CLI 的诊断成功；MCP 服务器仍需安装 requirements-agent.txt。
+SDK 未安装会标明 `installed: false`，不影响普通 CLI 的诊断成功；MCP 服务器需安装 `[mcp]` extra（源码方式可用 `requirements-agent.txt`）。
 
 `--check-provider` 才发送带鉴权的 GET `/models`，不跟随重定向，不打印响应正文，不发送评论、
 不调用付费聊天接口。成功不代表所选模型已通过分析验证；部分 provider 不支持模型列表接口。
@@ -336,14 +331,14 @@ SDK 未安装会标明 `installed: false`，不影响普通 CLI 的诊断成功�
 先手动跑一次，直接看 stderr：
 
 ```bash
-.venv-agent/Scripts/python.exe -m backend.agent mcp
+bilibili-crawler-mcp
 ```
 
 正常表现是进程挂起等待 stdin，stderr 打印一行 `starting bilibili-crawler MCP server on stdio`。
 按 Ctrl+C 退出。
 
-**`No module named backend`**
-`cwd` 没有指向仓库根目录。
+**`bilibili-crawler-mcp` 找不到或无法导入 `bilibili_crawler`**
+检查宿主配置是否指向安装了 `bilibili-crawler[mcp]` 的虚拟环境；源码旧入口 `backend.agent` 才需要仓库根目录作为 `cwd`。
 
 **`[NO_CREDENTIALS] 缺少 LLM API Key`**
 `crawl_comments` 不需要凭据，可以先用它验证链路；分析类工具见上面的「LLM 凭据」。
@@ -377,7 +372,7 @@ TLS、额度不足、解析错误不自动重放。超过 10 秒的 Retry-After 
 `run_id` 写错，或运行目录被清理了。用 `list-runs` 查看现有的：
 
 ```bash
-.venv-agent/Scripts/python.exe -m backend.agent list-runs
+bilibili-crawler list-runs
 ```
 
 **怀疑 stdout 被日志污染**
@@ -391,21 +386,21 @@ TLS、额度不足、解析错误不自动重放。超过 10 秒的 Retry-After 
 不接 MCP 也能直接用：
 
 ```bash
-.venv-agent/Scripts/python.exe -m backend.agent crawl-comments "BV1GJ411x7h7" --max-pages 1
+bilibili-crawler crawl-comments "BV1GJ411x7h7" --max-pages 1
 ```
 
 ```bash
-.venv-agent/Scripts/python.exe -m backend.agent crawl-and-analyze "https://www.bilibili.com/video/BV1GJ411x7h7"
+bilibili-crawler crawl-and-analyze "https://www.bilibili.com/video/BV1GJ411x7h7"
 ```
 
 ```bash
-.venv-agent/Scripts/python.exe -m backend.agent analyze-run 20260825-203826-0f407dfe
+bilibili-crawler analyze-run 20260825-203826-0f407dfe
 ```
 
 带登录爬取（拿到评论 IP 属地）。`--cookie` 会进入 shell 历史，长期使用请配环境变量：
 
 ```bash
-.venv-agent/Scripts/python.exe -m backend.agent crawl-comments "BV1GJ411x7h7" --cookie "SESSDATA=...; bili_jct=..."
+bilibili-crawler crawl-comments "BV1GJ411x7h7" --cookie "SESSDATA=...; bili_jct=..."
 ```
 
 结果 JSON 走 stdout，进度日志走 stderr，方便管道处理。

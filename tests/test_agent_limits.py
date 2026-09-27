@@ -20,7 +20,12 @@ from bilibili_crawler.crawler.comment_crawler import CommentCrawler
 from bilibili_crawler.processor.analysis_processor import LLMAnalysisProcessor as P
 from bilibili_crawler.service.models import AGENT_CHART_KEYS, MAX_PAGES_UNLIMITED
 
-from test_caller_policy import PolicyTestCase
+try:
+    from test_caller_policy import PolicyTestCase
+except ModuleNotFoundError as exc:
+    if exc.name != "test_caller_policy":
+        raise
+    from tests.test_caller_policy import PolicyTestCase
 
 
 class ServiceTestCase(PolicyTestCase):

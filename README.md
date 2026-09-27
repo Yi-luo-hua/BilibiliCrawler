@@ -231,7 +231,7 @@ manifest 中的 artifacts 路径相对于 run 目录存储（拷贝到其他机�
 
 当前待完成的兼容性修复、功能演进和后续工程工作见
 [BilibiliCrawler 前瞻计划](docs/FORWARD_PLAN.md)；正在准备中的版本，其发布步骤与验收项见对应的
-版本清单。最近一次是 [v3.6.0 发布准备与验收清单](docs/RELEASE_3.6.0.md)。已完成任务的验收与发布证据保留在
+版本清单。最近一次是 [v3.7.0 发布记录](docs/RELEASE_3.7.0.md)。已完成任务的验收与发布证据保留在
 对应版本清单中，历史版本计划仅保留对应阶段记录，不再追加新任务。
 
 ## 源码开发
@@ -270,7 +270,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build_installer.ps1 -Python $Re
 
 应用版本以 `desktop/src-tauri/Cargo.toml` 的 `[package].version` 为唯一来源；Tauri 和构建脚本会自动读取该版本，`Cargo.lock` 由 Cargo 同步更新。构建流程使用锁定的 pnpm 版本、冻结锁文件和审核后的依赖构建脚本。
 
-桌面窗口左上角显示当前版本；侧栏“检查更新”查询 GitHub 最新正式版本，并提供更新说明和安装包下载入口。下载后退出应用，运行安装程序完成更新。浏览器预览显示项目版本，更新操作仅在桌面窗口可用。详见 [v3.6.0 发布说明](docs/RELEASE_NOTES_3.6.0.md)。
+桌面窗口左上角显示当前版本；侧栏“检查更新”查询 GitHub 最新正式版本，并提供更新说明和安装包下载入口。下载后退出应用，运行安装程序完成更新。浏览器预览显示项目版本，更新操作仅在桌面窗口可用。详见 [v3.7.0 发布说明](docs/RELEASE_NOTES_3.7.0.md)。
 
 产物位于：
 
@@ -284,14 +284,14 @@ desktop\src-tauri\target\release\bundle\nsis\
 
 ```powershell
 python -m venv .venv-agent
-.venv-agent\Scripts\python.exe -m pip install -r requirements-agent.txt
+.venv-agent\Scripts\python.exe -m pip install ".[mcp]"
 ```
 
-在 MCP 宿主里把命令配成 `.venv-agent\Scripts\python.exe -m backend.agent mcp`，
-`cwd` 指向仓库根目录。也可以直接当命令行用：
+在 MCP 宿主里把命令配成 `.venv-agent\Scripts\bilibili-crawler-mcp.exe`，
+无需指定仓库目录。也可以直接当命令行用：
 
 ```powershell
-.venv-agent\Scripts\python.exe -m backend.agent crawl-comments "BV1GJ411x7h7" --max-pages 1
+.venv-agent\Scripts\bilibili-crawler.exe crawl-comments "BV1GJ411x7h7" --max-pages 1
 ```
 
 完整的工具清单、凭据配置、安全说明与故障排查见 [docs/MCP.md](docs/MCP.md)。
@@ -397,6 +397,14 @@ BilibiliCrawler/
 ```
 
 ## 更新日志
+
+### v3.7.0 (2026.09.28)
+- 修复楼中楼回复只抓取第一页（最多 20 条）的问题；现在按回复总数继续分页，直到获取完整回复。
+- CLI/MCP 取消 50 页爬取上限，`max_pages=0` 可抓取整个评论区；分析样本数、批大小和共享分析层的输出数量上限也已移除。请求节奏和 LLM 超时、重试限制保留。
+- CLI/MCP 增加 Cookie 会话支持，可获取 B 站返回的 IP 属地；同时修复输入校验、`delete_run`、进度终态和多批分析呈现。
+- 桌面端“全量分析”现在真正分析全部评论，不再退回默认的 300 条抽样。
+- CLI/MCP 可选择词云、自定义分析模块等分析选项；测试运行目录隔离及测试模块独立运行得到修复。
+- 详细变更与已验证范围见 [v3.7.0 发布说明](docs/RELEASE_NOTES_3.7.0.md) 和 [发布记录](docs/RELEASE_3.7.0.md)。
 
 ### v3.6.0 (2026.09.10)
 - **改变了爬取任务的成功/失败判定**：主评论或动态的分页请求失败不再被当作「已到最后一页」静默结束，任务判定为失败并提示结果不完整；已取得的部分评论写入 run 目录（`comments.json` 与 CSV）可跨重启读取，部分动态保留在当前会话可导出。
