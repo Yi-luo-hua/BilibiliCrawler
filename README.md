@@ -17,7 +17,36 @@
 
 # BilibiliCrawler
 
-BilibiliCrawler 是一个 B 站评论 / 动态爬取与舆论分析桌面工具。v2.00 起项目迁移为 **Tauri 2 + React + TypeScript** 桌面应用，Python 爬虫和分析逻辑作为本地 sidecar 后端运行，通过本地进程通信完成爬取、扫码登录、LLM 分析和导出。
+BilibiliCrawler 是一个 B 站评论 / 动态爬取与舆论分析桌面工具。v2.00 起项目迁移为 **Tauri 2 + React + TypeScript** 桌面应用，Python 爬虫和分析逻辑作为本地 sidecar 后端运行，通过本地进程通信完成爬取、扫码登录、LLM 分析和导出。支持通过MCP调用。
+
+本项目先后使用Cursor,Trae,Warp,antigravity,Claude Code,Codex完成。
+如果有帮助的话，麻烦点个star⭐️谢谢喵！
+如果使用过程中遇到Bug或有新增功能需求请提Issue谢谢喵！
+
+## 界面展示
+![原始界面](docs/image/ScreenShot_2026-07-20_145934_010.png)
+
+![设置壁纸后界面](docs/image/ScreenShot_2026-07-20_150142_079.png)
+
+## 功能
+
+- 评论爬取：支持视频 BV/AV、动态、专栏链接。
+- 动态爬取：支持用户空间动态和关注页动态流。
+- 扫码登录：关注页动态流可通过 B 站 App 扫码登录。
+- 筛选与导出：支持关键词、时间范围、最大页数，导出 CSV。
+- 舆论分析：调用 LLM API 分析评论 / 动态主题、风险点、洞察和代表性内容。
+- 可视化图表：支持情绪分布、主题排行、时间趋势、等级分布、地域地图、词云图和深度分析模块。
+- 词云图：由 Python `wordcloud` 生成 PNG。
+- 自定义界面：支持浅色 / 暗色主题、本地背景图、背景透明度和模糊效果。
+- MCP 接入：agent 可越过桌面客户端，直接完成爬取与分析，详见 [docs/MCP.md](docs/MCP.md)。
+
+## 下载使用
+
+前往 [Releases](https://github.com/Yi-luo-hua/BilibiliCrawler/releases) 下载最新安装包：
+
+安装后从开始菜单或桌面快捷方式启动即可。安装包面向 Windows x64，默认当前用户安装，不需要额外安装 Python 环境。
+
+## 命令行与 MCP
 
 现已支持 MCP 调用，请阅读 [MCP 文档](docs/MCP.md)。已发布到 PyPI：
 
@@ -57,37 +86,6 @@ Cookie 等同于账号凭据：它只在内存里使用，不写入 run 目录�
 > 控制台是 GBK（代码页 936）时，`--help` 的中文会显示为乱码；用
 > `python -X utf8 -m bilibili_crawler --help` 或设置 `PYTHONIOENCODING=utf-8` 即可。
 > `doctor` 输出已经是 ASCII 转义，不受影响。
-
-> 旧版 Python GUI / 单 exe 代码保留在 `legacy-python-gui` 分支。主分支以后以 Windows 安装包桌面应用为主。
-
-本项目先后使用Cursor,Trae,Warp,antigravity,Claude Code,Codex完成。
-
-如果有帮助的话，麻烦点个star⭐️谢谢喵！
-
-如果使用过程中遇到Bug或有新增功能需求请提Issue谢谢喵！
-
-## 界面展示
-![原始界面](docs/image/ScreenShot_2026-07-20_145934_010.png)
-
-![设置壁纸后界面](docs/image/ScreenShot_2026-07-20_150142_079.png)
-
-## 功能
-
-- 评论爬取：支持视频 BV/AV、动态、专栏链接。
-- 动态爬取：支持用户空间动态和关注页动态流。
-- 扫码登录：关注页动态流可通过 B 站 App 扫码登录。
-- 筛选与导出：支持关键词、时间范围、最大页数，导出 CSV。
-- 舆论分析：调用 LLM API 分析评论 / 动态主题、风险点、洞察和代表性内容。
-- 可视化图表：支持情绪分布、主题排行、时间趋势、等级分布、地域地图、词云图和深度分析模块。
-- 词云图：由 Python `wordcloud` 生成 PNG。
-- 自定义界面：支持浅色 / 暗色主题、本地背景图、背景透明度和模糊效果。
-- MCP 接入：agent 可越过桌面客户端，直接完成爬取与分析，详见 [docs/MCP.md](docs/MCP.md)。
-
-## 下载使用
-
-前往 [Releases](https://github.com/Yi-luo-hua/BilibiliCrawler/releases) 下载最新安装包：
-
-安装后从开始菜单或桌面快捷方式启动即可。安装包面向 Windows x64，默认当前用户安装，不需要额外安装 Python 环境。
 
 ## 使用方式
 
@@ -235,6 +233,8 @@ manifest 中的 artifacts 路径相对于 run 目录存储（拷贝到其他机�
 对应版本清单中，历史版本计划仅保留对应阶段记录，不再追加新任务。
 
 ## 源码开发
+
+> 旧版 Python GUI / 单 exe 代码保留在 `legacy-python-gui` 分支。主分支以后以 Windows 安装包桌面应用为主。
 
 ### 环境要求
 
