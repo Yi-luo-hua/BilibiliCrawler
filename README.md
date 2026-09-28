@@ -2,9 +2,9 @@
 
 <img src="./assets/app_logo.png" alt="BilibiliCrawler Logo" width="250" />
 
-</div>
+# BilibiliCrawler
 
-<div align="center">
+**面向普通用户与 AI Agent 的 B 站评论 / 动态爬取与 LLM 舆论深度分析工具**
 
 [![GitHub Downloads](https://img.shields.io/github/downloads/Yi-luo-hua/BilibiliCrawler/total)](https://github.com/Yi-luo-hua/BilibiliCrawler/releases)
 [![GitHub Repo stars](https://img.shields.io/github/stars/Yi-luo-hua/BilibiliCrawler?style=social)](https://github.com/Yi-luo-hua/BilibiliCrawler/stargazers)
@@ -13,516 +13,269 @@
 [![GitHub pull request](https://img.shields.io/badge/PRs-welcome-blue)](https://github.com/Yi-luo-hua/BilibiliCrawler/pulls)
 [![Release](https://img.shields.io/github/v/release/Yi-luo-hua/BilibiliCrawler)](https://github.com/Yi-luo-hua/BilibiliCrawler/releases)
 
+<p align="center">
+  <a href="README_EN.md">English</a> | <b>简体中文</b>
+</p>
+
+[下载客户端 (Windows)](https://github.com/Yi-luo-hua/BilibiliCrawler/releases) • [MCP 接入指南](docs/MCP.md) • [开发计划与架构](docs/FORWARD_PLAN.md) • [更新日志](CHANGELOG.md)
+
 </div>
 
-# BilibiliCrawler
-
-BilibiliCrawler 是一个 B 站评论 / 动态爬取与舆论分析桌面工具。v2.00 起项目迁移为 **Tauri 2 + React + TypeScript** 桌面应用，Python 爬虫和分析逻辑作为本地 sidecar 后端运行，通过本地进程通信完成爬取、扫码登录、LLM 分析和导出。支持通过MCP调用。
-
-本项目先后使用Cursor,Trae,Warp,antigravity,Claude Code,Codex完成。
-如果有帮助的话，麻烦点个star⭐️谢谢喵！
+本项目先后使用Cursor,Trae,Warp,antigravity,Claude Code,Codex完成。  
+如果有帮助的话，麻烦点个star⭐️谢谢喵！  
 如果使用过程中遇到Bug或有新增功能需求请提Issue谢谢喵！
 
-## 界面展示
-![原始界面](docs/image/ScreenShot_2026-07-20_145934_010.png)
+---
 
-![设置壁纸后界面](docs/image/ScreenShot_2026-07-20_150142_079.png)
+## 📖 目录
 
-## 功能
+- [✨ 核心特性](#-核心特性)
+- [⚖️ 使用形态与能力对照](#️-使用形态与能力对照)
+- [🚀 快速上手](#-快速上手)
+  - [方式一：桌面客户端（推荐普通用户，免 Python 环境）](#方式一桌面客户端推荐普通用户免-python-环境)
+  - [方式二：MCP 协议接入（推荐 AI Agent）](#方式二mcp-协议接入推荐-ai-agent)
+  - [方式三：命令行 CLI 爬取与分析](#方式三命令行-cli-爬取与分析)
+- [🖥️ 桌面端功能指引](#️-桌面端功能指引)
+- [📊 数据导出与运行归档](#-数据导出与运行归档)
+- [🛠️ 源码开发与构建](#️-源码开发与构建)
+- [📁 核心项目结构](#-核心项目结构)
+- [📝 版本更新亮点](#-版本更新亮点)
+- [📄 许可证与免责声明](#-许可证与免责声明)
 
-- 评论爬取：支持视频 BV/AV、动态、专栏链接。
-- 动态爬取：支持用户空间动态和关注页动态流。
-- 扫码登录：关注页动态流可通过 B 站 App 扫码登录。
-- 筛选与导出：支持关键词、时间范围、最大页数，导出 CSV。
-- 舆论分析：调用 LLM API 分析评论 / 动态主题、风险点、洞察和代表性内容。
-- 可视化图表：支持情绪分布、主题排行、时间趋势、等级分布、地域地图、词云图和深度分析模块。
-- 词云图：由 Python `wordcloud` 生成 PNG。
-- 自定义界面：支持浅色 / 暗色主题、本地背景图、背景透明度和模糊效果。
-- MCP 接入：agent 可越过桌面客户端，直接完成爬取与分析，详见 [docs/MCP.md](docs/MCP.md)。
+---
 
-## 下载使用
+## ✨ 核心特性
 
-前往 [Releases](https://github.com/Yi-luo-hua/BilibiliCrawler/releases) 下载最新安装包：
+- **完整深度的评论抓取**：全面支持视频（BV/AV）、动态、专栏文章评论；支持完整楼中楼回复自动递归分页抓取，`max_pages=0` 可完整爬取全部评论。
+- **动态与关注流爬取**：支持指定用户 UID 空间动态，或通过 App 扫码登录抓取个人关注页动态流。
+- **LLM 舆论深度洞察**：对接兼容 OpenAI 格式的大语言模型（支持自定义 Base URL、模型名与 Key），支持抽样聚合与全量分批分析，输出情绪占比、主题排行、社会学/心理学深度透视与自定义分析视角。
+- **丰富的可视化呈现**：情绪分布环形图、主题排行条形图、时间热度趋势、用户等级分布、全国/海外地域地图热力图及 Python 词云图生成。
+- **现代化桌面体验**：基于 **Tauri 2 + React 19 + TypeScript + TailwindCSS** 打造，轻量原生，支持浅色/暗色主题、磨砂玻璃拟态、本地壁纸背景与毛玻璃特效。
+- **原生支持 MCP (Model Context Protocol)**：已发布至 PyPI，AI Agent（Claude Desktop、Antigravity、Cursor、Cline 等）无需启动桌面端，即可越过界面直接调用爬取与分析工具。
+- **严密的安全设计**：LLM 凭据全程内存保密、绝不落盘与进日志；抓取的评论内容自动封装安全标记 `<untrusted-data>`，防止 Prompt 注入攻击；CSV 导出内置防公式注入保护。
 
-安装后从开始菜单或桌面快捷方式启动即可。安装包面向 Windows x64，默认当前用户安装，不需要额外安装 Python 环境。
+---
 
-## 命令行与 MCP
+## ⚖️ 使用形态与能力对照
 
-现已支持 MCP 调用，请阅读 [MCP 文档](docs/MCP.md)。已发布到 PyPI：
+本项目提供桌面端与命令行/MCP 两套使用形态，请根据场景选择：
+
+| 功能模块 | 桌面客户端 (GUI) | 命令行 (CLI) | MCP Server (AI Agent) |
+| :--- | :---: | :---: | :---: |
+| **视频 / 动态 / 专栏评论爬取** | ✅ (支持主评论+楼中楼) | ✅ | ✅ |
+| **用户空间动态 / 关注流动态** | ✅ (含 B 站扫码登录) | ❌ | ❌ |
+| **IP 属地解析** | ✅ (需扫码登录) | ✅ (配置 `BILIBILI_COOKIE`) | ✅ (配置 `BILIBILI_COOKIE`) |
+| **LLM 舆论分析** | ✅ (抽样 / 全量) | ✅ | ✅ |
+| **自定义分析视角 (Prompt)** | ✅ | ✅ | ✅ |
+| **交互式图表展示** | ✅ (Recharts + 地图) | ❌ | ❌ |
+| **词云图生成 (PNG)** | ✅ (内置支持) | ✅ (需 `[analysis]` extra) | ✅ (需 `[analysis]` extra) |
+| **报告导出格式** | CSV / Markdown / JSON | CSV / Markdown / JSON | 结构化 ToolResult / 相对文件路径 |
+| **运行依赖环境** | 仅 Windows 10/11 x64<br>(**免安装 Python**) | Python 3.10+ | Python 3.10+ |
+
+---
+
+## 🚀 快速上手
+
+### 方式一：桌面客户端（推荐普通用户，免 Python 环境）
+
+1. 前往 [GitHub Releases](https://github.com/Yi-luo-hua/BilibiliCrawler/releases) 下载最新的 Windows 安装包（如 `BilibiliCrawler-Setup-3.7.0-x64.exe`）。
+2. 双击安装后直接从桌面或开始菜单启动即可，**无需预装 Python、Node.js 或任何运行库**。
+3. 界面展示：
+
+<div align="center">
+  <img src="docs/image/ScreenShot_2026-07-20_145934_010.png" alt="原始界面" width="48%" />
+  <img src="docs/image/ScreenShot_2026-07-20_150142_079.png" alt="自定义背景界面" width="48%" />
+</div>
+
+---
+
+### 方式二：MCP 协议接入（推荐 AI Agent）
+
+本项目已发布至 PyPI，任何支持 MCP 协议的 Agent 客户端均可轻松集成：
+
+#### 1. 安装包与环境配置
+```powershell
+# 推荐新建专用虚拟环境
+python -m venv .venv-agent
+.venv-agent\Scripts\pip install "bilibili-crawler[mcp]"
+
+# 验证安装
+.venv-agent\Scripts\bilibili-crawler doctor
+```
+
+#### 2. 配置到 MCP 客户端
+以 Claude Desktop、Cursor 或 Antigravity 为例，在配置文件中的 `mcpServers` 节点添加：
+
+```json
+{
+  "mcpServers": {
+    "bilibili-crawler": {
+      "command": "C:\\path\\to\\.venv-agent\\Scripts\\bilibili-crawler-mcp.exe",
+      "args": [],
+      "env": {
+        "BILIBILI_LLM_BASE_URL": "https://api.openai.com/v1",
+        "BILIBILI_LLM_MODEL": "gpt-4o-mini",
+        "BILIBILI_LLM_API_KEY": "sk-...",
+        "BILIBILI_COOKIE": "SESSDATA=your_sessdata; bili_jct=your_jct",
+        "PYTHONIOENCODING": "utf-8"
+      }
+    }
+  }
+}
+```
+
+> **提示**：
+> - **LLM 凭据**：仅分析类工具需要；纯爬取无需配置。若本机已在桌面端配置过 LLM，MCP 会自动发现并复用，无需在配置中明文写 Key。
+> - **BILIBILI_COOKIE**：可选配置。配置后 B 站返回评论的 IP 属地；留空则匿名爬取（属地字段为空）。
+> - 完整工具清单（`crawl_and_analyze`、`get_task_status`、`stop_task` 等）及调用说明详见 [docs/MCP.md](docs/MCP.md)。
+
+---
+
+### 方式三：命令行 CLI 爬取与分析
+
+无需启动界面，单条命令即可完成爬取与分析：
 
 ```powershell
-python -m pip install "bilibili-crawler[mcp]"
-bilibili-crawler --version
-bilibili-crawler doctor
-bilibili-crawler-mcp
+# 1. 基础爬取：只爬取视频前 5 页评论（保存为 JSON / CSV，不调用 LLM）
+bilibili-crawler crawl-comments "BV1GJ411x7h7" --max-pages 5
+
+# 2. 深度爬取并结合 LLM 分析（爬完整个评论区，支持自定义分析视角）
+# 注：LLM 凭据会自动读取桌面端已配置项，或通过环境变量设置 (BILIBILI_LLM_API_KEY / BASE_URL / MODEL)
+bilibili-crawler crawl-and-analyze "BV1GJ411x7h7" `
+  --max-pages 0 `
+  --strategy sample `
+  --sample-size 500 `
+  --custom-module "争议焦点=请分析评论区争议最激烈的分歧点是什么"
+
+# 3. 对已有运行目录 (run_id) 重新进行不同维度的 LLM 分析
+bilibili-crawler analyze-run "20260928-120000-video-BV1GJ411x7h7" `
+  --charts "sentiment_distribution,deep_analysis"
 ```
 
-省略 extras 只装 CLI/文本分析核心；MCP 选 `mcp`，源码桌面后端选 `desktop`。
-`analysis` extra（jieba/wordcloud）只在需要词云时安装：CLI 和 MCP 的默认图表集合不含词云，
-显式请求 `word_cloud`（CLI `--charts`、MCP `chart_keys`）时才会生成 PNG。
-从 checkout 安装用 `pip install ".[mcp]"`。
-包边界、旧入口兼容及安装后的数据目录见 [Python 包说明](docs/PYTHON_PACKAGE_BOUNDARY.md)。
+---
 
-**pip 包的能力边界**：上面的功能清单描述的是桌面应用。CLI 和 MCP 只做
-「单个视频 / 动态 / 专栏的评论爬取 + LLM 分析」，不含动态爬取（用户空间、关注页）、
-扫码登录和图表渲染——分析结果是 JSON/Markdown，另可按需生成词云 PNG。
+## 🖥️ 桌面端功能指引
 
-爬取页数、抽样条数、分批大小、分析模块和自定义视角都由调用方决定，不设上限；
-`--max-pages 0` 爬完整个评论区，楼中楼回复全部爬取。抽样超过 2000 条时会提醒耗时与费用。
-参数说明见 [docs/MCP.md](docs/MCP.md#参数与限制)。
+### 1. 评论爬取
+- **目标支持**：直接粘贴视频链接、BV/AV 号、动态链接（如 `t.bilibili.com/...`）或专栏文章链接（`cv...`）。
+- **参数控制**：可按需配置最大页数（`0` 为无限制爬完）、排序方式（最新/最热）及是否抓取楼中楼子评论。
+- **属地获取**：获取 IP 归属地需点击右上角「扫码登录」绑定当前会话。
 
-**登录**：CLI/MCP 默认匿名爬取，此时 B 站不返回评论 IP 属地，地域分布必然为空。
-需要属地时设置环境变量 `BILIBILI_COOKIE`（CLI 也可用 `--cookie`），值是浏览器里
-登录 B 站后的 Cookie 头，至少要包含 `SESSDATA`：
+### 2. 动态爬取
+- **空间动态**：输入目标 UP 主的 UID 或个人空间链接。
+- **关注页动态**：目标输入留空，扫码登录后直接抓取您账号的关注流更新。
+- **筛选过滤**：支持设置关键词过滤、发布时间范围（如最近 24 小时、最近 7 天）与最大抓取页数。
 
+### 3. 舆论分析
+- **模型配置**：兼容 OpenAI API 格式，填入服务商 Base URL、模型名称与 API Key。
+- **分析策略**：支持「抽样聚合」（快速提炼）与「全量分批」（宏观全貌统计）。
+- **模块勾选**：自由开关情绪分布、主题排行、时间趋势、等级分布、地域地图、深度分析、词云图及自定义视角。
+- **报告导出**：一键导出 Markdown 格式（附带溯源信息与内嵌词云）或 JSON 结构化数据。
+
+### 4. 界面个性化
+- 支持浅色 / 暗色两套主题。
+- 支持选取本地任意图片作为窗口壁纸，支持自由调节透明度与背景毛玻璃模糊强度。
+
+---
+
+## 📊 数据导出与运行归档
+
+### 运行数据存储 (`run_id`)
+每次爬取或分析都会在本地生成隔离的运行目录（包含 `manifest.json`、`comments.json`、`comments.csv`、`analysis.json` 等）：
+- 优先存储位置：`<项目目录>\analysis-runs\<run_id>\`
+- 生产回落位置：`%LOCALAPPDATA%\BilibiliCrawler\analysis-runs\<run_id>\`
+
+### 导出字段对照
+- **评论 CSV 字段**：`评论 ID`、`根评论 ID`、`是否为回复`、`用户名`、`用户等级`、`评论内容`、`点赞数`、`回复数`、`发布时间`、`IP 归属地`、`父评论 ID`、`用户 ID`。
+  *(以 `=,+,-,@` 开头的文本会自动增加单引号前缀，避免 Excel 公式注入)*
+- **动态 CSV 字段**：`动态 ID`、`用户名`、`类型`、`内容`、`发布时间`、`点赞数`、`评论数`、`转发数`。
+
+---
+
+## 🛠️ 源码开发与构建
+
+### 开发环境要求
+- **操作系统**：Windows 10/11 x64
+- **Node.js**：20+ (推荐使用 `pnpm 10.28.0+`)
+- **Python**：3.10+ (正式安装包发布需 CPython 3.13.15 x64)
+- **Rust**：Stable MSVC 工具链
+
+### 1. 本地依赖安装与运行
 ```powershell
-$env:BILIBILI_COOKIE = "SESSDATA=...; bili_jct=..."
-bilibili-crawler doctor          # bilibili_login.has_sessdata 应为 true
-```
-
-Cookie 等同于账号凭据：它只在内存里使用，不写入 run 目录或日志，也不会被自动发现；
-写在命令行上会进入 shell 历史和进程列表，优先用环境变量。
-
-> 控制台是 GBK（代码页 936）时，`--help` 的中文会显示为乱码；用
-> `python -X utf8 -m bilibili_crawler --help` 或设置 `PYTHONIOENCODING=utf-8` 即可。
-> `doctor` 输出已经是 ASCII 转义，不受影响。
-
-## 使用方式
-
-### 评论爬取
-
-1. 进入“评论爬取”页面。
-2. 输入视频 BV/AV、动态链接、专栏 CV 号或完整链接。
-3. 设置最大页数、排序方式和是否包含子评论。
-4. 点击“开始任务”，等待日志和进度完成。
-5. 如需获取评论 IP 归属地，先扫码登录：B 站只对带会话的请求返回属地，匿名爬取拿不到。
-6. 点击“导出 CSV”保存结果。
-
-### 动态爬取
-
-1. 进入“动态爬取”页面。
-2. 输入用户 UID 或 `space.bilibili.com/xxx` 链接。
-3. 留空目标时会尝试爬取关注页动态流，此时需要扫码登录。
-4. 可选设置关键词、时间范围和最大页数。
-5. 点击“开始任务”，完成后可以导出 CSV。
-
-### 舆论分析
-
-1. 先完成评论或动态爬取，让数据保存在当前 sidecar 会话中。
-2. 进入“舆论分析”页面。
-3. 填写 请求地址、模型名和 API Key。
-4. 数据源会自动匹配当前会话里已经爬取的数据。
-5. 选择抽样聚合或全量分批策略，并勾选需要生成的分析模块。
-6. 点击“开始分析”，完成后页面会展示所选图表和分析文本。
-7. 点击“导出报告”可保存 Markdown 或 JSON 分析结果。
-
-当前分析模块：
-
-- 情绪分布
-- 主题排行
-- 时间趋势
-- 等级分布
-- 地域地图
-- 词云图
-- 舆论深度分析
-
-说明：
-- 词云图 PNG 会写入固定资源目录，每次分析创建独立子目录：
-
-```text
-%LOCALAPPDATA%\BilibiliCrawler\analysis-assets\
-```
-
-子目录命名格式：
-
-```text
-YYYYMMDD-HHMMSS-来源标签[-BV号]
-```
-
-示例：
-
-```text
-20260606-134500-动态
-20260606-134500-视频评论-BV1abcdefghij
-20260606-134500-动态评论
-```
-
-### 评论运行数据
-
-桌面端的评论爬取会为每次任务创建一个独立的 `run_id` 目录，保存 `manifest.json` 和
-`comments.json`；有评论数据时还会生成 `comments.csv`。开发环境优先写入：
-
-```text
-<仓库>\analysis-runs\<run_id>\
-```
-
-仓库目录不可写时回落到 `%LOCALAPPDATA%\BilibiliCrawler\analysis-runs\`；也可以用
-`BILIBILI_AGENT_RUNS_DIR` 指定位置。运行数据不会自动删除，长时间大量爬取会持续占用磁盘，
-可在确认不再需要导出或分析后手动清理旧的 `run_id` 目录。
-
-manifest 中的 artifacts 路径相对于 run 目录存储（拷贝到其他机器仍可读），视频爬取会额外
-记录目标元数据（标题、UP 主、发布时间）。对同一 run 重新分析时，旧的分析结果会移入
-`archive/` 子目录保留，新结果使用标准文件名。通过 MCP 的 `list_runs` / `delete_run`
-工具（或直接删除目录）可以管理磁盘占用，例如保留最新 N 个运行、清理其余。
-
-当前桌面界面仍只使用本次 sidecar 会话中的任务，不提供重启后的任务恢复入口。评论爬取本身
-不需要 LLM API Key，运行目录不会写入 LLM 凭据。
-
-主评论或动态的分页请求失败时，任务会显示失败，并明确提示结果不完整；已经取得的数据仍可导出。
-部分评论会保存到对应 run 目录，部分动态仅保留在当前会话中。评论跨页重复时按评论 ID 去重，
-失败的“爬取并分析”任务不会自动继续调用 LLM。
-
-子评论（回复）拉取失败**不会**让整次爬取失败：B 站的回复接口对“该楼已删除 / 评论区已关闭”和
-“被风控限速”返回同样的空响应，无法区分，因此按警告处理。任务照常完成，日志与 `manifest.json`
-的 `warnings` 记录有多少条评论的回复没拿到，`counts.reply_failures` 给出同一个数字供程序判断；
-主评论与其余回复完整保留。需要补齐时对同一链接重新爬取即可。
-
-桌面导出的评论分析 Markdown 保留分析当时的视频来源、Run ID 和可匹配的评论署名，后续抓取
-其他视频不会改写旧分析报告的来源。主题排行导出与桌面共用标签截断规则，并预留独立数值空间。
-
-### 界面设置
-
-1. 进入“界面设置”页面。
-2. 选择浅色 / 暗色主题。
-3. 选择本地背景图。
-4. 调整背景透明度和模糊效果；恢复默认会清空自定义背景。
-
-## 导出字段
-
-评论 CSV 默认字段：
-
-- 评论 ID
-- 根评论 ID
-- 是否为回复
-- 用户名
-- 用户等级
-- 评论内容
-- 点赞数
-- 回复数
-- 发布时间
-- IP 归属地
-- 父评论 ID
-- 用户 ID
-
-以 `=`、`+`、`-`、`@` 等开头的单元格会自动加单引号前缀，防止 Excel 将其当作公式执行；因此 CSV 中个别
-以 `-` 开头的评论文本与原文会有一字符之差，完整字段（含时间戳等）以同目录 `comments.json` 为准，
-需要程序化对账时请读 JSON。新列只会追加到尾部，按列位置解析的脚本不会因新增列而错位。
-
-动态 CSV 默认字段：
-
-- 动态 ID
-- 用户名
-- 类型
-- 内容
-- 发布时间
-- 点赞数
-- 评论数
-- 转发数
-
-分析报告（评论分析的运行目录报告与桌面端导出 Markdown 均保留溯源头部与可匹配的评论归因）：
-
-- Markdown：标题会带上视频标题，报告头部含数据来源、UP 主、发布时间与 Run ID 溯源信息，正文包含总结、所选分析模块、情绪分布（含占比）、时间趋势表格、洞察、风险点和带用户名/点赞归因的代表性评论；运行目录中的报告会嵌入 `assets/word_cloud.png` 词云图。
-- JSON：完整分析结构，包含可视化图表数据层和元信息（含 `schema_version` 与 `elapsed_seconds` 耗时）。
-- Markdown 图表资源会写入报告同级的 assets 目录；词云图直接复用 sidecar 生成的 PNG 文件。
-
-## 项目规划
-
-当前待完成的兼容性修复、功能演进和后续工程工作见
-[BilibiliCrawler 前瞻计划](docs/FORWARD_PLAN.md)；正在准备中的版本，其发布步骤与验收项见对应的
-版本清单。最近一次是 [v3.7.0 发布记录](docs/RELEASE_3.7.0.md)。已完成任务的验收与发布证据保留在
-对应版本清单中，历史版本计划仅保留对应阶段记录，不再追加新任务。
-
-## 源码开发
-
-> 旧版 Python GUI / 单 exe 代码保留在 `legacy-python-gui` 分支。主分支以后以 Windows 安装包桌面应用为主。
-
-### 环境要求
-
-- Windows 10/11 x64
-- Python 3.10+
-- Node.js 20+
-- pnpm 10.28.0+
-- Rust stable MSVC toolchain
-
-### 安装依赖
-
-```powershell
+# 1. 安装 Python 核心依赖
 pip install -r requirements.txt
+
+# 2. 安装前端依赖
 corepack prepare pnpm@10.28.0 --activate
 corepack pnpm --dir desktop install
-```
 
-### 开发运行
-
-```powershell
+# 3. 启动开发模式（Tauri 桌面热重载）
 corepack pnpm --dir desktop tauri dev
 ```
 
-### 构建安装包
-
-正式 Windows 安装包固定使用 **CPython 3.13.15 x64**；这与源码功能支持 Python 3.10+ 是两个约束。
-构建脚本会拒绝其他 Python 版本，并用带 SHA-256 的锁文件安装 sidecar 运行时与 PyInstaller 工具链。
-
+### 2. 回归测试
+项目保持着高标准的自动化测试体系：
 ```powershell
-$ReleasePython = 'C:\path\to\cpython-3.13.15-venv\Scripts\python.exe'
-powershell -ExecutionPolicy Bypass -File scripts\build_installer.ps1 -Python $ReleasePython
-```
-
-应用版本以 `desktop/src-tauri/Cargo.toml` 的 `[package].version` 为唯一来源；Tauri 和构建脚本会自动读取该版本，`Cargo.lock` 由 Cargo 同步更新。构建流程使用锁定的 pnpm 版本、冻结锁文件和审核后的依赖构建脚本。
-
-桌面窗口左上角显示当前版本；侧栏“检查更新”查询 GitHub 最新正式版本，并提供更新说明和安装包下载入口。下载后退出应用，运行安装程序完成更新。浏览器预览显示项目版本，更新操作仅在桌面窗口可用。详见 [v3.7.0 发布说明](docs/RELEASE_NOTES_3.7.0.md)。
-
-产物位于：
-
-```text
-desktop\src-tauri\target\release\bundle\nsis\
-```
-
-### MCP / agent 接入
-
-除桌面客户端外，还可以让 agent 通过本地 MCP 服务器直接爬取和分析，无需启动界面。
-
-```powershell
-python -m venv .venv-agent
-.venv-agent\Scripts\python.exe -m pip install ".[mcp]"
-```
-
-在 MCP 宿主里把命令配成 `.venv-agent\Scripts\bilibili-crawler-mcp.exe`，
-无需指定仓库目录。也可以直接当命令行用：
-
-```powershell
-.venv-agent\Scripts\bilibili-crawler.exe crawl-comments "BV1GJ411x7h7" --max-pages 1
-```
-
-完整的工具清单、凭据配置、安全说明与故障排查见 [docs/MCP.md](docs/MCP.md)。
-
-### 回归测试
-
-```powershell
+# Python 端回归测试 (27 个模块，430+ 项测试)
 python -m unittest discover -s tests -v
-python -m py_compile backend\sidecar.py src\processor\analysis_processor.py
+
+# 前端类型检查与单元测试
+corepack pnpm --dir desktop typecheck
 node --experimental-strip-types --test desktop\tests\*.test.ts
-desktop\node_modules\.bin\tsc.cmd --noEmit -p desktop\tsconfig.json
+
+# Rust 宿主编译检查
 cargo check --manifest-path desktop\src-tauri\Cargo.toml --locked
 ```
 
-## 项目结构
+### 3. 构建发布安装包
+```powershell
+# 调用自动化脚本完成 sidecar 封包与 NSIS 安装程序生成
+powershell -ExecutionPolicy Bypass -File scripts\build_installer.ps1 -Python "path\to\python.exe"
+```
+产物将输出至：`desktop\src-tauri\target\release\bundle\nsis\`。
+
+---
+
+## 📁 核心项目结构
 
 ```text
 BilibiliCrawler/
-├─ assets/                         应用 logo 与图标资源
-├─ bilibili_crawler/                唯一 Python 运行实现，可安装命名空间
-│  ├─ agent.py / mcp_server.py / sidecar.py  CLI、MCP 与桌面协议适配
-│  ├─ api/ crawler/ exporter/ processor/ service/  爬取、分析与持久化
-│  ├─ config/ utils/                默认配置与链接解析
-│  └─ resources/stopwords.txt       通过 importlib.resources 加载的词表
-├─ pyproject.toml / setup.py        包元数据、extras、入口；版本从 Cargo 派生
-├─ backend/
-│  ├─ agent.py                    旧 CLI/MCP 兼容启动入口
-│  ├─ mcp_server.py               旧 MCP 模块别名
-│  └─ sidecar.py                   旧桌面构建/启动兼容入口
-├─ config/
-│  └─ config.py                    全局配置
-├─ desktop/                        Tauri + React 桌面前端
-│  ├─ public/
-│  │  └─ favicon.png
-│  ├─ src/
-│  │  ├─ assets/
-│  │  │  └─ app_logo.png
-│  │  ├─ components/
-│  │  │  ├─ AnalysisWorkspace.tsx  舆论分析配置与可视化仪表盘
-│  │  │  ├─ BackgroundLayer.tsx    自定义背景图层
-│  │  │  ├─ BottomActionBar.tsx    底部任务控制与导出
-│  │  │  ├─ RightPanel.tsx         右侧日志和进度面板
-│  │  │  ├─ SideNav.tsx            侧边导航
-│  │  │  ├─ TaskWorkspace.tsx      评论 / 动态任务表单
-│  │  │  └─ TitleBar.tsx           自定义标题栏
-│  │  ├─ lib/
-│  │  │  ├─ analysisCharts.ts      分析图表、地图和导出资产工具
-│  │  │  ├─ dynamicTarget.ts       动态 UID / 空间链接校验
-│  │  │  ├─ sidecarClient.ts       带请求关联与超时的 sidecar 客户端
-│  │  │  ├─ tauri.ts               Tauri invoke 封装
-│  │  │  └─ titleBarInteraction.ts 标题栏拖动与双击最大化交互
-│  │  ├─ state/
-│  │  │  └─ taskState.ts           爬取 / 分析任务状态机
-│  │  ├─ App.tsx
-│  │  ├─ main.tsx
-│  │  ├─ styles.css
-│  │  └─ types.ts
-│  ├─ src-tauri/
-│  │  ├─ src/
-│  │  │  └─ main.rs                Tauri Rust 入口和 sidecar 管道
-│  │  ├─ capabilities/
-│  │  ├─ icons/
-│  │  ├─ Cargo.toml
-│  │  └─ tauri.conf.json
-│  ├─ tests/                       桌面状态机与通信单元测试
-│  ├─ package.json
-│  ├─ pnpm-workspace.yaml          pnpm 依赖脚本审核配置
-│  └─ vite.config.ts
-├─ scripts/
-│  ├─ build_backend.ps1            安装 Python 依赖并用 PyInstaller 构建 sidecar
-│  └─ build_installer.ps1          NSIS 安装包构建
-├─ src/                            以下旧路径仅为模块别名，不保留重复实现
-│  ├─ api/bilibili_api.py          B 站 API 封装
-│  ├─ crawler/comment_crawler.py   评论爬虫
-│  ├─ crawler/dynamic_crawler.py   动态爬虫
-│  ├─ exporter/csv_exporter.py     CSV 导出
-│  ├─ processor/
-│  │  ├─ analysis_processor.py     LLM 舆论分析和词云图生成
-│  │  └─ data_processor.py         数据清洗与统计
-│  └─ service/                    headless 业务层，MCP 与 CLI 共用
-│     ├─ agent_service.py         编排、状态机、取消与持久化
-│     ├─ credentials.py           LLM 凭据解析（不落盘、不进日志）
-│     ├─ models.py                状态、错误码与默认值
-│     ├─ paths.py                 输出目录选择
-│     └─ run_store.py             run 目录读写与路径收敛
-├─ tests/
-│  ├─ fixtures/
-│  ├─ test_adapter_channel.py       sidecar RPC 通道回归测试
-│  ├─ test_agent_service.py         headless 服务层回归测试
-│  ├─ test_analysis_cancellation.py 分析停止与阻塞请求回归测试
-│  ├─ test_caller_policy.py         调用者策略回归测试
-│  ├─ test_dynamic_crawler.py       动态分页、异常与停止回归测试
-│  ├─ test_mcp_server.py            MCP 工具契约与不可信内容测试
-│  ├─ test_sidecar_analysis.py      sidecar 与分析回归测试
-│  └─ test_sidecar_characterization.py sidecar 端到端特征基准测试
-├─ utils/                          旧链接工具模块别名
-│  └─ helpers.py                   链接解析等工具函数
-├─ requirements.txt
-├─ requirements-agent.txt          MCP / CLI 额外依赖
-├─ requirements-desktop.lock       Windows sidecar 锁定运行时依赖
-├─ requirements-build.in           Windows sidecar 构建工具直接依赖
-└─ requirements-build.txt          Windows sidecar 带哈希构建锁
+├─ bilibili_crawler/       # 唯一 Python 核心实现与可分发包
+│  ├─ api/                 # B 站 API 封装与会话处理
+│  ├─ crawler/             # 评论与动态分页抓取引擎
+│  ├─ processor/           # LLM 舆论分析、文本处理与词云
+│  ├─ service/             # 核心业务层 (AgentService、任务持久化、凭据管理)
+│  ├─ sidecar.py           # 桌面端 Tauri IPC 管道通信适配器
+│  ├─ mcp_server.py        # MCP 协议 stdio 服务端实现
+│  └─ agent.py             # 命令行 CLI 入口
+├─ desktop/                # Tauri 2 + React 19 桌面应用源码
+│  ├─ src/                 # 前端界面、组件、图表与状态机
+│  └─ src-tauri/           # Rust 宿主工程与 sidecar 进程管理
+├─ docs/                   # 专项设计文档、MCP 规范与发布记录
+├─ scripts/                # 构建、打包校验与发布自动化脚本
+├─ tests/                  # 自动化回归测试套件
+├─ pyproject.toml          # Python 包规范元数据
+└─ CHANGELOG.md            # 完整历史版本更新日志
 ```
 
-## 更新日志
+---
 
-### v3.7.0 (2026.09.28)
-- 修复楼中楼回复只抓取第一页（最多 20 条）的问题；现在按回复总数继续分页，直到获取完整回复。
-- CLI/MCP 取消 50 页爬取上限，`max_pages=0` 可抓取整个评论区；分析样本数、批大小和共享分析层的输出数量上限也已移除。请求节奏和 LLM 超时、重试限制保留。
-- CLI/MCP 增加 Cookie 会话支持，可获取 B 站返回的 IP 属地；同时修复输入校验、`delete_run`、进度终态和多批分析呈现。
-- 桌面端“全量分析”现在真正分析全部评论，不再退回默认的 300 条抽样。
-- CLI/MCP 可选择词云、自定义分析模块等分析选项；测试运行目录隔离及测试模块独立运行得到修复。
-- 详细变更与已验证范围见 [v3.7.0 发布说明](docs/RELEASE_NOTES_3.7.0.md) 和 [发布记录](docs/RELEASE_3.7.0.md)。
-- 已发布：标签 `v3.7.0` 指向 `622b3e1`，Windows x64 安装包随 GitHub Release 发布，`bilibili-crawler` 3.7.0 已上架 PyPI；三处 wheel/sdist SHA-256 一致。桌面实机与有效 LLM 成功路径未在本次复验，见发布记录。
+## 📝 版本更新亮点
 
-### v3.6.0 (2026.09.10)
-- **改变了爬取任务的成功/失败判定**：主评论或动态的分页请求失败不再被当作「已到最后一页」静默结束，任务判定为失败并提示结果不完整；已取得的部分评论写入 run 目录（`comments.json` 与 CSV）可跨重启读取，部分动态保留在当前会话可导出。
-- 子评论（回复）拉取失败按警告处理，不让整次爬取失败：回复接口对「该楼已删除 / 评论区已关闭」和「被风控限速」返回同样的空响应，无法区分。`manifest.json` 的 `warnings` 与 `counts.reply_failures` 记录丢失条数，主评论与其余回复完整保留。
-- 评论跨页重复改为按评论 ID 逐条去重；「爬取并分析」在爬取失败时不再继续调用 LLM。
-- 桌面端导出的分析 Markdown 保留分析当时的视频来源、Run ID 与评论署名，后续抓取其他视频不再改写旧报告的来源；主题排行导出与桌面共用标签截断规则，按字符截断并为数值预留独立宽度。
-- provider 以 HTTP 400/422 拒绝并在 `param` 中指明 `temperature` 时，移除该字段重发一次；此前指向不支持自定义采样参数的模型（如 OpenAI 推理模型）是硬失败。provider 未指明字段时不改请求、不重发。
-- 标题栏应用名下显示当前版本：桌面窗口读取安装版本，浏览器预览读取 Cargo 项目版本。
-- 侧栏新增手动检查更新与更新说明；只接受正式版本，按数字比较，不提示降级。失败提示只显示本应用自己的文案，不回显远端响应内容。
-- 仅当 GitHub Release 上存在名称、版本与下载地址完全匹配的已上传 Windows x64 安装包时才给出下载入口；下载在默认浏览器中进行，需用户退出应用后手动运行安装程序。
-- 侧栏新增 Star 按钮，点击打开项目 GitHub 页面，由用户自行点星。
-- 已发布：标签 `v3.6.0` 指向 `492b85f`，Windows x64 安装包随 GitHub Release 发布，`bilibili-crawler` 3.6.0 已上架 PyPI，三处产物 SHA-256 一致。安装器清理与「运行中升级」两条经真机验收；**未执行的验收项见 `docs/RELEASE_3.6.0.md` 的验收记录**，其中分析成功路径的产物只由回归测试覆盖。
+### 🌟 v3.7.0 (最新发布)
+- **全面解除抓取限制**：评论区 `max_pages=0` 支持全量爬完，楼中楼子评论支持全部按需自动递归翻页。
+- **Cookie 会话与 IP 属地**：CLI 与 MCP 支持 `BILIBILI_COOKIE`，可完整解析 B 站评论的真实归属地。
+- **桌面全量分析修复**：修复桌面端全量分析偶尔回退到默认 300 条抽样的问题，真实分析全部样本。
+- **安全与稳定性强化**：完善词云图与自定义模块在各调用端下的表现，严格隔离不可信数据与凭据日志。
 
-### v3.5.0 (2026.09.03)
-- 新增自定义分析文本模块（对应 Issue #18）：可自行填写标题与提示词，最多保存 8 个、单次分析最多启用 3 个，结果进入界面卡片与 Markdown 报告。
-- 模块定义随分析结果写入快照，模块改名或删除后历史报告的章节标题仍与运行时一致。
-- 自定义提示词按数据处理：用户文本包裹在显式分隔块内，块外声明其只能描述分析角度，不得改变输出结构、字段名与语言。
-- provider 以 HTTP 400/422 拒绝时，错误信息附带对方自报的 `code`、`param` 与 `status`；仅在形如裸标识符时输出，远端措辞不回显。
-- 安装器在写入新文件前清理上一版遗留的 sidecar 运行时文件；v3.2.0 及更早遗留在该目录下的运行数据保留给应用迁移。
-- 构建产出 `installer-payload-manifest.json` 打包清单并随 Release 发布，供下一版比对出被移除的路径。
-- 已发布：标签 `v3.5.0` 指向 `16a7b4a`，Windows x64 安装包随 GitHub Release 发布，`bilibili-crawler` 3.5.0 已上架 PyPI，三处产物 SHA-256 一致。安装器清理经隔离回归验证；未执行的验收项见 `docs/RELEASE_3.5.0.md` 的验收记录。
+👉 **[点击查阅完整历史更新日志 (v1.0.0 ~ v3.7.0) »](CHANGELOG.md)**
 
-### v3.4.0 (2026.09.02)
-- 新增可安装的 `bilibili-crawler` Python 包与 `bilibili-crawler`、`bilibili-crawler-mcp` 稳定命令，支持 Python 3.10–3.13；旧源码入口保留为薄兼容层。
-- 桌面端、CLI 与 MCP 统一按同一个 profile 解析 provider、model 与 API Key，避免把凭据发往错误端点。
-- 新增只读 `doctor` 诊断，展示配置来源、有效 provider/model、运行目录与 MCP 状态；只有显式要求联网检查时才访问 provider。
-- 分离持久化 run 与分析 attempt：重新分析失败或取消时保留上一份完整报告，成功后一次性原子切换有效版本。
-- 为鉴权、模型、端点、网络、超时、限流与解析失败提供稳定错误分类，可恢复故障才允许有限重试，并提示直接复用已爬取的 run。
-- 长分析进度补充已用时间、当前批次、请求次数与实际超时；连接/读取超时保持各 90 秒，不新增任务总 deadline。
-- 补齐真实 MCP stdio 子进程验收，覆盖中文内容、Windows 编码、进程重启复用 run 与可选 live smoke。
-- Windows 上目录发布遇到短暂共享锁（WinError 5/32）时按有限退避重试；持续锁与目标冲突仍 fail-closed。
-- 新增 Python 包 CI 门禁与手工发布链路：产物哈希锁定、源码逐字节绑定，GitHub Release → TestPyPI → PyPI 顺序发布并使用 OIDC Trusted Publishing。
-- 已按 `docs/RELEASE_3.4.0.md` 完成真机验收与发布门禁。标签 `v3.4.0` 指向 `dc71f58`；Windows x64 安装包随
-  GitHub Release 发布，`bilibili-crawler` 3.4.0 已上架 PyPI，两处与 Release 资产的 SHA-256 一致。
+---
 
-### v3.3.0 (2026.08.30)
-- 桌面评论爬取与 `source == "comments"` 的分析已迁入共享 `AgentService`，同时保留既有 RPC、事件、取消、空结果和 source 回退契约。
-- 新增适配器 outcome 通道与类型化事件，并补齐终态读取、深拷贝所有权、默认关闭零额外调用及取消竞态的回归覆盖。
-- 新增真实 `SidecarClient` 跨进程端到端测试，覆盖请求关联、进度事件、完成事件、取消与重试。
-- 强化 run 存储、报告与 CSV 导出：归一化相对产物路径、历史分析归档、元数据与来源记录、运行列举/删除、公式注入防护及流式 JSON 写入。
-- `analysis.json`、Markdown 报告和分析归档现在都会递归脱敏已注册凭据；词云损坏或超限时只报告 warning，不再生成失效链接。
-- 分析 JSON、Markdown 与词云采用整组 staging + 原子提交，失败时回滚，避免分析产物只更新一部分。
-- MCP 扩展为 7 个工具，新增持久化 run 的列举与删除能力。
-- 已按 `docs/RELEASE_3.3.0.md` 完成 Tauri 真机验收，标签 `v3.3.0` 指向 `6ae33df`，Windows x64 安装包随 GitHub Release 发布。
+## 📄 许可证与免责声明
 
-### v3.2.0 (2026.08.25)
-- 新增本地 MCP 服务器，agent 可越过桌面客户端直接完成「爬取 → 分析 → 导出报告」，对应 Issue #3。
-- 新增 headless 业务层 `src/service/`，运行结果按 `run_id` 落盘，MCP 进程重启后仍可继续分析。
-- 新增薄 CLI `python -m backend.agent`，同一套能力可脱离 MCP 宿主直接使用。
-- MCP 工具采用有界阻塞：超过等待窗口即返回 `run_id` 供轮询，长任务不会被宿主单次调用超时打断。
-- 强化不可信内容处理：评论相关的 system prompt 明确禁止执行评论内夹带的指令，工具返回的摘要带不可信标记并限长，原文引用不进入返回值。
-- headless 默认爬取页数下调为 5、硬上限 50，且不可被工具参数突破。
-- 上游报错中回显的 API Key 会被脱敏，不会写入 manifest、日志或工具返回值。
-- run 目录下所有文件采用临时文件 + 原子替换写入，进程中途被杀不会留下截断的 manifest。
-- 停止任务在导出阶段落下时也会正确判定为已取消，不会被完成状态覆盖；停止与终态提交在同一把锁内完成，不会出现内存与 manifest 状态不一致。
-- 开始爬取前发出的停止请求现在真正生效，不会再因爬虫入口重置停止标志而空跑一轮网络请求。
-- 中途停止会保留已经爬到的评论，与 stop_task 的提示一致。
-- CSV 导出失败会在 warnings 中明确报告，不再静默按成功处理。
-- 修复停止真实爬虫时的无限递归：爬虫 stop() 会写进度日志并重新进入进度回调，现改为可重入保护，停止在真实链路上可用且不会误判为失败。
-- 修正凭据自动探测路径：按 tauri.conf.json 的 installMode=currentUser，默认安装位置是 `%LOCALAPPDATA%\BilibiliCrawler`，此前误写为其下的 Programs 子目录。
-- 取消任务时的提示按是否真的落盘了数据区分，不再无条件声称保留了部分结果。
-- 取消发生在爬虫构造期间时直接短路，不再发出 BV/动态元数据请求；此前虽不会抓取评论分页，但仍会调用一次视频信息接口。
-- 修复词云取消测试在冷启动首次运行时因字体缓存构建而偶发超时的问题。
-- 桌面评论爬取接入共享 `AgentService`，保留现有 RPC、空结果和停止语义，并将评论运行数据按 `run_id` 落盘。
+### 许可证
+本项目采用 [MIT License](LICENSE) 开源。
 
-### v3.1.1 (2026.07.27)
-- 修复自定义标题栏双击无法最大化或还原窗口的问题，并补充标题栏单击拖动、双击切换最大化的回归测试。
-- 修复扫码登录、选择背景和关闭按钮在鼠标悬浮时背景变白或透明的问题，同时保留蓝色主操作按钮的现有效果。
-- 将应用版本统一由 `Cargo.toml` 管理，Tauri 配置、前端包和安装脚本不再重复维护版本号。
-
-### v3.1.0 (2026.07.27)
-- 修复动态接口异常被误报为成功获取 0 条的问题，网络、登录和风控错误现在会进入明确的失败流程。
-- 修复无效动态 UID 静默切换关注流，以及混合新旧时间戳页面导致提前停止、遗漏后续有效动态的问题。
-- 改进动态停止响应，OPUS 文字补齐期间可快速结束任务；空间动态与关注动态共用统一分页流程，减少重复代码。
-- 修复舆论分析在 LLM 请求或词云生成期间点击停止长时间无响应的问题，阻塞阶段会持续检查取消信号。
-- 新增独立的 `cancelled` 业务状态，主动停止不再显示为分析失败，停止后可以立即重新开始任务。
-- 加强 sidecar 服务依赖注入、RPC 请求关联、任务状态机以及动态 / 分析取消链路的自动化回归覆盖。
-
-### v3.0.1 (2026.06.06)
-- 修复 LLM 返回非标准 JSON（尾随逗号、嵌套对象截断）导致分析失败的问题，改用括号计数解析 + 尾逗号修复回退。
-- 修复词云图在前端不显示的问题：sidecar 改以 base64 编码传输 PNG，不再依赖 asset 协议文件路径。
-
-### v3.00 (2026.06.06)
-- 新增舆论分析工作区，支持评论 / 动态数据源、LLM 请求配置、抽样聚合和全量分批分析。
-- 新增主题排行、时间趋势、等级分布、地域地图、词云图和舆论深度分析可视化模块。
-- 新增 Markdown / JSON 分析报告导出，Markdown 可携带图表资源和词云 PNG。
-- 新增 `wordcloud` / `jieba` / `matplotlib` 依赖打包校验，安装包内置 Python sidecar 依赖，用户无需额外安装 Python 包。
-- 改进桌面交互与任务状态展示，补充 sidecar 分析回归测试。
-
-### v2.00 (2026.05.27)
-- 主架构迁移到 Tauri 2 + React 19 + TypeScript + Vite + Tailwind。
-- Python 爬虫逻辑改为 sidecar 后台进程，前端通过 JSON 请求 / 事件通信。
-- 发布形式从单 exe 改为 NSIS 安装包。
-- 新增风格化桌面 UI、玻璃面板、自定义背景、运行日志和进度条。
-- 动态图文内容支持多图链接导出。
-- 修复扫码登录 cookie 提取、限流重试、CSV 空数据导出等问题。
-
-### v1.30 (2026.05.25)
-- 新增动态爬取模式（用户空间 + 关注页动态流）
-- 新增扫码登录功能
-- 评论/动态双模式 GUI，关键词筛选 + 时间范围过滤
-
-### v1.20 (2026.04.01)
-- 支持动态评论和专栏文章评论爬取
-- 自动识别输入类型，新增统一解析器
-
-### v1.10 (2026.02.15)
-- 子评论并发爬取（4线程），自适应请求延迟
-- Light / Dark 双主题切换
-
-### v1.0.0 (2025.12.9)
-- 初始版本，支持视频评论爬取 + GUI + CSV导出
-
-## 许可证
-
-[MIT License](LICENSE)
-
-## 免责声明
-
-本项目仅供学习和研究使用，请遵守 B 站相关协议和法律法规。
+### 免责声明
+本项目仅供学习和研究使用。请使用者严格遵守 B 站相关开发者协议、服务条款及相关法律法规。
