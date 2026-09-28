@@ -4,7 +4,7 @@
 
 # BilibiliCrawler
 
-**面向普通用户与 AI Agent 的 B 站评论 / 动态爬取与 LLM 舆论深度分析工具**
+**面向用户与 AI Agent 的 B 站评论 / 动态爬取与 LLM 舆论深度分析工具**
 
 [![GitHub Downloads](https://img.shields.io/github/downloads/Yi-luo-hua/BilibiliCrawler/total)](https://github.com/Yi-luo-hua/BilibiliCrawler/releases)
 [![GitHub Repo stars](https://img.shields.io/github/stars/Yi-luo-hua/BilibiliCrawler?style=social)](https://github.com/Yi-luo-hua/BilibiliCrawler/stargazers)

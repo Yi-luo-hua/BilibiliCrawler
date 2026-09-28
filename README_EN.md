@@ -4,7 +4,7 @@
 
 # BilibiliCrawler
 
-**A Bilibili comment & dynamic post crawler with LLM sentiment & public opinion analysis for both end users and AI Agents.**
+**A Bilibili comment & dynamic post crawler with LLM sentiment & public opinion analysis for both users and AI Agents.**
 
 [![GitHub Downloads](https://img.shields.io/github/downloads/Yi-luo-hua/BilibiliCrawler/total)](https://github.com/Yi-luo-hua/BilibiliCrawler/releases)
 [![GitHub Repo stars](https://img.shields.io/github/stars/Yi-luo-hua/BilibiliCrawler?style=social)](https://github.com/Yi-luo-hua/BilibiliCrawler/stargazers)
