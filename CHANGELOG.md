@@ -12,6 +12,7 @@
 - 修正中英文 MCP 配置示例的 Cookie 占位符及 Windows 路径格式，保持现有包审计规则。
 - 锁定构建依赖 `source-map-js` 1.2.2，修复依赖审计发现的高危问题。
 - 发布说明与验收边界见 [v3.8.0 发布说明](docs/RELEASE_NOTES_3.8.0.md) 和 [发布记录](docs/RELEASE_3.8.0.md)。
+- 已发布：标签 `v3.8.0` 指向 `e0c8415`，GitHub Release 包含 Windows x64 安装包及 Python wheel/sdist 等七个已验证资产；本次未同步至 PyPI。
 
 ## v3.7.0 (2026.09.28)
 - 修复楼中楼回复只抓取第一页（最多 20 条）的问题；现在按回复总数继续分页，直到获取完整回复。
