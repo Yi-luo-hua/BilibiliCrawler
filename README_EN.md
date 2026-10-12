@@ -78,7 +78,7 @@ BilibiliCrawler provides two usage options: a desktop GUI and a headless CLI / M
 
 ### Option 1: Desktop Application (Recommended for general users, No Python needed)
 
-1. Go to [GitHub Releases](https://github.com/Yi-luo-hua/BilibiliCrawler/releases) and download the latest Windows installer (e.g. `BilibiliCrawler-Setup-3.7.0-x64.exe`).
+1. Go to [GitHub Releases](https://github.com/Yi-luo-hua/BilibiliCrawler/releases) and download the latest Windows installer (e.g. `BilibiliCrawler-Setup-3.8.0-x64.exe`).
 2. Double-click to install and launch from the Start menu or desktop shortcut. **No Python, Node.js, or runtime libraries required**.
 3. Interface Preview:
 
@@ -260,13 +260,13 @@ BilibiliCrawler/
 
 ## 📝 Release Highlights
 
-### 🌟 v3.7.0 (Latest Release)
-- **Uncapped Crawling Limits**: `max_pages=0` crawls the entire comment section; nested sub-comments (replies) now page automatically until completely retrieved.
-- **Cookie Session & IP Locations**: CLI & MCP support `BILIBILI_COOKIE` to parse verified IP locations.
-- **Desktop Full Analysis Fix**: Fixed an issue where full analysis occasionally fell back to 300 samples; now analyzes the entire dataset.
-- **Security & Stability Hardening**: Improved word cloud handling and custom module parsing; strictly isolated untrusted data and credential scrubbing.
+### 🌟 v3.8.0 (Latest Release)
+- **Large Analysis Dialog**: Completed analysis opens a spacious result window that can be closed and reopened.
+- **Complete Analysis Text**: Summaries, key points, deep analysis and custom modules preserve full text, lists and paragraph breaks.
+- **Complete Chart Exports**: Long topic labels wrap, while topic and time-trend SVG exports retain all data.
+- **Interaction Fixes**: Interior blank clicks keep the dialog open; closing restores focus, and repeated synchronization does not reopen it.
 
-👉 **[View Full Historical Changelog (v1.0.0 ~ v3.7.0) »](CHANGELOG.md)**
+👉 **[View Full Historical Changelog (v1.0.0 ~ v3.8.0) »](CHANGELOG.md)**
 
 ---
 

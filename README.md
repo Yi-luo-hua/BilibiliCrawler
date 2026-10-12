@@ -78,7 +78,7 @@
 
 ### 方式一：桌面客户端（推荐普通用户，免 Python 环境）
 
-1. 前往 [GitHub Releases](https://github.com/Yi-luo-hua/BilibiliCrawler/releases) 下载最新的 Windows 安装包（如 `BilibiliCrawler-Setup-3.7.0-x64.exe`）。
+1. 前往 [GitHub Releases](https://github.com/Yi-luo-hua/BilibiliCrawler/releases) 下载最新的 Windows 安装包（如 `BilibiliCrawler-Setup-3.8.0-x64.exe`）。
 2. 双击安装后直接从桌面或开始菜单启动即可，**无需预装 Python、Node.js 或任何运行库**。
 3. 界面展示：
 
@@ -262,13 +262,13 @@ BilibiliCrawler/
 
 ## 📝 版本更新亮点
 
-### 🌟 v3.7.0 (最新发布)
-- **全面解除抓取限制**：评论区 `max_pages=0` 支持全量爬完，楼中楼子评论支持全部按需自动递归翻页。
-- **Cookie 会话与 IP 属地**：CLI 与 MCP 支持 `BILIBILI_COOKIE`，可完整解析 B 站评论的真实归属地。
-- **桌面全量分析修复**：修复桌面端全量分析偶尔回退到默认 300 条抽样的问题，真实分析全部样本。
-- **安全与稳定性强化**：完善词云图与自定义模块在各调用端下的表现，严格隔离不可信数据与凭据日志。
+### 🌟 v3.8.0 (最新发布)
+- **分析结果大屏**：分析完成后自动打开结果窗口，支持关闭与重新查看。
+- **完整分析正文**：总结、要点、深入剖析和自定义分析保留全文、列表与段落换行。
+- **完整图表导出**：长主题标签自动换行，主题 SVG 和时间趋势 SVG 保留全部数据。
+- **交互修复**：点击窗口内部空白不会误关闭，关闭后恢复焦点，重复同步不会重新弹出。
 
-👉 **[点击查阅完整历史更新日志 (v1.0.0 ~ v3.7.0) »](CHANGELOG.md)**
+👉 **[点击查阅完整历史更新日志 (v1.0.0 ~ v3.8.0) »](CHANGELOG.md)**
 
 ---
 
