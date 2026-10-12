@@ -14,6 +14,7 @@
 - 主题名称按 Unicode 字符换行，长标签增加行间距；桌面主题图和导出 SVG 均保留全部主题。
 - 时间趋势 SVG 保留全部日期及早期峰值，跨月分析的导出与页面数据一致。
 - 中英文 MCP 配置示例使用明确的 Cookie 占位符和 Windows 支持的路径格式。
+- 构建依赖 `source-map-js` 锁定到修复版本 1.2.2，处理 [GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q)。
 
 ## 下载与验收范围
 
