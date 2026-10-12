@@ -9,7 +9,7 @@ import {
   UserRoundCheck,
 } from "lucide-react";
 import logo from "./assets/app_logo.png";
-import { AnalysisWorkspace } from "./components/AnalysisWorkspace";
+import { AnalysisResultScreen, AnalysisWorkspace } from "./components/AnalysisWorkspace";
 import { BackgroundLayer } from "./components/BackgroundLayer";
 import { BottomActionBar } from "./components/BottomActionBar";
 import { RightPanel } from "./components/RightPanel";
@@ -119,6 +119,7 @@ export function App() {
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(
     null,
   );
+  const [showAnalysisResult, setShowAnalysisResult] = useState(false);
   const [configLoaded, setConfigLoaded] = useState(false);
   const [llmApiKey, setLlmApiKey] = useState("");
   const running =
@@ -126,6 +127,12 @@ export function App() {
     taskState.phase === "running" ||
     taskState.phase === "stopping";
   const stopping = taskState.phase === "stopping";
+
+  // A result is delivered through both events and analysis.latest. Open once
+  // per analysis, so syncing the same result does not undo a user's dismissal.
+  useEffect(() => {
+    setShowAnalysisResult(Boolean(analysisResult));
+  }, [analysisResult?.meta.generated_at]);
 
   useEffect(() => {
     readConfig()
@@ -574,6 +581,7 @@ export function App() {
               hasDynamics={hasDynamics}
               analysisSource={autoAnalysisSource}
               analysisResult={analysisResult}
+              onOpenResult={() => setShowAnalysisResult(true)}
               analysisStats={statsByMode.analysis}
             />
           ) : (
@@ -607,6 +615,9 @@ export function App() {
           onExport={exportCsv}
         />
       </main>
+      {showAnalysisResult && analysisResult ? (
+        <AnalysisResultScreen result={analysisResult} onClose={() => setShowAnalysisResult(false)} />
+      ) : null}
       {showQr && (
         <div className="modal-backdrop" onClick={closeQrLogin}>
           <div

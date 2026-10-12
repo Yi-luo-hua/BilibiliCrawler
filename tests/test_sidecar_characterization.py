@@ -976,9 +976,9 @@ class AnalysisBaseline(IsolatedRunRootTestCase):
                 # Whatever the source, the sidecar never resolves it itself.
                 self.assertTrue(sidecar.has("finished", "analysis"))
 
-    def test_analysis_latest_returns_the_compact_display_shape(self) -> None:
+    def test_analysis_latest_returns_the_display_shape_without_duplicate_report(self) -> None:
         # The RPC never returns the raw result: _display_analysis_result
-        # truncates every field and blanks report_markdown, while the raw result
+        # preserves analysis fields and blanks report_markdown, while the raw result
         # stays in memory for analysis.export. Both halves are pinned here.
         raw_png = WORD_CLOUD_BYTES
         processor = StubAnalysisProcessor(result={
