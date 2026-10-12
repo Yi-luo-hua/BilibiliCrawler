@@ -110,7 +110,7 @@ Add the following to your MCP client configuration (e.g., Claude Desktop's `clau
 {
   "mcpServers": {
     "bilibili-crawler": {
-      "command": "C:\\path\\to\\.venv-agent\\Scripts\\bilibili-crawler-mcp.exe",
+      "command": "C:/path/to/.venv-agent/Scripts/bilibili-crawler-mcp.exe",
       "args": [],
       "env": {
         "BILIBILI_LLM_BASE_URL": "https://api.openai.com/v1",
