@@ -318,7 +318,7 @@ class SidecarAnalysisTests(unittest.TestCase):
         self.assertEqual(events[-1].get("status"), "idle")
         self.assertFalse(sidecar._is_task_running())
 
-    def test_run_analysis_success_emits_finished_then_idle_with_compact_result(self) -> None:
+    def test_run_analysis_success_emits_finished_then_idle_with_full_result(self) -> None:
         original_analyze = LLMAnalysisProcessor.analyze
 
         def fake_analyze(comments, dynamics, params, progress=None, cancel_event=None):
@@ -361,9 +361,39 @@ class SidecarAnalysisTests(unittest.TestCase):
         self.assertEqual(events[-1].get("status"), "idle")
         self.assertTrue(finished[0].get("result"))
         result = finished[0]["result"]
-        self.assertLessEqual(len(result["summary"]), 2001)
+        self.assertEqual(result["summary"], sidecar._last_analysis["summary"])
         self.assertEqual(result["report_markdown"], "")
-        self.assertLessEqual(len(result["topic_counts"][0]["name"]), 81)
+        self.assertEqual(result["topic_counts"], sidecar._last_analysis["topic_counts"])
+        for key in ("risk_points", "insights", "notable_quotes"):
+            self.assertEqual(result[key], sidecar._last_analysis[key])
+
+    def test_analysis_latest_preserves_full_text_and_every_list_entry(self) -> None:
+        text = "完整分析😀\n" * 400 + "全文末尾"
+        text_keys = ("summary_points", "risk_points", "insights", "notable_quotes")
+        chart_keys = (
+            "sentiment_counts", "topic_counts", "word_counts", "time_series",
+            "region_counts", "overseas_region_counts", "user_level_counts",
+            "content_type_counts", "engagement_items",
+        )
+        raw = {
+            "summary": text,
+            **{key: [f"{index}: {text}" for index in range(12)] for key in text_keys},
+            **{key: [{"name": text, "value": index} for index in range(90)] for key in chart_keys},
+            "deep_analysis": {key: text for key in ("sociology", "psychology", "philosophy")},
+            "custom_results": {"custom_abcdef": text},
+            "report_markdown": "# 报告\n" + text,
+            "meta": {},
+        }
+        sidecar = CaptureSidecar()
+        sidecar._last_analysis = raw
+        sidecar.handle({"id": "full-result", "method": "analysis.latest"})
+        response = next(item for item in sidecar.messages if item.get("id") == "full-result")
+        self.assertTrue(response["ok"])
+        for key in ("summary", "deep_analysis", "custom_results", *text_keys, *chart_keys):
+            with self.subTest(field=key):
+                self.assertEqual(response["result"][key], raw[key])
+        self.assertEqual(raw["summary"], text)
+        self.assertEqual(raw["report_markdown"], "# 报告\n" + text)
 
     def test_run_analysis_cancel_uses_explicit_cancel_event(self) -> None:
         original_analyze = LLMAnalysisProcessor.analyze

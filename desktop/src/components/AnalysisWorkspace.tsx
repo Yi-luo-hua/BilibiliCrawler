@@ -1,7 +1,7 @@
-import { useEffect, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { useEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import { AlertTriangle, BrainCircuit, Database, FileText, Gauge, MapPinned, Tags } from "lucide-react";
+import { AlertTriangle, BrainCircuit, Database, FileText, Gauge, MapPinned, Maximize2, Tags, X } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -14,7 +14,8 @@ import {
   ResponsiveContainer,
   Tooltip,
   XAxis,
-  YAxis
+  YAxis,
+  type YAxisTickContentProps
 } from "recharts";
 import {
   analysisChartOptions,
@@ -25,7 +26,7 @@ import {
   CUSTOM_MODULE_TITLE_LIMIT,
   chinaMapLocations,
   chinaMapViewBox,
-  compactChartLabel,
+  wrapChartLabel,
   getAnalysisChartOptionsForSource,
   getMapLocationPaths,
   getRegionValueByMapId,
@@ -61,6 +62,7 @@ interface Props {
   hasDynamics: boolean;
   analysisSource: AnalysisSource | null;
   analysisResult: AnalysisResult | null;
+  onOpenResult: () => void;
   analysisStats?: {
     total_records?: number;
     analyzed_records?: number;
@@ -76,7 +78,7 @@ const strategyOptions: Array<{ value: AnalysisStrategy; label: string }> = [
 const colors = ["#1e73d6", "#fb7299", "#29bf73", "#f5a524", "#7c6ff6", "#16a3a8", "#ef4b5d", "#8b5cf6"];
 const axisTick = { fontSize: 11, fill: "var(--muted)" };
 
-export function AnalysisWorkspace({ config, setConfig, llmApiKey, setLlmApiKey, hasComments, hasDynamics, analysisSource, analysisResult, analysisStats }: Props) {
+export function AnalysisWorkspace({ config, setConfig, llmApiKey, setLlmApiKey, hasComments, hasDynamics, analysisSource, analysisResult, onOpenResult, analysisStats }: Props) {
   const customModules = config.analysis_custom_modules ?? [];
   const customIds = customModules.map((item): string => item.id);
   const selectedKeys = normalizeAnalysisChartKeys(config.analysis_chart_keys, analysisSource, customIds);
@@ -349,8 +351,61 @@ export function AnalysisWorkspace({ config, setConfig, llmApiKey, setLlmApiKey, 
         <span className="source-pill">策略：{config.analysis_strategy === "sample" ? "抽样聚合" : "全量分批"}</span>
       </div>
 
-      {analysisResult ? <AnalysisDashboard result={analysisResult} /> : analysisStats?.analyzed_records ? <MissingAnalysisResult /> : <EmptyAnalysis />}
+      {analysisResult ? (
+        <div className="analysis-result-entry">
+          <div>
+            <strong>分析结果已就绪</strong>
+            <p>已分析 {analysisResult.overview.analyzed_records ?? 0} 条样本，在结果大屏中查看完整总结与图表。</p>
+          </div>
+          <button className="primary-button" onClick={onOpenResult}>
+            <Maximize2 size={17} />
+            查看结果大屏
+          </button>
+        </div>
+      ) : analysisStats?.analyzed_records ? <MissingAnalysisResult /> : <EmptyAnalysis />}
     </section>
+  );
+}
+
+export function AnalysisResultScreen({ result, onClose }: { result: AnalysisResult; onClose: () => void }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const closeScreen = () => {
+    dialogRef.current!.close();
+    onClose();
+  };
+
+  useEffect(() => {
+    const dialog = dialogRef.current!;
+    dialog.showModal();
+    return () => dialog.close();
+  }, []);
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className="analysis-result-screen"
+      aria-labelledby="analysis-result-title"
+      onCancel={(event) => {
+        event.preventDefault();
+        closeScreen();
+      }}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) closeScreen();
+      }}
+    >
+      <div className="analysis-result-heading">
+        <div>
+          <h2 id="analysis-result-title">舆论分析结果</h2>
+          <p>{analysisSourceLabel(result.meta.source)} · {result.meta.strategy === "sample" ? "抽样聚合" : "全量分批"}</p>
+        </div>
+        <button className="analysis-result-close" aria-label="关闭结果大屏" onClick={closeScreen} autoFocus>
+          <X size={20} />
+        </button>
+      </div>
+      <div className="analysis-result-body">
+        <AnalysisDashboard result={result} />
+      </div>
+    </dialog>
   );
 }
 
@@ -366,8 +421,9 @@ function AnalysisDashboard({ result }: { result: AnalysisResult }) {
     { icon: AlertTriangle, label: "风险点", value: result.risk_points.length },
     { icon: FileText, label: "批次数", value: result.meta.batch_count }
   ];
-  const topicData = result.topic_counts.map((item) => ({ ...item, shortName: compactChartLabel(item.name, 10) }));
-  const topicChartHeight = Math.max(260, topicData.length * 36 + 62);
+  const topicData = result.topic_counts;
+  const topicRowHeight = Math.max(36, ...topicData.map((item) => wrapChartLabel(item.name, 12).length * 14 + 12));
+  const topicChartHeight = Math.max(260, topicData.length * topicRowHeight + 62);
 
   return (
     <div className="analysis-dashboard">
@@ -431,9 +487,9 @@ function AnalysisDashboard({ result }: { result: AnalysisResult }) {
                   <BarChart data={topicData} layout="vertical" margin={{ top: 8, right: 28, bottom: 4, left: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" horizontal={false} />
                     <XAxis type="number" tick={axisTick} allowDecimals={false} />
-                    <YAxis type="category" dataKey="shortName" width={98} tick={axisTick} tickLine={false} axisLine={false} />
+                    <YAxis type="category" dataKey="name" width={150} interval={0} tick={renderTopicTick} tickLine={false} axisLine={false} />
                     <Tooltip content={<ChartTooltip />} cursor={{ fill: "rgba(30, 115, 214, 0.08)" }} />
-                    <Bar dataKey="value" radius={[0, 8, 8, 0]} fill="#1e73d6" />
+                    <Bar dataKey="value" radius={[0, 8, 8, 0]} fill="#1e73d6" maxBarSize={32} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
@@ -676,6 +732,17 @@ function MissingAnalysisResult() {
       <strong>分析已完成，结果正在同步</strong>
       <p>如果图表没有自动出现，请重新安装最新测试包后再次分析。</p>
     </div>
+  );
+}
+
+function renderTopicTick({ x, y, payload }: YAxisTickContentProps) {
+  const lines = wrapChartLabel(payload.value, 12);
+  return (
+    <text x={x} y={y} textAnchor="end" fill="var(--muted)" fontSize={11}>
+      {lines.map((line, index) => (
+        <tspan key={index} x={x} dy={index === 0 ? 4 - (lines.length - 1) * 7 : 14}>{line}</tspan>
+      ))}
+    </text>
   );
 }
 

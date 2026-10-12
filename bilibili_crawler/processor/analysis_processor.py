@@ -35,9 +35,8 @@ class LLMAnalysisProcessor:
     CONNECT_TIMEOUT_SECONDS = 90
     READ_TIMEOUT_SECONDS = 90
     PROGRESS_INTERVAL_SECONDS = 1.0
-    # Display caps owned by the desktop: sidecar.py trims its chart payloads
-    # and the React workspace enforces the custom-module rules with its own
-    # copies. The processor itself no longer truncates by these.
+    # Rendering dimensions and custom-module input rules. Analysis output text
+    # remains complete through the processor and desktop payload.
     WORD_CLOUD_LIMIT = 80
     WORD_CLOUD_WIDTH = 800
     WORD_CLOUD_HEIGHT = 440
@@ -976,7 +975,7 @@ class LLMAnalysisProcessor:
             "content_type_counts": cls._counter_items(content_types),
             "engagement_items": [
                 {
-                    "name": item["content"][:28] + ("..." if len(item["content"]) > 28 else ""),
+                    "name": item["content"],
                     "likes": item["likes"],
                     "replies": item["replies"],
                     "type": item["type"],

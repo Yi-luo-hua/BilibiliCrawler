@@ -369,30 +369,35 @@ function donutSvg(title: string, data: ChartDatum[]) {
 }
 
 function horizontalBarSvg(title: string, data: ChartDatum[]) {
-  const items = normalizeData(data).slice(0, 12);
+  const items = normalizeData(data);
   if (!items.length) return emptySvg(title);
   const width = 820;
-  // 10 CJK glyphs at 14px fit between x=28 and x=200, including an ellipsis.
+  // Wrap full labels within the existing label column.
   const labelWidth = 200;
   const max = Math.max(...items.map(numberValue), 1);
-  const rowHeight = 36;
   const top = 80;
   const valueWidth = Math.max(56, ...items.map((item) => String(numberValue(item)).length * 8 + 20));
   const chartWidth = width - labelWidth - valueWidth - 28;
-  const height = Math.max(260, top + items.length * rowHeight + 36);
+  let rowTop = top;
   const rows = items
     .map((item, index) => {
+      const lines = wrapChartLabel(item.name, 10);
+      const rowHeight = Math.max(36, lines.length * 18 + 12);
       const value = numberValue(item);
       const barWidth = (value / max) * chartWidth;
-      const y = top + index * rowHeight;
+      const y = rowTop + (rowHeight - 22) / 2;
+      const label = lines.map((line, lineIndex) =>
+        `<tspan x="28" y="${rowTop + 17 + lineIndex * 18}">${escapeXml(line)}</tspan>`
+      ).join("");
+      rowTop += rowHeight;
       return [
-        `<text x="28" y="${y + 19}" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14" fill="${text}"><title>${escapeXml(item.name)}</title>${escapeXml(compactChartLabel(item.name, 10))}</text>`,
+        `<text font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="14" fill="${text}"><title>${escapeXml(item.name)}</title>${label}</text>`,
         `<rect x="${labelWidth}" y="${y}" width="${barWidth}" height="22" rx="8" fill="${palette[index % palette.length]}"/>`,
         `<text x="${labelWidth + barWidth + 10}" y="${y + 17}" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="13" fill="${muted}">${value}</text>`
       ].join("");
     })
     .join("");
-  return wrapSvg(title, width, height, rows);
+  return wrapSvg(title, width, Math.max(260, rowTop + 36), rows);
 }
 
 function verticalBarSvg(title: string, data: ChartDatum[]) {
@@ -510,9 +515,13 @@ function numberValue(item: Partial<ChartDatum> | undefined) {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-export function compactChartLabel(value: unknown, limit: number) {
+export function wrapChartLabel(value: unknown, lineLength: number): string[] {
   const chars = Array.from(String(value ?? ""));
-  return chars.length <= limit ? chars.join("") : `${chars.slice(0, limit - 1).join("")}…`;
+  const lines: string[] = [];
+  for (let index = 0; index < chars.length; index += lineLength) {
+    lines.push(chars.slice(index, index + lineLength).join(""));
+  }
+  return lines;
 }
 
 function formatNumber(value: number) {

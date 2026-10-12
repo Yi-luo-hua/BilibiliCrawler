@@ -448,7 +448,7 @@ class Sidecar:
 
     @classmethod
     def _display_analysis_result(cls, result: dict[str, Any]) -> dict[str, Any]:
-        """Return a UI-sized analysis payload; keep full report only in sidecar memory."""
+        """Return full analysis content without duplicating the Markdown report."""
         image_path = cls._image_data_url_file(result, "word_cloud_image")
         image_data_url = cls._image_data_url(result.get("word_cloud_image"))
         meta = dict(result.get("meta") or {})
@@ -458,21 +458,21 @@ class Sidecar:
         meta.pop("schema_version", None)
         meta.pop("elapsed_seconds", None)
         payload: dict[str, Any] = {
-            "summary": cls._truncate_text(result.get("summary"), 2000),
-            "summary_points": cls._text_items(result.get("summary_points"), 7, 260),
+            "summary": str(result.get("summary") or ""),
+            "summary_points": cls._text_items(result.get("summary_points")),
             "overview": result.get("overview") or {},
-            "sentiment_counts": cls._chart_items(result.get("sentiment_counts"), 8, 80),
-            "topic_counts": cls._chart_items(result.get("topic_counts"), 8, 80),
-            "word_counts": cls._chart_items(result.get("word_counts"), LLMAnalysisProcessor.WORD_CLOUD_LIMIT, 80),
-            "risk_points": cls._text_items(result.get("risk_points"), 8, 240),
-            "insights": cls._text_items(result.get("insights"), 8, 240),
-            "notable_quotes": cls._text_items(result.get("notable_quotes"), 5, 240),
-            "time_series": cls._chart_items(result.get("time_series"), 30, 80),
-            "region_counts": cls._chart_items(result.get("region_counts"), 40, 80),
-            "overseas_region_counts": cls._chart_items(result.get("overseas_region_counts"), 20, 80),
-            "user_level_counts": cls._chart_items(result.get("user_level_counts"), 8, 80),
-            "content_type_counts": cls._chart_items(result.get("content_type_counts"), 8, 80),
-            "engagement_items": cls._chart_items(result.get("engagement_items"), 10, 120),
+            "sentiment_counts": cls._chart_items(result.get("sentiment_counts")),
+            "topic_counts": cls._chart_items(result.get("topic_counts")),
+            "word_counts": cls._chart_items(result.get("word_counts")),
+            "risk_points": cls._text_items(result.get("risk_points")),
+            "insights": cls._text_items(result.get("insights")),
+            "notable_quotes": cls._text_items(result.get("notable_quotes")),
+            "time_series": cls._chart_items(result.get("time_series")),
+            "region_counts": cls._chart_items(result.get("region_counts")),
+            "overseas_region_counts": cls._chart_items(result.get("overseas_region_counts")),
+            "user_level_counts": cls._chart_items(result.get("user_level_counts")),
+            "content_type_counts": cls._chart_items(result.get("content_type_counts")),
+            "engagement_items": cls._chart_items(result.get("engagement_items")),
             "deep_analysis": cls._deep_analysis(result.get("deep_analysis")),
             "report_markdown": "",
             "meta": meta,
@@ -487,11 +487,6 @@ class Sidecar:
         if image_path:
             payload["word_cloud_image_path"] = image_path
         return payload
-
-    @staticmethod
-    def _truncate_text(value: Any, limit: int) -> str:
-        text = str(value or "")
-        return text if len(text) <= limit else text[: limit - 1] + "…"
 
     @staticmethod
     def _image_data_url(value: Any) -> str:
@@ -562,39 +557,31 @@ class Sidecar:
         text = text.strip(".-_")
         return text[:80] or "analysis"
 
-    @classmethod
-    def _text_items(cls, value: Any, limit: int, text_limit: int) -> list[str]:
+    @staticmethod
+    def _text_items(value: Any) -> list[str]:
         if not isinstance(value, list):
             return []
-        return [cls._truncate_text(item, text_limit) for item in value[:limit]]
+        return [str(item or "") for item in value]
 
-    @classmethod
-    def _chart_items(cls, value: Any, limit: int, text_limit: int) -> list[dict[str, Any]]:
+    @staticmethod
+    def _chart_items(value: Any) -> list[dict[str, Any]]:
         if not isinstance(value, list):
             return []
-        items: list[dict[str, Any]] = []
-        for item in value[:limit]:
-            if not isinstance(item, dict):
-                continue
-            cleaned: dict[str, Any] = {}
-            for key, item_value in item.items():
-                cleaned[key] = cls._truncate_text(item_value, text_limit) if isinstance(item_value, str) else item_value
-            items.append(cleaned)
-        return items
+        return [dict(item) for item in value if isinstance(item, dict)]
 
-    @classmethod
-    def _deep_analysis(cls, value: Any) -> dict[str, str]:
+    @staticmethod
+    def _deep_analysis(value: Any) -> dict[str, str]:
         if not isinstance(value, dict):
             value = {}
         return {
-            "sociology": cls._truncate_text(value.get("sociology"), 800),
-            "psychology": cls._truncate_text(value.get("psychology"), 800),
-            "philosophy": cls._truncate_text(value.get("philosophy"), 800),
+            "sociology": str(value.get("sociology") or ""),
+            "psychology": str(value.get("psychology") or ""),
+            "philosophy": str(value.get("philosophy") or ""),
         }
 
     @classmethod
     def _custom_results(cls, value: Any) -> dict[str, str]:
-        """Project custom module text with the same caps as the built-in ones."""
+        """Keep full text for valid custom module ids."""
         if not isinstance(value, dict):
             return {}
         projected: dict[str, str] = {}
@@ -602,9 +589,7 @@ class Sidecar:
             key = str(module_id)
             if not LLMAnalysisProcessor.CUSTOM_MODULE_ID_PATTERN.match(key):
                 continue
-            projected[key] = cls._truncate_text(text, 800)
-            if len(projected) >= LLMAnalysisProcessor.CUSTOM_MODULE_ACTIVE_LIMIT:
-                break
+            projected[key] = str(text or "")
         return projected
 
     def _start_qr_login(self, request_id: Any) -> None:
