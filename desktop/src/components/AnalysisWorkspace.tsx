@@ -390,7 +390,12 @@ export function AnalysisResultScreen({ result, onClose }: { result: AnalysisResu
         closeScreen();
       }}
       onClick={(event) => {
-        if (event.target === event.currentTarget) closeScreen();
+        if (event.target !== event.currentTarget) return;
+        const bounds = event.currentTarget.getBoundingClientRect();
+        if (
+          event.clientX < bounds.left || event.clientX > bounds.right ||
+          event.clientY < bounds.top || event.clientY > bounds.bottom
+        ) closeScreen();
       }}
     >
       <div className="analysis-result-heading">

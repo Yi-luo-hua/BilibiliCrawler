@@ -430,7 +430,7 @@ function verticalBarSvg(title: string, data: ChartDatum[]) {
 }
 
 function lineSvg(title: string, data: ChartDatum[]) {
-  const items = normalizeData(data).slice(-30);
+  const items = normalizeData(data);
   if (!items.length) return emptySvg(title);
   const width = 820;
   const height = 340;

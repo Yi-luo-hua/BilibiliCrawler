@@ -116,7 +116,7 @@ python -m venv .venv-agent
         "BILIBILI_LLM_BASE_URL": "https://api.openai.com/v1",
         "BILIBILI_LLM_MODEL": "gpt-4o-mini",
         "BILIBILI_LLM_API_KEY": "sk-...",
-        "BILIBILI_COOKIE": "SESSDATA=your_sessdata; bili_jct=your_jct",
+        "BILIBILI_COOKIE": "SESSDATA=<your_sessdata>; bili_jct=<your_jct>",
         "PYTHONIOENCODING": "utf-8"
       }
     }

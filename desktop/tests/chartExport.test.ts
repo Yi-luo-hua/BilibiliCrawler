@@ -37,3 +37,21 @@ test("topic export includes all topics with enough space for wrapped labels", as
   assert.ok(lines.every((y, index) => index === 0 || y - lines[index - 1] >= 18));
   assert.ok(!svg.includes("…"));
 });
+
+test("time trend export preserves every day and early peaks across months", async () => {
+  const days = Array.from({ length: 40 }, (_, index) => ({
+    name: new Date(Date.UTC(2026, 8, index + 1)).toISOString().slice(0, 10),
+    count: index === 0 ? 1000 : index + 1,
+    likes: index === 0 ? 500 : index,
+  }));
+  const result = { meta: { source: "comments", chart_keys: ["time_trend"] }, time_series: days } as AnalysisResult;
+  const [asset] = await buildAnalysisChartAssets(result);
+  const lines = [...asset.svg!.matchAll(/<polyline points="([^"]+)"/g)]
+    .map((match) => match[1].split(" "));
+
+  assert.equal(lines.length, 2);
+  for (const points of lines) assert.equal(points.length, days.length);
+  assert.equal(lines[0][0], "56,82");
+  assert.equal(lines[1][0], "56,172");
+  assert.ok(asset.svg!.includes(days[0].name));
+});
