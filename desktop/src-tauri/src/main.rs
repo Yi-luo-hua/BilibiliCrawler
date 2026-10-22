@@ -442,20 +442,32 @@ fn write_llm_api_key(api_key: String) -> Result<(), String> {
     };
     let raw = serde_json::to_string(&creds).map_err(|err| err.to_string())?;
     fs::write(&path, raw).map_err(|err| err.to_string())?;
-    hide_file(&path);
+    // Hiding credentials is best effort, as before; saving them must still work.
+    let _ = hide_file(&path);
     Ok(())
 }
 
 #[cfg(windows)]
-fn hide_file(path: &Path) {
-    let _ = std::process::Command::new("attrib")
-        .arg("+h")
-        .arg(path)
-        .output();
+fn hide_file(path: &Path) -> std::io::Result<()> {
+    use std::os::windows::{ffi::OsStrExt, fs::MetadataExt};
+    use windows_sys::Win32::Storage::FileSystem::{SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN};
+
+    let attributes = fs::metadata(path)?.file_attributes();
+    if attributes & FILE_ATTRIBUTE_HIDDEN != 0 {
+        return Ok(());
+    }
+    let wide_path: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    // Preserve the other file attributes without creating a console subprocess.
+    if unsafe { SetFileAttributesW(wide_path.as_ptr(), attributes | FILE_ATTRIBUTE_HIDDEN) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 #[cfg(not(windows))]
-fn hide_file(_path: &Path) {}
+fn hide_file(_path: &Path) -> std::io::Result<()> {
+    Ok(())
+}
 
 fn background_version(path: &Path) -> Result<u64, String> {
     let metadata = fs::metadata(path).map_err(|err| err.to_string())?;
@@ -537,6 +549,30 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn hides_unicode_credentials_without_changing_other_attributes() {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_HIDDEN;
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("凭据-{}-{unique}.json", std::process::id()));
+        fs::write(&path, r#"{"api_key":"test-only"}"#).unwrap();
+        let before = fs::metadata(&path).unwrap().file_attributes();
+        hide_file(&path).unwrap();
+        hide_file(&path).unwrap();
+        let after = fs::metadata(&path).unwrap().file_attributes();
+        let contents = fs::read_to_string(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+
+        assert_ne!(after & FILE_ATTRIBUTE_HIDDEN, 0);
+        assert_eq!(after & !FILE_ATTRIBUTE_HIDDEN, before & !FILE_ATTRIBUTE_HIDDEN);
+        assert_eq!(contents, r#"{"api_key":"test-only"}"#);
+    }
 
     fn module(id: &str, title: &str, prompt: &str) -> CustomModule {
         CustomModule {

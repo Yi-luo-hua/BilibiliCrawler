@@ -274,6 +274,7 @@ dependencies = [
  "tauri-plugin-log",
  "tauri-plugin-opener",
  "tauri-plugin-process",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

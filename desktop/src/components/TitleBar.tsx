@@ -12,7 +12,7 @@ interface Props {
 }
 
 export function TitleBar({ logo, onLog }: Props) {
-  const appWindow = isTauri() ? getCurrentWindow() : null;
+  const [appWindow] = useState(() => isTauri() ? getCurrentWindow() : null);
   const [maximized, setMaximized] = useState(false);
   const [versionLabel, setVersionLabel] = useState(() =>
     isTauri() ? "正在读取版本…" : `v${__APP_VERSION__}`,
@@ -29,10 +29,11 @@ export function TitleBar({ logo, onLog }: Props) {
   }, []);
 
   useEffect(() => {
-    appWindow
-      ?.isMaximized()
-      .then(setMaximized)
-      .catch(() => undefined);
+    if (!appWindow) return;
+    const syncMaximized = () => appWindow.isMaximized().then(setMaximized).catch(() => undefined);
+    void syncMaximized();
+    const unlisten = appWindow.onResized(syncMaximized);
+    return () => { void unlisten.then(dispose => dispose()); };
   }, [appWindow]);
 
   async function startDrag(event: MouseEvent<HTMLElement>) {

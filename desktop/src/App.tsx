@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   BarChart3,
@@ -122,6 +122,8 @@ export function App() {
   const [showAnalysisResult, setShowAnalysisResult] = useState(false);
   const [configLoaded, setConfigLoaded] = useState(false);
   const [llmApiKey, setLlmApiKey] = useState("");
+  const lastConfigSave = useRef(JSON.stringify(config));
+  const lastApiKeySave = useRef(llmApiKey);
   const running =
     taskState.phase === "starting" ||
     taskState.phase === "running" ||
@@ -135,27 +137,29 @@ export function App() {
   }, [analysisResult?.meta.generated_at]);
 
   useEffect(() => {
-    readConfig()
-      .then((loadedConfig) => {
+    let disposed = false;
+    Promise.all([readConfig(), readLlmApiKey()])
+      .then(([loadedConfig, key]) => {
+        if (disposed) return;
+        // Restoring saved values must not trigger the autosave effects below.
+        lastConfigSave.current = JSON.stringify(loadedConfig);
+        lastApiKeySave.current = key;
         setConfig(loadedConfig);
+        setLlmApiKey(key);
+        setConfigLoaded(true);
         if (loadedConfig.background_path) {
           readBackgroundDataUrl(loadedConfig.background_path)
             .then(setBackgroundDataUrl)
             .catch((error) => pushLog(`恢复背景失败：${String(error)}`));
         }
-        return readLlmApiKey();
-      })
-      .then((key) => {
-        if (key) setLlmApiKey(key);
-        setConfigLoaded(true);
       })
       .catch((error) => {
+        if (disposed) return;
         const message = `读取界面配置失败：${String(error)}`;
         toast.error(message);
         pushLog(message);
         setConfigLoaded(true);
       });
-    let disposed = false;
     let cleanup: (() => void) | undefined;
     onSidecarEvent(handleSidecarEvent)
       .then((dispose) => {
@@ -182,7 +186,12 @@ export function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = config.theme;
     if (!configLoaded) return;
+    const snapshot = JSON.stringify(config);
+    if (snapshot === lastConfigSave.current) return;
+    const previous = lastConfigSave.current;
+    lastConfigSave.current = snapshot;
     writeConfig(config).catch((error) => {
+      if (lastConfigSave.current === snapshot) lastConfigSave.current = previous;
       const message = `保存界面配置失败：${String(error)}`;
       toast.error(message);
       pushLog(message);
@@ -191,7 +200,11 @@ export function App() {
 
   useEffect(() => {
     if (!configLoaded) return;
+    if (llmApiKey === lastApiKeySave.current) return;
+    const previous = lastApiKeySave.current;
+    lastApiKeySave.current = llmApiKey;
     writeLlmApiKey(llmApiKey).catch((error) => {
+      if (lastApiKeySave.current === llmApiKey) lastApiKeySave.current = previous;
       pushLog(`保存 API Key 失败：${String(error)}`);
     });
   }, [llmApiKey, configLoaded]);

@@ -20,5 +20,8 @@ serde_json = "1"
 log = "0.4"
 base64 = "0.22"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
 [profile.release]
 debug = true
