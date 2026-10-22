@@ -78,7 +78,7 @@ BilibiliCrawler provides two usage options: a desktop GUI and a headless CLI / M
 
 ### Option 1: Desktop Application (Recommended for general users, No Python needed)
 
-1. Go to [GitHub Releases](https://github.com/Yi-luo-hua/BilibiliCrawler/releases) and download the latest Windows installer (e.g. `BilibiliCrawler-Setup-3.8.0-x64.exe`).
+1. Go to [GitHub Releases](https://github.com/Yi-luo-hua/BilibiliCrawler/releases) and download the latest Windows installer (e.g. `BilibiliCrawler-Setup-3.9.0-x64.exe`).
 2. Double-click to install and launch from the Start menu or desktop shortcut. **No Python, Node.js, or runtime libraries required**.
 3. Interface Preview:
 
@@ -260,13 +260,13 @@ BilibiliCrawler/
 
 ## 📝 Release Highlights
 
-### 🌟 v3.8.0 (Latest Release)
-- **Large Analysis Dialog**: Completed analysis opens a spacious result window that can be closed and reopened.
-- **Complete Analysis Text**: Summaries, key points, deep analysis and custom modules preserve full text, lists and paragraph breaks.
-- **Complete Chart Exports**: Long topic labels wrap, while topic and time-trend SVG exports retain all data.
-- **Interaction Fixes**: Interior blank clicks keep the dialog open; closing restores focus, and repeated synchronization does not reopen it.
+### 🌟 v3.9.0 (Latest Release)
+- **Faster Startup**: Removes the blocking credential-file hiding command. Cached restarts on the same machine improved from an average of 7.41 seconds to 2.87 seconds.
+- **Fewer File Writes**: Restoring settings and the API key no longer rewrites them; actual edits are still saved.
+- **Fewer Startup Requests**: Settings and credentials load concurrently, and title-bar state updates follow window changes.
+- **Regression Checks**: Unicode paths, hidden attributes, saving and restart restoration are covered; see the [release record](docs/RELEASE_3.9.0.md) for scope.
 
-👉 **[View Full Historical Changelog (v1.0.0 ~ v3.8.0) »](CHANGELOG.md)**
+👉 **[View Full Historical Changelog (v1.0.0 ~ v3.9.0) »](CHANGELOG.md)**
 
 ---
 
