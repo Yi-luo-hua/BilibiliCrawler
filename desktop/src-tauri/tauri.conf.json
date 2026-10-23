@@ -14,8 +14,8 @@
       {
         "label": "main",
         "title": "BilibiliCrawler",
-        "width": 1280,
-        "height": 820,
+        "width": 1440,
+        "height": 960,
         "minWidth": 900,
         "minHeight": 720,
         "decorations": false,

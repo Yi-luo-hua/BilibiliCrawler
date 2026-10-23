@@ -291,6 +291,11 @@ button {
   width: 100%;
   min-height: 42px;
   border-radius: 14px;
+  padding-inline: 10px;
+  white-space: nowrap;
+}
+.side-login-button svg {
+  flex-shrink: 0;
 }
 .side-nav nav {
   display: flex;
