@@ -40,6 +40,7 @@ class LLMAnalysisProcessor:
     WORD_CLOUD_LIMIT = 80
     WORD_CLOUD_WIDTH = 800
     WORD_CLOUD_HEIGHT = 440
+    WORD_CLOUD_RENDER_SCALE = 4
     # "回复 @name :" / "回复 @name ：". Bounded name length so a comment that
     # merely opens with the word 回复 and happens to contain a colon much later
     # keeps its text.
@@ -1320,6 +1321,7 @@ class LLMAnalysisProcessor:
         try:
             print("[analysis] word_cloud: importing wordcloud...", file=sys.stderr)
             configure_matplotlib_cache()
+            from matplotlib.colors import ListedColormap
             from wordcloud import WordCloud
             print("[analysis] word_cloud: import done", file=sys.stderr)
         except Exception as exc:
@@ -1338,6 +1340,8 @@ class LLMAnalysisProcessor:
                 options: dict[str, Any] = {
                     "width": cls.WORD_CLOUD_WIDTH,
                     "height": cls.WORD_CLOUD_HEIGHT,
+                    # Draw at high resolution without enlarging the layout grid.
+                    "scale": cls.WORD_CLOUD_RENDER_SCALE,
                     "background_color": "white",
                     # Render every word that was counted.
                     "max_words": max(1, len(frequencies)),
@@ -1347,7 +1351,12 @@ class LLMAnalysisProcessor:
                     "relative_scaling": 0.55,
                     "margin": 2,
                     "random_state": 42,
-                    "colormap": "viridis",
+                    # CARTO Prism palette, matching the selected preview.
+                    "colormap": ListedColormap([
+                        "#5F4690", "#1D6996", "#38A6A5", "#0F8554",
+                        "#73AF48", "#EDAD08", "#E17C05", "#CC503E",
+                        "#94346E", "#6F4070", "#994E95",
+                    ]),
                 }
                 if font_path:
                     options["font_path"] = font_path
@@ -1355,6 +1364,8 @@ class LLMAnalysisProcessor:
                 word_cloud = WordCloud(**options)
                 print("[analysis] word_cloud: generate_from_frequencies...", file=sys.stderr)
                 word_cloud.generate_from_frequencies(frequencies)
+                # Choose colors independently from the layout's random draws.
+                word_cloud.recolor(random_state=0)
                 print("[analysis] word_cloud: saving to PNG buffer...", file=sys.stderr)
                 buffer = io.BytesIO()
                 word_cloud.to_image().save(buffer, format="PNG", optimize=True)
