@@ -78,7 +78,7 @@ BilibiliCrawler provides two usage options: a desktop GUI and a headless CLI / M
 
 ### Option 1: Desktop Application (Recommended for general users, No Python needed)
 
-1. Go to [GitHub Releases](https://github.com/Yi-luo-hua/BilibiliCrawler/releases) and download the latest Windows installer (e.g. `BilibiliCrawler-Setup-3.9.0-x64.exe`).
+1. Go to [GitHub Releases](https://github.com/Yi-luo-hua/BilibiliCrawler/releases) and download the latest Windows installer (e.g. `BilibiliCrawler-Setup-3.9.1-x64.exe`).
 2. Double-click to install and launch from the Start menu or desktop shortcut. **No Python, Node.js, or runtime libraries required**.
 3. Interface Preview:
 
@@ -260,13 +260,13 @@ BilibiliCrawler/
 
 ## 📝 Release Highlights
 
-### 🌟 v3.9.0 (Latest Release)
-- **Faster Startup**: Removes the blocking credential-file hiding command. Cached restarts on the same machine improved from an average of 7.41 seconds to 2.87 seconds.
-- **Fewer File Writes**: Restoring settings and the API key no longer rewrites them; actual edits are still saved.
-- **Fewer Startup Requests**: Settings and credentials load concurrently, and title-bar state updates follow window changes.
-- **Regression Checks**: Unicode paths, hidden attributes, saving and restart restoration are covered; see the [release record](docs/RELEASE_3.9.0.md) for scope.
+### 🌟 v3.9.1
+- **Sharper Word Clouds**: Newly generated images increase from 800 × 440 to 3200 × 1760 pixels for clearer enlarged views.
+- **Prism Colors**: A warm-and-cool categorical palette replaces the previous gradient, with fixed random seeds for reproducible rendering.
+- **Desktop Layout**: The default window is now 1440 × 960. Login labels stay on one line and their icons retain their width.
+- See the [release notes](docs/RELEASE_NOTES_3.9.1.md) and [release record](docs/RELEASE_3.9.1.md) for changes and validation scope.
 
-👉 **[View Full Historical Changelog (v1.0.0 ~ v3.9.0) »](CHANGELOG.md)**
+👉 **[View Full Historical Changelog (v1.0.0 ~ v3.9.1) »](CHANGELOG.md)**
 
 ---
 

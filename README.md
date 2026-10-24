@@ -78,7 +78,7 @@
 
 ### 方式一：桌面客户端（推荐普通用户，免 Python 环境）
 
-1. 前往 [GitHub Releases](https://github.com/Yi-luo-hua/BilibiliCrawler/releases) 下载最新的 Windows 安装包（如 `BilibiliCrawler-Setup-3.9.0-x64.exe`）。
+1. 前往 [GitHub Releases](https://github.com/Yi-luo-hua/BilibiliCrawler/releases) 下载最新的 Windows 安装包（如 `BilibiliCrawler-Setup-3.9.1-x64.exe`）。
 2. 双击安装后直接从桌面或开始菜单启动即可，**无需预装 Python、Node.js 或任何运行库**。
 3. 界面展示：
 
@@ -262,13 +262,13 @@ BilibiliCrawler/
 
 ## 📝 版本更新亮点
 
-### 🌟 v3.9.0 (最新发布)
-- **启动提速**：消除凭据文件隐藏操作造成的数秒阻塞；同机缓存重启对照从平均 7.41 秒降至 2.87 秒。
-- **减少重复写入**：恢复配置和 API Key 时不再自动重写文件，实际编辑后仍正常保存。
-- **减少启动请求**：配置与密钥并行读取，标题栏按窗口变化更新状态。
-- **回归验证**：验证中文路径、隐藏属性、配置保存及重启恢复；详细范围见 [发布记录](docs/RELEASE_3.9.0.md)。
+### 🌟 v3.9.1
+- **高清词云**：新生成词云由 800 × 440 提升至 3200 × 1760 像素，放大查看更清晰。
+- **复古宝石配色**：默认采用 Prism 冷暖配色，固定随机种子使相同词频的呈现可复现。
+- **桌面布局**：默认窗口调整为 1440 × 960，登录按钮文字保持单行，图标不再被挤压。
+- 详细变更和验证范围见 [发布说明](docs/RELEASE_NOTES_3.9.1.md) 与 [发布记录](docs/RELEASE_3.9.1.md)。
 
-👉 **[点击查阅完整历史更新日志 (v1.0.0 ~ v3.9.0) »](CHANGELOG.md)**
+👉 **[点击查阅完整历史更新日志 (v1.0.0 ~ v3.9.1) »](CHANGELOG.md)**
 
 ---
 
