@@ -260,7 +260,7 @@ BilibiliCrawler/
 
 ## 📝 Release Highlights
 
-### 🌟 v3.9.1
+### 🌟 v3.9.1 (Latest Release)
 - **Sharper Word Clouds**: Newly generated images increase from 800 × 440 to 3200 × 1760 pixels for clearer enlarged views.
 - **Prism Colors**: A warm-and-cool categorical palette replaces the previous gradient, with fixed random seeds for reproducible rendering.
 - **Desktop Layout**: The default window is now 1440 × 960. Login labels stay on one line and their icons retain their width.
